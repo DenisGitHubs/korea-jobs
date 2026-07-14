@@ -1,0 +1,21 @@
+{
+  "name": "korea-jobs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "korea-jobs backend (Vercel serverless api/ + lib/). The mini app lives in app/ and the reader in collector/ (their own packages).",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
+    "@neondatabase/serverless": "^0.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@vercel/node": "^5.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

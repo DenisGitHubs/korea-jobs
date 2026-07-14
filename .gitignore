@@ -1,0 +1,29 @@
+# Secrets — NEVER commit (rule #1). Only *.env.example belongs in the repo.
+.env
+.env.*
+!.env.example
+!**/.env.example
+# Non-secret dev defaults (mock mode) — committed on purpose, verified secret-free.
+!app/.env.development
+
+# Telegram MTProto session (equivalent to the reader account's password)
+*.session
+*.session-journal
+collector/session.txt
+
+# Dependencies / builds
+node_modules/
+dist/
+build/
+.vercel/
+.turbo/
+
+# Logs / OS
+*.log
+.DS_Store
+Thumbs.db
+
+# Editor / tooling (machine-specific; e.g. launch.json hardcodes local paths)
+.claude/
+.idea/
+.vscode/

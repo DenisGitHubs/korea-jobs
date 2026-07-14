@@ -1,0 +1,32 @@
+// lib/korea/cities/read.ts
+//
+// GET /api/cities — the 30 seed cities for the filter screen. initData-authed like
+// every user endpoint; non-sensitive reference data (slug + localized name + region).
+
+import { getSql } from '../core/db.js';
+import { type ReqLike, type ResLike, send, sendError } from '../core/http.js';
+import { ApiErrorCode } from '../core/errors.js';
+import { authenticate } from '../core/context.js';
+
+export async function citiesGet(req: ReqLike, res: ResLike): Promise<void> {
+  if ((req.method ?? 'GET') !== 'GET') return sendError(res, ApiErrorCode.NotFound);
+  const auth = await authenticate(req);
+  if (!auth.ok) return sendError(res, ApiErrorCode.Unauthorized);
+
+  try {
+    const sql = getSql();
+    const rows = await sql`
+      select slug, name, region_slug from cities where is_active = true order by sort_order`;
+    send(
+      res,
+      200,
+      rows.map((r) => ({
+        slug: r.slug,
+        name: r.name,
+        region_slug: (r.region_slug as string | null) ?? null,
+      })),
+    );
+  } catch {
+    sendError(res, ApiErrorCode.Internal);
+  }
+}

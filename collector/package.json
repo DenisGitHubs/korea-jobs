@@ -1,0 +1,22 @@
+{
+  "name": "korea-jobs-collector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "korea-jobs reader (userbot): joins approved Telegram chats and posts raw messages to the backend ingest endpoint. Separate host — holds only the TG session + ingest secret.",
+  "scripts": {
+    "login": "tsx src/login.ts",
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "telegram": "^2.17.4",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}

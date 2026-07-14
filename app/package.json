@@ -1,0 +1,33 @@
+{
+  "name": "korea-jobs-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "korea-jobs — Telegram Mini App: Korea job vacancies. Mock-first (runs in a plain browser), React 19 + Vite + TypeScript.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@telegram-apps/sdk": "3.11.8",
+    "@telegram-apps/sdk-react": "3.3.9",
+    "i18next": "26.3.6",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-i18next": "17.0.9",
+    "react-router-dom": "7.18.1",
+    "zustand": "5.0.14"
+  },
+  "overrides": {
+    "valibot": "1.4.2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "4.7.0",
+    "typescript": "5.7.3",
+    "vite": "6.4.3"
+  }
+}
