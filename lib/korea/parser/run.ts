@@ -17,7 +17,31 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getSql } from '../core/db.js';
 import { getConfigNumber, getConfigString } from '../config.js';
-import { buildSystemPrompt, buildBatchSchema, type CityRef, type ParsedVacancy } from './prompt.js';
+import {
+  buildSystemPrompt,
+  buildBatchSchema,
+  VISA_TYPES,
+  PLACEMENT_FEES,
+  type CityRef,
+  type ParsedVacancy,
+  type VisaType,
+  type PlacementFee,
+} from './prompt.js';
+
+const VISA_TYPE_SET = new Set<string>(VISA_TYPES);
+const PLACEMENT_FEE_SET = new Set<string>(PLACEMENT_FEES);
+
+/** Keep only known enum values the model may have returned (defense in depth). */
+function cleanVisaTypes(v: unknown): VisaType[] {
+  if (!Array.isArray(v)) return [];
+  return [...new Set(v.filter((x): x is VisaType => typeof x === 'string' && VISA_TYPE_SET.has(x)))];
+}
+function cleanPlacementFee(v: unknown): PlacementFee {
+  return typeof v === 'string' && PLACEMENT_FEE_SET.has(v) ? (v as PlacementFee) : 'unknown';
+}
+function cleanTriState(v: unknown): boolean | null {
+  return typeof v === 'boolean' ? v : null;
+}
 
 const MODEL_ALIASES: Record<string, string> = {
   haiku: 'claude-haiku-4-5',
@@ -104,11 +128,38 @@ export async function runParse(): Promise<ParseResult> {
     }
 
     if (!it.is_vacancy || (it.confidence ?? 0) < minConfidence) {
-      await sql`update raw_messages set status='skipped', processed_at=now() where id=${rawId}::uuid`;
+      // Persist WHY + confidence so the corpus is tunable (which reasons over/under-fire).
+      await sql`
+        update raw_messages
+        set status='skipped', processed_at=now(),
+            reject_reason=${it.reject_reason ?? (it.is_vacancy ? 'low_confidence' : 'not_vacancy')},
+            confidence=${it.confidence ?? null}
+        where id=${rawId}::uuid`;
       continue;
     }
 
     const cityId = it.city_slug ? cityIdBySlug.get(it.city_slug) ?? null : null;
+    const visaTypes = cleanVisaTypes(it.visa_types);
+    const placementFee = cleanPlacementFee(it.placement_fee);
+    const hasHousing = cleanTriState(it.has_housing);
+    const hasMeals = cleanTriState(it.has_meals);
+
+    // Takedown gate (007 CRIT): never resurrect content taken down for a ToS 5.2(i)
+    // contact violation. The prospective content_hash is computed via kj_content_hash
+    // (an exact mirror of the generated column) since the real hash only exists after
+    // insert. If the hash is on the takedown list, skip without inserting.
+    const blocked = await sql`
+      select 1 from takedowns
+      where content_hash = kj_content_hash(
+        ${it.contact_raw ?? null}, ${cityId}::uuid, ${it.work_type}::work_type,
+        ${it.gender}::gender, ${it.dedup_extra ?? null})
+      limit 1`;
+    if (blocked.length > 0) {
+      await sql`
+        update raw_messages set status='skipped', processed_at=now(), reject_reason='takedown'
+        where id=${rawId}::uuid`;
+      continue;
+    }
 
     // Insert; on dedup conflict bump the canonical instead. (xmax = 0) marks a fresh insert.
     let upserted: Record<string, unknown>[];
@@ -119,6 +170,7 @@ export async function runParse(): Promise<ParseResult> {
           title, description, employer,
           salary_text, salary_min, salary_max, salary_period, salary_currency,
           contact_raw, contact_kind,
+          visa_types, placement_fee, has_housing, has_meals,
           source_id, raw_message_id, posted_at, dedup_extra
         ) values (
           ${cityId}::uuid, ${it.region_slug ?? null}, ${it.work_type}::work_type, ${it.gender}::gender, ${it.lang ?? null},
@@ -126,10 +178,19 @@ export async function runParse(): Promise<ParseResult> {
           ${it.salary_text ?? null}, ${it.salary_min ?? null}, ${it.salary_max ?? null},
           ${it.salary_period ?? null}::salary_period, ${it.salary_currency ?? 'KRW'},
           ${it.contact_raw ?? null}, ${it.contact_kind ?? null}::contact_kind,
+          ${visaTypes}::visa_type[], ${placementFee}::placement_fee, ${hasHousing}, ${hasMeals},
           ${row.source_id}::uuid, ${rawId}::uuid, ${row.posted_at ?? null}, ${it.dedup_extra ?? null}
         )
         on conflict (content_hash) where is_active and duplicate_of is null
-        do update set repost_count = vacancies.repost_count + 1, last_seen_at = now()
+        do update set
+          repost_count = vacancies.repost_count + 1,
+          last_seen_at = now(),
+          -- Enrich the canonical on repost: fill attributes the first sighting missed,
+          -- keep an already-known value (on-conflict-do-update, additive).
+          visa_types    = case when cardinality(vacancies.visa_types) = 0 then excluded.visa_types else vacancies.visa_types end,
+          placement_fee = case when vacancies.placement_fee = 'unknown' then excluded.placement_fee else vacancies.placement_fee end,
+          has_housing   = coalesce(vacancies.has_housing, excluded.has_housing),
+          has_meals     = coalesce(vacancies.has_meals, excluded.has_meals)
         returning id, (xmax = 0) as inserted`;
     } catch {
       // Bad row (e.g. invalid enum from the model) — don't loop on it.

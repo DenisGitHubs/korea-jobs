@@ -26,12 +26,16 @@ import {
 
 export interface LaunchContext {
   languageCode?: string;
+  /** Telegram @username without the leading @ (for prefilling contact fields). */
+  username?: string;
   /** True inside a real Telegram client (not the browser mock). */
   isReal: boolean;
 }
 
 // Telegram theme params (snake_case keys, exactly as a real client sends them).
-const LIGHT_THEME = {
+// Exported so the Settings "Light/Dark" override can force a palette regardless
+// of the client's themeParams (see lib/theme.ts).
+export const LIGHT_THEME = {
   bg_color: '#ffffff',
   text_color: '#0f0f10',
   hint_color: '#8e8e93',
@@ -49,7 +53,7 @@ const LIGHT_THEME = {
   bottom_bar_bg_color: '#f7f7f9',
 } as const;
 
-const DARK_THEME = {
+export const DARK_THEME = {
   bg_color: '#17212b',
   text_color: '#f5f5f5',
   hint_color: '#7d8b99',
@@ -141,6 +145,26 @@ function installMock(): void {
   });
 }
 
+/**
+ * Push the current `--kj-bottom-bar-bg` to Telegram via setBottomBarColor
+ * (Bot API 7.10+). On Android this also tints the system navigation bar. No-op
+ * in the browser mock / older clients.
+ */
+export function syncBottomBarColor(): void {
+  try {
+    const color = getComputedStyle(document.documentElement).getPropertyValue('--kj-bottom-bar-bg').trim();
+    if (!color) return;
+    const setter = (miniApp as unknown as {
+      setBottomBarColor?: { (c: string): void; isAvailable(): boolean };
+    }).setBottomBarColor;
+    if (setter && typeof setter.isAvailable === 'function' && setter.isAvailable()) {
+      setter(color);
+    }
+  } catch {
+    /* method unsupported / invalid color — ignore */
+  }
+}
+
 function readLaunch(): RetrieveLPResult | undefined {
   try {
     return retrieveLaunchParams();
@@ -194,6 +218,7 @@ export function bootstrapTelegram(): LaunchContext {
   const lp = readLaunch();
   return {
     languageCode: lp?.tgWebAppData?.user?.language_code,
+    username: lp?.tgWebAppData?.user?.username,
     isReal: real,
   };
 }

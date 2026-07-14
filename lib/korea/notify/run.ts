@@ -42,6 +42,10 @@ interface VacRow {
   city_id: string;
   city_name: { ru: string; ko: string; en: string };
   salary_text: string | null;
+  visa_types: string[];
+  placement_fee: string;
+  has_housing: boolean | null;
+  has_meals: boolean | null;
 }
 
 function buildText(v: VacRow): string {
@@ -65,7 +69,8 @@ export async function runNotify(): Promise<NotifyResult> {
   const appUrl = process.env.APP_URL;
 
   const vacs = (await sql`
-    select v.id, v.work_type, v.city_id, c.name as city_name, v.salary_text
+    select v.id, v.work_type, v.city_id, c.name as city_name, v.salary_text,
+           v.visa_types, v.placement_fee, v.has_housing, v.has_meals
     from vacancies v join cities c on c.id = v.city_id
     where v.notify_pending and v.is_active and v.duplicate_of is null
     order by v.first_seen_at asc
@@ -76,12 +81,28 @@ export async function runNotify(): Promise<NotifyResult> {
   for (const v of vacs) {
     let deferred = false;
 
+    // Persistent filter match is PERMISSIVE (Sanya/Roma K2): a filter excludes only a
+    // row that EXPLICITLY contradicts it; "not stated" / empty always passes, so a rare
+    // attribute never empties the push.
     const subs = (await sql`
       select u.id as user_id, u.telegram_id
       from subscriptions s join users u on u.id = s.user_id
       where s.notify and u.allows_write_to_pm and not u.is_blocked
         and s.city_ids @> array[${v.city_id}::uuid]
         and (s.work_types is null or cardinality(s.work_types) = 0 or ${v.work_type}::work_type = any(s.work_types))
+        and (
+          cardinality(s.visa_types) = 0
+          or cardinality(${v.visa_types}::visa_type[]) = 0
+          or 'any' = any(${v.visa_types}::visa_type[])
+          or s.visa_types && ${v.visa_types}::visa_type[]
+        )
+        and (
+          s.placement_fee is null
+          or ${v.placement_fee}::placement_fee = s.placement_fee
+          or ${v.placement_fee}::placement_fee = 'unknown'
+        )
+        and (s.require_housing is not true or ${v.has_housing}::boolean is true or ${v.has_housing}::boolean is null)
+        and (s.require_meals   is not true or ${v.has_meals}::boolean   is true or ${v.has_meals}::boolean   is null)
         and not exists (
           select 1 from notifications_sent n where n.user_id = u.id and n.vacancy_id = ${v.id}::uuid
         )`) as unknown as { user_id: string; telegram_id: string }[];

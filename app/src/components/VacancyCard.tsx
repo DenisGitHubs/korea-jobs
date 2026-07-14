@@ -11,6 +11,9 @@ export function VacancyCard({ vacancy, onOpen }: { vacancy: VacancyView; onOpen:
   const lang = useSettingsStore((s) => s.lang);
   const cityName = vacancy.city ? localized(vacancy.city.name, lang) : t('region.other');
   const salary = salaryLine(vacancy, t);
+  // `repost` is not in the api.ts contract yet — read defensively (see report).
+  const isRepost = Boolean((vacancy as { repost?: boolean }).repost);
+  const fromUser = vacancy.source_kind === 'user';
 
   return (
     <button className="card" onClick={() => onOpen(vacancy.id)}>
@@ -23,6 +26,8 @@ export function VacancyCard({ vacancy, onOpen }: { vacancy: VacancyView; onOpen:
         {vacancy.gender !== 'any' ? (
           <span className="badge badge--gender">{t(genderKey(vacancy.gender))}</span>
         ) : null}
+        {fromUser ? <span className="badge badge--source">{t('vacancy.fromUser')}</span> : null}
+        {isRepost ? <span className="badge badge--repost">{t('vacancy.repost')}</span> : null}
       </div>
       {salary ? <div className="card__salary">{salary}</div> : null}
       <div className="card__desc">{vacancy.description}</div>

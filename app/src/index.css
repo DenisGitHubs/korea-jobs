@@ -579,3 +579,330 @@ a {
 .dl__v {
   font-size: 15px;
 }
+
+.hero__note {
+  color: var(--kj-hint);
+  font-size: 12.5px;
+  margin: 6px 0 0;
+}
+
+/* ── Bottom tab bar ────────────────────────────────────────────────────── */
+.app-root {
+  position: relative;
+}
+
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  margin: 0 auto;
+  max-width: var(--kj-maxw);
+  z-index: 30;
+  display: flex;
+  background: var(--kj-bottom-bar-bg);
+  border-top: 1px solid var(--kj-separator);
+  padding-bottom: max(env(safe-area-inset-bottom), var(--tg-viewport-safe-area-inset-bottom, 0px));
+}
+
+.tabbar__item {
+  flex: 1;
+  height: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--kj-hint);
+  text-decoration: none;
+  font-size: 11px;
+}
+
+.tabbar__item--on {
+  color: var(--kj-link);
+}
+
+.tabbar__emoji {
+  font-size: 21px;
+  line-height: 1;
+}
+
+.tabbar__label {
+  font-weight: 600;
+}
+
+/* Active-filter dot on the feed filter button. */
+.appbar__btn--dot {
+  position: relative;
+}
+
+.appbar__btn--dot::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--kj-button);
+  border: 2px solid var(--kj-header-bg);
+}
+
+/* ── Extra badges ──────────────────────────────────────────────────────── */
+.badge--source {
+  background: color-mix(in srgb, var(--kj-accent) 12%, transparent);
+  color: var(--kj-accent);
+}
+
+.badge--repost {
+  background: var(--kj-secondary-bg);
+  color: var(--kj-subtitle);
+}
+
+/* ── Text field (.field) ───────────────────────────────────────────────── */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--kj-hint);
+  padding-left: 2px;
+}
+
+.field__input {
+  width: 100%;
+  background: var(--kj-section-bg);
+  color: var(--kj-text);
+  border: 1px solid var(--kj-separator);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 15px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.12s;
+}
+
+.field__input:focus {
+  border-color: var(--kj-button);
+}
+
+.field__input::placeholder {
+  color: var(--kj-hint);
+}
+
+.field__input--area {
+  resize: vertical;
+  min-height: 96px;
+  line-height: 1.4;
+}
+
+/* Radio-style checkmark for single-select pickers. */
+.check--radio {
+  border-radius: 50%;
+}
+
+/* ── Report control ────────────────────────────────────────────────────── */
+.report {
+  margin-top: 22px;
+  text-align: center;
+  padding: 6px;
+}
+
+.report__btn {
+  border: none;
+  background: transparent;
+  color: var(--kj-destructive);
+  font-size: 14px;
+  padding: 8px 14px;
+}
+
+/* ── Wizard (post) ─────────────────────────────────────────────────────── */
+.steps {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+
+.steps__seg {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--kj-separator);
+  transition: background 0.15s;
+}
+
+.steps__seg--on {
+  background: var(--kj-button);
+}
+
+.steps__count {
+  font-size: 12.5px;
+  color: var(--kj-hint);
+  margin-bottom: 14px;
+}
+
+.wizard__nav {
+  display: flex;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.wizard__nav .btn {
+  flex: 1;
+}
+
+.consent {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 6px 2px;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--kj-text);
+}
+
+.consent input {
+  margin-top: 2px;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  accent-color: var(--kj-button);
+}
+
+/* ── Bottom sheet (filter) ─────────────────────────────────────────────── */
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.sheet__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.sheet__panel {
+  position: relative;
+  width: 100%;
+  max-width: var(--kj-maxw);
+  margin: 0 auto;
+  max-height: 92dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--kj-secondary-bg);
+  border-radius: 16px 16px 0 0;
+  animation: kj-sheet-up 0.22s ease;
+}
+
+@keyframes kj-sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.sheet__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px;
+  border-bottom: 1px solid var(--kj-separator);
+}
+
+.sheet__title {
+  flex: 1;
+  text-align: center;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.sheet__close {
+  border: none;
+  background: transparent;
+  color: var(--kj-hint);
+  font-size: 16px;
+  width: 44px;
+  height: 32px;
+  text-align: left;
+}
+
+.sheet__head-action {
+  min-width: 60px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.sheet__reset {
+  border: none;
+  background: transparent;
+  color: var(--kj-link);
+  font-size: 14px;
+  padding: 6px 4px;
+}
+
+.sheet__body {
+  overflow-y: auto;
+  padding: 14px 14px calc(18px + env(safe-area-inset-bottom));
+}
+
+.sheet__footer {
+  padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--kj-separator);
+}
+
+.filter__block {
+  margin-bottom: 16px;
+}
+
+/* ── Modal (terms consent) ─────────────────────────────────────────────── */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.modal__card {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  background: var(--kj-section-bg);
+  border-radius: 16px;
+  padding: 22px 20px;
+}
+
+.modal__title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.modal__body {
+  margin-bottom: 18px;
+}
+
+.modal__text {
+  font-size: 14.5px;
+  color: var(--kj-subtitle);
+  line-height: 1.45;
+  margin: 0;
+}

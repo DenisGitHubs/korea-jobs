@@ -45,6 +45,9 @@ insert into cities (id, slug, name, aliases, region_slug, sort_order, is_active)
   (uuid_seed('city-daegu'),      'daegu',      '{"ru":"Тэгу","ko":"대구","en":"Daegu"}',           '["тэгу","дэгу","대구","daegu","taegu"]',            'daegu',    40,  true),
   (uuid_seed('city-daejeon'),    'daejeon',    '{"ru":"Тэджон","ko":"대전","en":"Daejeon"}',       '["тэджон","дэджон","대전","daejeon","taejon"]',     'daejeon',  50,  true),
   (uuid_seed('city-gwangju'),    'gwangju',    '{"ru":"Кванджу","ko":"광주","en":"Gwangju"}',      '["кванджу","광주","gwangju","kwangju"]',            'gwangju',  60,  true),
+  -- Second Gwangju: the Gyeonggi-do city near Seoul (광주 경기). NO aliases on purpose:
+  -- 광주/кванджу must NOT auto-map here — the parser disambiguates by context (prompt).
+  (uuid_seed('city-gwangju-gyeonggi'), 'gwangju_gyeonggi', '{"ru":"Кванджу (Кёнги)","ko":"광주 (경기)","en":"Gwangju (Gyeonggi)"}', '[]', 'gyeonggi', 65, true),
   (uuid_seed('city-ulsan'),      'ulsan',      '{"ru":"Ульсан","ko":"울산","en":"Ulsan"}',         '["ульсан","улсан","울산","ulsan"]',                 'ulsan',    70,  true),
   (uuid_seed('city-suwon'),      'suwon',      '{"ru":"Сувон","ko":"수원","en":"Suwon"}',          '["сувон","수원","suwon"]',                          'gyeonggi', 80,  true),
   (uuid_seed('city-ansan'),      'ansan',      '{"ru":"Ансан","ko":"안산","en":"Ansan"}',          '["ансан","안산","ansan"]',                          'gyeonggi', 90,  true),

@@ -27,3 +27,5 @@ Thumbs.db
 .claude/
 .idea/
 .vscode/
+
+.vercel

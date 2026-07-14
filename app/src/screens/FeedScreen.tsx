@@ -3,20 +3,30 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../shared/api/client';
 import type { VacancyView } from '../shared/types/api';
-import { useSubscriptionStore } from '../store/subscriptionStore';
+import { subscriptionValue, useSubscriptionStore } from '../store/subscriptionStore';
+import { filterSignature, filterToQuery, isFilterActive, useFilterStore } from '../store/filterStore';
+import { useFeedStore } from '../store/feedStore';
 import { AppBar } from '../components/AppBar';
 import { Loading } from '../components/Loading';
 import { EmptyState } from '../components/EmptyState';
 import { VacancyCard } from '../components/VacancyCard';
+import { FilterSheet } from '../components/FilterSheet';
+
+function FilterIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 5h18l-7 8.2V19l-4 2v-7.8z" />
+    </svg>
+  );
+}
 
 export default function FeedScreen() {
   const { t } = useTranslation();
   const navigate = useNavigate();
 
-  const citySlugs = useSubscriptionStore((s) => s.citySlugs);
-  const workTypes = useSubscriptionStore((s) => s.workTypes);
-  const cityKey = citySlugs.join(',');
-  const workKey = workTypes.join(',');
+  const filter = useFilterStore((s) => s.value);
+  const sig = filterSignature(filter);
+  const active = isFilterActive(filter);
 
   const [items, setItems] = useState<VacancyView[]>([]);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
@@ -24,30 +34,46 @@ export default function FeedScreen() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [filterOpen, setFilterOpen] = useState(false);
   const busy = useRef(false);
 
-  // (Re)load the first page whenever the selected cities / work types change.
+  // Seed the temporary filter default from the persistent subscription (once).
+  useEffect(() => {
+    useFilterStore.getState().initFromSubscription(subscriptionValue(useSubscriptionStore.getState()));
+  }, []);
+
+  // Load (or restore from cache) whenever the applied filter signature changes.
   useEffect(() => {
     let alive = true;
+    const cached = useFeedStore.getState().get(sig);
+    if (cached) {
+      setItems(cached.items);
+      setCursor(cached.cursor ?? undefined);
+      setHasMore(cached.hasMore);
+      setLoading(false);
+      setError(null);
+      requestAnimationFrame(() => window.scrollTo(0, cached.scrollY));
+      return;
+    }
+
     setItems([]);
     setCursor(undefined);
     setHasMore(true);
     setError(null);
-
-    if (!citySlugs.length) {
-      setLoading(false);
-      setHasMore(false);
-      return;
-    }
-
     setLoading(true);
     api
-      .vacancies({ cities: citySlugs, work_types: workTypes })
+      .vacancies(filterToQuery(filter))
       .then((page) => {
         if (!alive) return;
         setItems(page.items);
         setCursor(page.next_cursor ?? undefined);
         setHasMore(page.next_cursor != null);
+        useFeedStore.getState().set(sig, {
+          items: page.items,
+          cursor: page.next_cursor,
+          hasMore: page.next_cursor != null,
+          scrollY: 0,
+        });
       })
       .catch((e: unknown) => {
         if (alive) setError(e instanceof ApiError ? e.code : 'error');
@@ -55,21 +81,37 @@ export default function FeedScreen() {
       .finally(() => {
         if (alive) setLoading(false);
       });
-
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cityKey, workKey]);
+  }, [sig]);
+
+  // Persist scroll position when leaving the feed.
+  useEffect(() => {
+    return () => {
+      useFeedStore.getState().patch(sig, { scrollY: window.scrollY });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sig]);
 
   const loadMore = useCallback(() => {
     if (busy.current || !hasMore || loading || !cursor) return;
     busy.current = true;
     setLoadingMore(true);
     api
-      .vacancies({ cities: citySlugs, work_types: workTypes, cursor })
+      .vacancies({ ...filterToQuery(filter), cursor })
       .then((page) => {
-        setItems((prev) => [...prev, ...page.items]);
+        setItems((prev) => {
+          const next = [...prev, ...page.items];
+          useFeedStore.getState().set(sig, {
+            items: next,
+            cursor: page.next_cursor,
+            hasMore: page.next_cursor != null,
+            scrollY: window.scrollY,
+          });
+          return next;
+        });
         setCursor(page.next_cursor ?? undefined);
         setHasMore(page.next_cursor != null);
       })
@@ -80,9 +122,8 @@ export default function FeedScreen() {
         setLoadingMore(false);
         busy.current = false;
       });
-  }, [cursor, hasMore, loading, citySlugs, workTypes]);
+  }, [cursor, hasMore, loading, filter, sig]);
 
-  // Infinite scroll via a sentinel near the end of the list.
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = sentinelRef.current;
@@ -97,36 +138,23 @@ export default function FeedScreen() {
     return () => io.disconnect();
   }, [loadMore]);
 
-  const openVacancy = useCallback((id: string) => navigate(`/vacancy/${id}`), [navigate]);
+  const openVacancy = useCallback((id: string) => navigate(`/feed/${id}`), [navigate]);
 
-  const left = (
-    <button className="appbar__btn" onClick={() => navigate('/filter')}>
-      {t('nav.filter')}
-    </button>
-  );
   const right = (
     <button
-      className="appbar__btn appbar__btn--icon"
-      onClick={() => navigate('/settings')}
-      aria-label={t('nav.settings')}
+      className={`appbar__btn appbar__btn--icon ${active ? 'appbar__btn--dot' : ''}`}
+      onClick={() => setFilterOpen(true)}
+      aria-label={t('feed.filter')}
     >
-      ⚙
+      <FilterIcon />
     </button>
   );
 
   return (
     <div className="app">
-      <AppBar title={t('feed.title')} left={left} right={right} />
+      <AppBar title={t('feed.title')} right={right} />
       <div className="screen">
-        {!citySlugs.length ? (
-          <EmptyState
-            emoji="📍"
-            title={t('feed.emptyNoCitiesTitle')}
-            subtitle={t('feed.emptyNoCitiesSubtitle')}
-            actionLabel={t('feed.emptyCta')}
-            onAction={() => navigate('/filter')}
-          />
-        ) : loading ? (
+        {loading ? (
           <Loading text={t('common.loading')} />
         ) : error && !items.length ? (
           <EmptyState
@@ -139,9 +167,9 @@ export default function FeedScreen() {
           <EmptyState
             emoji="🗂️"
             title={t('feed.emptyTitle')}
-            subtitle={t('feed.emptySubtitle')}
+            subtitle={t('feed.emptyRelax')}
             actionLabel={t('feed.emptyCta')}
-            onAction={() => navigate('/filter')}
+            onAction={() => setFilterOpen(true)}
           />
         ) : (
           <>
@@ -157,6 +185,8 @@ export default function FeedScreen() {
           </>
         )}
       </div>
+
+      <FilterSheet open={filterOpen} onClose={() => setFilterOpen(false)} />
     </div>
   );
 }

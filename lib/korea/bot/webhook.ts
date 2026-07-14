@@ -19,15 +19,25 @@ import {
   sendError,
 } from '../core/http.js';
 import { ApiErrorCode } from '../core/errors.js';
-import { sendMessage, maskToken } from './telegram.js';
+import { sendMessage, answerCallbackQuery, editMessageText, maskToken } from './telegram.js';
+import { isAdminTelegramId } from '../admin/auth.js';
+import { moderateAd } from '../ads/rw.js';
 
 const RATE_LIMIT_PER_MINUTE = 20;
+
+interface CallbackData {
+  id: string;
+  data: string | null;
+  messageId: number | null;
+}
 
 interface ParsedUpdate {
   updateId: number;
   fromId: number | null;
   chatId: number | null;
+  chatType: string | null;
   text: string | null;
+  callback: CallbackData | null;
 }
 
 function parseUpdate(body: unknown): ParsedUpdate | null {
@@ -35,6 +45,27 @@ function parseUpdate(body: unknown): ParsedUpdate | null {
   const b = body as Record<string, unknown>;
   const updateId = b.update_id;
   if (typeof updateId !== 'number') return null;
+
+  // callback_query (inline button press — used for ad moderation).
+  const cq = b.callback_query as Record<string, unknown> | undefined;
+  if (cq) {
+    const cqFrom = cq.from as Record<string, unknown> | undefined;
+    const cqMsg = cq.message as Record<string, unknown> | undefined;
+    const cqChat = cqMsg?.chat as Record<string, unknown> | undefined;
+    return {
+      updateId,
+      fromId: typeof cqFrom?.id === 'number' ? cqFrom.id : null,
+      chatId: typeof cqChat?.id === 'number' ? cqChat.id : null,
+      chatType: typeof cqChat?.type === 'string' ? cqChat.type : null,
+      text: null,
+      callback: {
+        id: typeof cq.id === 'string' ? cq.id : '',
+        data: typeof cq.data === 'string' ? cq.data : null,
+        messageId: typeof cqMsg?.message_id === 'number' ? cqMsg.message_id : null,
+      },
+    };
+  }
+
   const msg = (b.message ?? b.edited_message) as Record<string, unknown> | undefined;
   const from = msg?.from as Record<string, unknown> | undefined;
   const chat = msg?.chat as Record<string, unknown> | undefined;
@@ -42,22 +73,57 @@ function parseUpdate(body: unknown): ParsedUpdate | null {
     updateId,
     fromId: typeof from?.id === 'number' ? from.id : null,
     chatId: typeof chat?.id === 'number' ? chat.id : null,
+    chatType: typeof chat?.type === 'string' ? chat.type : null,
     text: typeof msg?.text === 'string' ? msg.text : null,
+    callback: null,
   };
 }
 
-/** Handle a parsed update. Only /start is meaningful for now. */
+const CB_RE = /^ad:(approve|reject):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/** Handle an ad-moderation inline button. Admin-gated by ADMIN_TELEGRAM_IDS. */
+async function dispatchCallback(u: ParsedUpdate): Promise<void> {
+  const cb = u.callback;
+  if (!cb) return;
+  // Only configured admins may moderate; others get a soft toast.
+  if (u.fromId === null || !isAdminTelegramId(u.fromId)) {
+    if (cb.id) await answerCallbackQuery(cb.id, 'Недоступно');
+    return;
+  }
+  const m = CB_RE.exec(cb.data ?? '');
+  if (!m) {
+    if (cb.id) await answerCallbackQuery(cb.id);
+    return;
+  }
+  const action = m[1]!.toLowerCase() as 'approve' | 'reject';
+  const adId = m[2]!;
+  const { found } = await moderateAd(adId, action, action === 'reject' ? 'admin_button' : null);
+  const label = action === 'approve' ? 'одобрено' : 'отклонено';
+  if (cb.id) await answerCallbackQuery(cb.id, found ? `Решение: ${label}` : 'Не найдено');
+  if (found && u.chatId !== null && cb.messageId !== null) {
+    await editMessageText(u.chatId, cb.messageId, `Решение: ${label}.`);
+  }
+}
+
+/** Handle a parsed update. /start (message) or ad moderation (callback_query). */
 async function dispatch(u: ParsedUpdate): Promise<void> {
+  if (u.callback) return dispatchCallback(u);
   if (u.chatId === null || u.fromId === null) return;
+  // Only act in a private chat: the PM-writable flag + greeting are meaningless (and
+  // wrong) if the bot is ever added to a group/supergroup/channel.
+  if (u.chatType !== 'private') return;
   const text = (u.text ?? '').trim();
   if (!text.startsWith('/start')) return;
 
-  // Starting the bot makes the user PM-writable → mark it so notifications can reach them.
+  // Starting the bot makes the user PM-writable → mark it so notifications can reach
+  // them. It is also an authoritative "the bot can DM me" signal: clear is_blocked, so a
+  // user who previously triggered a 403 (incl. a false positive) re-enters runNotify.
   const sql = getSql();
   await sql`
     insert into users (telegram_id, allows_write_to_pm)
     values (${u.fromId}::bigint, true)
-    on conflict (telegram_id) do update set allows_write_to_pm = true, last_seen_at = now()`;
+    on conflict (telegram_id) do update set
+      allows_write_to_pm = true, is_blocked = false, last_seen_at = now()`;
 
   const appUrl = process.env.APP_URL;
   const extra = appUrl

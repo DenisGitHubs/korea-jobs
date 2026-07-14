@@ -2,14 +2,20 @@
  * Mock data for browser dev (VITE_API_MODE=mock). Cities mirror draft_seed.sql
  * (30 cities, region_slug groups). Vacancies are synthetic but realistic and
  * span every work_type / gender / city cluster so the UI can be reviewed by eye.
+ *
+ * The extra contract fields (visa_types, placement_fee, has_housing, has_meals,
+ * source_kind) are derived deterministically so the many RAW rows stay compact.
  */
 import type {
   City,
   Gender,
   Me,
+  PlacementFee,
   SalaryPeriod,
+  SourceKind,
   VacancyContact,
   VacancyView,
+  VisaType,
   WorkType,
 } from '../../types/api';
 
@@ -96,11 +102,57 @@ const RAW: RawVacancy[] = [
 
 const cityBySlug = new Map(CITIES.map((c) => [c.slug, c]));
 
+/** Ads submitted from a user (source_kind='user') — the rest are 'scraped'. */
+const USER_SOURCE = new Set(['v05', 'v09', 'v14', 'v26']);
+/** Re-posted offers (duplicate re-published). NOTE: `repost` is NOT in api.ts — see report. */
+const REPOSTS = new Set(['v03', 'v11', 'v20']);
+/** Explicitly no housing (three-state false), otherwise derived from the text. */
+const NO_HOUSING = new Set(['v06', 'v08', 'v16', 'v27']);
+
+const VISA_BY_WORK: Record<WorkType, VisaType[]> = {
+  factory: ['e9', 'h2'],
+  construction: ['h2', 'f_series'],
+  agriculture: ['e8', 'e9'],
+  fishery: ['e9', 'e8'],
+  food: ['e9', 'h2'],
+  logistics: ['h2', 'f_series'],
+  restaurant: ['h2', 'f_series'],
+  cleaning: ['h2', 'f_series'],
+  caregiving: ['h2', 'f_series'],
+  hotel: ['h2', 'e7'],
+  services: ['h2'],
+  other: [],
+};
+
+const FEE_CYCLE: PlacementFee[] = ['free', 'free', 'unknown', 'paid'];
+
+const HOUSING_HINTS = ['жиль', 'общежит', 'проживан'];
+const MEALS_HINTS = ['питание', 'еда'];
+
+function hasAny(text: string, hints: string[]): boolean {
+  const low = text.toLowerCase();
+  return hints.some((h) => low.includes(h));
+}
+
+/**
+ * `repost` is a UI marker that is NOT part of the api.ts contract yet; we widen
+ * VacancyView locally so the mock can emit it and the card can read it. Reported
+ * to backend as an open gap.
+ */
+export type MockVacancy = VacancyView & { repost?: boolean };
+
 /** Build view models with real timestamps, newest first. */
-export function buildVacancies(): VacancyView[] {
+export function buildVacancies(): MockVacancy[] {
   const now = Date.now();
-  return RAW.map((r): VacancyView => {
+  return RAW.map((r, i): MockVacancy => {
     const c = cityBySlug.get(r.city) ?? null;
+    const source_kind: SourceKind = USER_SOURCE.has(r.id) ? 'user' : 'scraped';
+    const has_housing = hasAny(r.description + (r.salary_text ?? ''), HOUSING_HINTS)
+      ? true
+      : NO_HOUSING.has(r.id)
+        ? false
+        : null;
+    const has_meals = hasAny(r.description + (r.salary_text ?? ''), MEALS_HINTS) ? true : null;
     return {
       id: r.id,
       city: c ? { slug: c.slug, name: c.name } : null,
@@ -115,6 +167,12 @@ export function buildVacancies(): VacancyView[] {
       description: r.description,
       posted_at: new Date(now - r.minsAgo * 60000).toISOString(),
       has_contact: r.contact !== null,
+      visa_types: VISA_BY_WORK[r.work_type],
+      placement_fee: FEE_CYCLE[i % FEE_CYCLE.length],
+      has_housing,
+      has_meals,
+      source_kind,
+      repost: REPOSTS.has(r.id),
       // Kept internally so the reveal endpoint can serve it; the feed strips it.
       contact: r.contact ?? undefined,
     };
@@ -124,5 +182,14 @@ export function buildVacancies(): VacancyView[] {
 export const DEFAULT_ME: Me = {
   public_id: 'demo-user',
   lang: 'ru',
-  subscription: { city_slugs: [], work_types: [], notify: true },
+  terms: { required: true, version: '2026-07-01' },
+  subscription: {
+    city_slugs: [],
+    work_types: [],
+    notify: true,
+    visa_types: [],
+    placement_fee: null,
+    require_housing: null,
+    require_meals: null,
+  },
 };

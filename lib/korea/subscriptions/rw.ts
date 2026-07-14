@@ -14,18 +14,27 @@ import {
 } from '../core/http.js';
 import { ApiErrorCode } from '../core/errors.js';
 import { authenticate } from '../core/context.js';
-import { WORK_TYPES } from '../parser/prompt.js';
+import { WORK_TYPES, VISA_TYPES, PLACEMENT_FEES } from '../parser/prompt.js';
 
 const WORK_TYPE_SET = new Set<string>(WORK_TYPES);
+const VISA_TYPE_SET = new Set<string>(VISA_TYPES);
+const PLACEMENT_FEE_SET = new Set<string>(PLACEMENT_FEES);
 
 interface Body {
   city_slugs?: unknown;
   work_types?: unknown;
   notify?: unknown;
+  visa_types?: unknown;
+  placement_fee?: unknown;
+  require_housing?: unknown;
+  require_meals?: unknown;
 }
 
 function stringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+}
+function triState(v: unknown): boolean | null {
+  return typeof v === 'boolean' ? v : null;
 }
 
 export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void> {
@@ -38,6 +47,13 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
   const inSlugs = stringArray(body?.city_slugs);
   const workTypes = stringArray(body?.work_types).filter((w) => WORK_TYPE_SET.has(w));
   const notify = body?.notify === undefined ? true : body?.notify === true;
+  const visaTypes = [...new Set(stringArray(body?.visa_types).filter((v) => VISA_TYPE_SET.has(v)))];
+  const placementFee =
+    typeof body?.placement_fee === 'string' && PLACEMENT_FEE_SET.has(body.placement_fee) && body.placement_fee !== 'unknown'
+      ? body.placement_fee
+      : null;
+  const requireHousing = triState(body?.require_housing);
+  const requireMeals = triState(body?.require_meals);
 
   try {
     const sql = getSql();
@@ -51,15 +67,32 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
     const validSlugs = cityRows.map((r) => r.slug);
 
     await sql`
-      insert into subscriptions (user_id, city_ids, work_types, notify)
-      values (${user.id}::uuid, ${cityIds}::uuid[], ${workTypes}::work_type[], ${notify})
+      insert into subscriptions (
+        user_id, city_ids, work_types, notify, visa_types, placement_fee, require_housing, require_meals
+      )
+      values (
+        ${user.id}::uuid, ${cityIds}::uuid[], ${workTypes}::work_type[], ${notify},
+        ${visaTypes}::visa_type[], ${placementFee}::placement_fee, ${requireHousing}, ${requireMeals}
+      )
       on conflict (user_id) do update set
         city_ids = excluded.city_ids,
         work_types = excluded.work_types,
         notify = excluded.notify,
+        visa_types = excluded.visa_types,
+        placement_fee = excluded.placement_fee,
+        require_housing = excluded.require_housing,
+        require_meals = excluded.require_meals,
         updated_at = now()`;
 
-    send(res, 200, { city_slugs: validSlugs, work_types: workTypes, notify });
+    send(res, 200, {
+      city_slugs: validSlugs,
+      work_types: workTypes,
+      notify,
+      visa_types: visaTypes,
+      placement_fee: placementFee,
+      require_housing: requireHousing,
+      require_meals: requireMeals,
+    });
   } catch {
     sendError(res, ApiErrorCode.Internal);
   }

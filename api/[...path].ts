@@ -11,10 +11,11 @@
 // the Mini App endpoints. The ingest/sources endpoints are server-to-server.
 //
 // Auth per route group (see architecture.md):
-//   /api/ingest, /api/sources        -> Bearer INGEST_SECRET
-//   /api/cities|vacancies|me|subscription -> Authorization: tma <initData>
-//   /api/bot/webhook                 -> X-Telegram-Bot-Api-Secret-Token
-//   /api/cron/parse|notify|cleanup   -> Bearer CRON_SECRET
+//   /api/ingest, /api/sources                         -> Bearer INGEST_SECRET
+//   /api/cities|vacancies|me|subscription|terms|ads|cooperation -> tma <initData>
+//   /api/vacancies/:id/takedown, /api/ads/:id/moderate-> admin (CRON_SECRET | ADMIN_TELEGRAM_IDS)
+//   /api/bot/webhook                                  -> X-Telegram-Bot-Api-Secret-Token
+//   /api/cron/parse|notify|cleanup                    -> Bearer CRON_SECRET
 
 import { type ReqLike, type ResLike, send } from '../lib/korea/core/http.js';
 import { ApiErrorCode, httpStatusFor, makeError } from '../lib/korea/core/errors.js';
@@ -23,8 +24,13 @@ import { cronParse, cronNotify, cronCleanup } from '../lib/korea/cron/handler.js
 import { botWebhook } from '../lib/korea/bot/webhook.js';
 import { citiesGet } from '../lib/korea/cities/read.js';
 import { vacanciesFeed, vacancyDetail, vacancyContact } from '../lib/korea/vacancies/read.js';
+import { vacancyReport } from '../lib/korea/reports/rw.js';
+import { vacancyTakedown } from '../lib/korea/vacancies/moderate.js';
 import { meGet } from '../lib/korea/users/me.js';
 import { subscriptionPost } from '../lib/korea/subscriptions/rw.js';
+import { termsAccept } from '../lib/korea/terms/rw.js';
+import { adsCreate, adsMine, adsModerate } from '../lib/korea/ads/rw.js';
+import { cooperationPost } from '../lib/korea/cooperation/rw.js';
 
 type Handler = (req: ReqLike, res: ResLike) => Promise<void> | void;
 
@@ -45,8 +51,17 @@ const ROUTES: Route[] = [
   { segments: ['vacancies'], handler: vacanciesFeed },
   { segments: ['vacancies', ':id'], handler: vacancyDetail },
   { segments: ['vacancies', ':id', 'contact'], handler: vacancyContact },
+  { segments: ['vacancies', ':id', 'report'], handler: vacancyReport },
+  // Admin (bearer CRON_SECRET or ADMIN_TELEGRAM_IDS user)
+  { segments: ['vacancies', ':id', 'takedown'], handler: vacancyTakedown },
   { segments: ['me'], handler: meGet },
   { segments: ['subscription'], handler: subscriptionPost },
+  { segments: ['terms', 'accept'], handler: termsAccept },
+  // User ads ("Разместить")
+  { segments: ['ads'], handler: adsCreate },
+  { segments: ['ads', 'mine'], handler: adsMine },
+  { segments: ['ads', ':id', 'moderate'], handler: adsModerate },
+  { segments: ['cooperation'], handler: cooperationPost },
   // Telegram bot webhook (X-Telegram-Bot-Api-Secret-Token)
   { segments: ['bot', 'webhook'], handler: botWebhook },
   // Cron (bearer CRON_SECRET)

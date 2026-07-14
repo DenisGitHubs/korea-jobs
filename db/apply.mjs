@@ -5,8 +5,9 @@
 // intentionally NOT applied on Neon (Supabase-only). Run from the project root:
 //   node db/apply.mjs
 //
-// Idempotency: intended for a fresh database. Re-running on a populated DB will
-// error on "already exists" — that's expected, not a silent success.
+// Idempotency: every migration is written to be re-runnable (guarded enums,
+// CREATE ... IF NOT EXISTS, ADD COLUMN IF NOT EXISTS, seeds via ON CONFLICT), so
+// re-applying the full list on a populated DB is safe. Keep new files idempotent.
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -30,7 +31,19 @@ if (!url) {
   process.exit(1);
 }
 
-const files = ['draft_0001_init.sql', 'draft_seed.sql', 'draft_sources_seed.sql'];
+const files = [
+  'draft_0001_init.sql',
+  'draft_seed.sql',
+  'draft_sources_seed.sql',
+  // Phase 1 v2 (0003) — order matters: vacancy_fields creates the visa_type /
+  // placement_fee enums that subscription_filters and user_ads depend on.
+  'draft_0003_vacancy_fields.sql',
+  'draft_0003_moderation.sql',
+  'draft_0003_consent.sql',
+  'draft_0003_takedown.sql',
+  'draft_0003_subscription_filters.sql',
+  'draft_0003_user_ads.sql',
+];
 
 const pool = new Pool({ connectionString: url });
 try {

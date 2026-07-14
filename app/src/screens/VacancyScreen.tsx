@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../shared/api/client';
 import type { VacancyContact, VacancyView } from '../shared/types/api';
-import { genderKey } from '../shared/labels';
+import { feeKey, genderKey, visaKey } from '../shared/labels';
 import { useBackButton } from '../hooks/useBackButton';
 import { useSettingsStore } from '../store/settingsStore';
 import { localized } from '../lib/localized';
@@ -42,6 +42,7 @@ export default function VacancyScreen() {
   const [notFound, setNotFound] = useState(false);
   const [contact, setContact] = useState<ContactState>({ status: 'idle' });
   const [copied, setCopied] = useState(false);
+  const [reported, setReported] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -86,6 +87,18 @@ export default function VacancyScreen() {
       });
   }, []);
 
+  const report = useCallback(() => {
+    setReported(true);
+    api.reportVacancy(id).catch(() => {
+      /* best effort */
+    });
+  }, [id]);
+
+  const threeState = (v: boolean | null): string =>
+    v === true ? t('common.yes') : v === false ? t('common.no') : t('vacancy.notStated');
+
+  const isRepost = Boolean((vacancy as { repost?: boolean } | null)?.repost);
+
   return (
     <div className="app">
       <AppBar title={t('vacancy.title')} onBack={goBack} />
@@ -101,11 +114,16 @@ export default function VacancyScreen() {
                 {vacancy.city ? localized(vacancy.city.name, lang) : t('region.other')}
               </h1>
               <p className="hero__sub">{timeAgo(vacancy.posted_at, t)}</p>
+              <p className="hero__note">{t('vacancy.mayBeTaken')}</p>
             </div>
 
             <div className="card__badges" style={{ marginBottom: 16 }}>
               <WorkTypeBadge type={vacancy.work_type} />
               <span className="badge badge--gender">{t(genderKey(vacancy.gender))}</span>
+              {vacancy.source_kind === 'user' ? (
+                <span className="badge badge--source">{t('vacancy.fromUser')}</span>
+              ) : null}
+              {isRepost ? <span className="badge badge--repost">{t('vacancy.repost')}</span> : null}
             </div>
 
             <div className="section" style={{ marginBottom: 16 }}>
@@ -122,6 +140,29 @@ export default function VacancyScreen() {
               <div className="dl">
                 <span className="dl__k">{t('vacancy.gender')}</span>
                 <span className="dl__v">{t(genderKey(vacancy.gender))}</span>
+              </div>
+            </div>
+
+            <div className="section" style={{ marginBottom: 16 }}>
+              <div className="dl">
+                <span className="dl__k">{t('vacancy.visa')}</span>
+                <span className="dl__v">
+                  {vacancy.visa_types.length
+                    ? vacancy.visa_types.map((v) => t(visaKey(v))).join(', ')
+                    : t('vacancy.notStated')}
+                </span>
+              </div>
+              <div className="dl">
+                <span className="dl__k">{t('vacancy.fee')}</span>
+                <span className="dl__v">{t(feeKey(vacancy.placement_fee))}</span>
+              </div>
+              <div className="dl">
+                <span className="dl__k">{t('vacancy.housing')}</span>
+                <span className="dl__v">{threeState(vacancy.has_housing)}</span>
+              </div>
+              <div className="dl">
+                <span className="dl__k">{t('vacancy.meals')}</span>
+                <span className="dl__v">{threeState(vacancy.has_meals)}</span>
               </div>
             </div>
 
@@ -172,6 +213,16 @@ export default function VacancyScreen() {
                 {t('vacancy.noContact')}
               </div>
             )}
+
+            <div className="report">
+              {reported ? (
+                <span className="muted">{t('vacancy.reported')}</span>
+              ) : (
+                <button className="report__btn" onClick={report}>
+                  {t('vacancy.report')}
+                </button>
+              )}
+            </div>
           </>
         )}
       </div>

@@ -29,10 +29,26 @@ export type WorkType = (typeof WORK_TYPES)[number];
 export const GENDERS = ['any', 'male', 'female', 'couple'] as const;
 export const SALARY_PERIODS = ['hour', 'day', 'shift', 'month', 'piece'] as const;
 export const CONTACT_KINDS = ['phone', 'telegram', 'kakao', 'whatsapp', 'other'] as const;
+export const VISA_TYPES = [
+  'any',
+  'e9',
+  'e7',
+  'e8',
+  'h2',
+  'f_series',
+  'd_series',
+  'tourist',
+  'other',
+] as const;
+export type VisaType = (typeof VISA_TYPES)[number];
+export const PLACEMENT_FEES = ['free', 'paid', 'unknown'] as const;
+export type PlacementFee = (typeof PLACEMENT_FEES)[number];
 export const REJECT_REASONS = [
   'chitchat',
   'resume_seeking_job',
   'ad_non_job',
+  'agency_promo',   // recruiter self-promotion (not a concrete job offer)
+  'course_ad',      // language / visa / driving course advertising
   'housing',
   'currency_exchange',
   'spam',
@@ -67,6 +83,11 @@ export interface ParsedVacancy {
   contact_raw: string | null;
   contact_kind: (typeof CONTACT_KINDS)[number] | null;
   dedup_extra: string | null;
+  // Phase 1 v2 attributes — fill ONLY when explicitly stated, else empty/unknown/null.
+  visa_types: VisaType[];
+  placement_fee: PlacementFee;
+  has_housing: boolean | null;
+  has_meals: boolean | null;
 }
 
 /**
@@ -103,6 +124,18 @@ export function buildItemSchema(citySlugs: string[], regionSlugs: string[]): Rec
         type: ['string', 'null'],
         description: '2-3 token normalized core; ONLY when there is no contact',
       },
+      visa_types: {
+        type: 'array',
+        items: { type: 'string', enum: [...VISA_TYPES] },
+        description: 'Visas the offer accepts; ONLY if stated. [] when not mentioned.',
+      },
+      placement_fee: {
+        type: 'string',
+        enum: [...PLACEMENT_FEES],
+        description: "'paid' if a placement/agency fee is charged, 'free' if explicitly free, else 'unknown'.",
+      },
+      has_housing: { type: ['boolean', 'null'], description: 'true/false ONLY if stated; null if not mentioned.' },
+      has_meals: { type: ['boolean', 'null'], description: 'true/false ONLY if stated; null if not mentioned.' },
     },
   };
 }
@@ -139,13 +172,18 @@ For EACH input message (an object {id, text}) return one item with the SAME id.
 
 CLASSIFICATION:
 - is_vacancy=true only for a real JOB OFFER (an employer looking for workers).
-- is_vacancy=false for: someone SEEKING work / posting a resume (resume_seeking_job), housing rent (housing), currency exchange (currency_exchange), chit-chat (chitchat), non-job ads/services (ad_non_job), spam (spam), or unclear (unclear). Set reject_reason; other fields may be omitted/null.
+- is_vacancy=false for: someone SEEKING work / posting a resume (resume_seeking_job), housing rent (housing), currency exchange (currency_exchange), chit-chat (chitchat), non-job ads/services (ad_non_job), recruiter/agency SELF-PROMOTION with no concrete vacancy — "звоните, поможем с работой", "агентство трудоустройства" (agency_promo), advertising of language/visa/driving COURSES or schools (course_ad), spam (spam), or unclear (unclear). Set reject_reason; other fields may be omitted/null.
+- Generally CUT advertising and noise that is not a concrete job opening.
 - confidence: 0..1 that this is a genuine vacancy.
 
 CITY (pick the SINGLE best slug from this list, or null — NEVER invent one):
 ${cityLines}
 - If only a region/province is identifiable, set region_slug (from: ${regionSlugs.join(', ')}) and city_slug=null.
 - Ambiguous transliterations must be resolved by context; if still unsure, city_slug=null.
+- 광주 / Кванджу / Gwangju is AMBIGUOUS — two different cities:
+    * 광주 with 경기 / near Seoul / Gyeonggi context -> gwangju_gyeonggi
+    * 광주 with 전라 / 호남 / south-west context (the metropolitan city) -> gwangju
+    * neither context clear -> city_slug=null.
 
 FIELDS:
 - work_type: best of the enum (factory, construction, agriculture, fishery, food, logistics, restaurant, cleaning, caregiving, hotel, services, other).
@@ -156,6 +194,12 @@ FIELDS:
 - contact_raw: the phone/handle EXACTLY as written (do NOT normalize). contact_kind: phone/telegram/kakao/whatsapp/other.
 - dedup_extra: ONLY when there is NO contact at all — a 2-3 token normalized core (e.g. "ansan factory autoparts") to tell otherwise-identical no-contact offers apart.
 - lang: ISO 639-1 of the message.
+
+ATTRIBUTES — fill ONLY when the message EXPLICITLY states them; NEVER guess:
+- visa_types: array of accepted visas (e9, e7, e8, h2, f_series [F-2/F-4/F-5/F-6], d_series [D-2/D-4/D-10], tourist [visa-free/short-stay], any, other). [] when visas are not mentioned. Use 'any' only if the offer explicitly says any visa is fine.
+- placement_fee: 'paid' if an agency/placement fee is charged to the worker, 'free' if it explicitly says no fee, else 'unknown'.
+- has_housing: true if housing/dormitory is provided, false if it explicitly says none, null if not mentioned.
+- has_meals: true if meals are provided, false if explicitly none, null if not mentioned.
 
 Contacts go ONLY in contact_raw — do NOT put phone numbers, @handles, Kakao/WhatsApp ids, or t.me/wa.me links in title, description, or employer; strip them out of those fields.
 

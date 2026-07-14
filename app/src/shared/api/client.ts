@@ -5,10 +5,15 @@
  */
 import { authHeader } from '../auth/telegram';
 import type {
+  AdCreateResult,
+  AdInput,
   City,
+  CooperationInput,
   Me,
   Page,
   Subscription,
+  TermsAcceptResult,
+  UserAd,
   VacancyContact,
   VacancyQuery,
   VacancyView,
@@ -84,20 +89,28 @@ function qs(params: Record<string, string | number | undefined>): string {
   return '?' + pairs.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join('&');
 }
 
+/** Serialize a VacancyQuery into the GET /vacancies query string. */
+function vacancyQuery(q: VacancyQuery): string {
+  return qs({
+    cities: q.cities?.length ? q.cities.join(',') : undefined,
+    work_types: q.work_types?.length ? q.work_types.join(',') : undefined,
+    regions: q.regions?.length ? q.regions.join(',') : undefined,
+    visa: q.visa?.length ? q.visa.join(',') : undefined,
+    paid: q.paid,
+    housing: q.housing ? 'true' : undefined,
+    meals: q.meals ? 'true' : undefined,
+    q: q.q?.trim() ? q.q.trim() : undefined,
+    freshness: q.freshness,
+    cursor: q.cursor,
+  });
+}
+
 export const api = {
   /** GET /cities — 30 seed cities, grouped by region on the client. */
   cities: () => request<City[]>('GET', '/cities'),
 
   /** GET /vacancies — cursor-paginated feed. Never carries contact. */
-  vacancies: (q: VacancyQuery) =>
-    request<Page<VacancyView>>(
-      'GET',
-      `/vacancies${qs({
-        cities: q.cities?.length ? q.cities.join(',') : undefined,
-        work_types: q.work_types?.length ? q.work_types.join(',') : undefined,
-        cursor: q.cursor,
-      })}`,
-    ),
+  vacancies: (q: VacancyQuery) => request<Page<VacancyView>>('GET', `/vacancies${vacancyQuery(q)}`),
 
   /** GET /vacancies/:id — single card (no contact). */
   vacancy: (id: string) => request<VacancyView>('GET', `/vacancies/${encodeURIComponent(id)}`),
@@ -106,9 +119,27 @@ export const api = {
   vacancyContact: (id: string) =>
     request<{ contact: VacancyContact | null }>('GET', `/vacancies/${encodeURIComponent(id)}/contact`),
 
-  /** GET /me — public id, language, current subscription. */
+  /** POST /vacancies/:id/report — flag an offer for moderation. */
+  reportVacancy: (id: string, reason?: string) =>
+    request<{ ok: true }>('POST', `/vacancies/${encodeURIComponent(id)}/report`, {
+      body: reason ? { reason } : {},
+    }),
+
+  /** GET /me — public id, language, terms state, current subscription. */
   me: () => request<Me>('GET', '/me'),
 
-  /** POST /subscription — save chosen cities + work types + notify toggle. */
+  /** POST /terms/accept — record acceptance of the current terms version. */
+  acceptTerms: () => request<TermsAcceptResult>('POST', '/terms/accept', { body: {} }),
+
+  /** POST /subscription — persistent filter that drives feed default + bot notifications. */
   saveSubscription: (s: Subscription) => request<Subscription>('POST', '/subscription', { body: s }),
+
+  /** POST /ads — submit a user ad; may be approved / pending / rejected. */
+  createAd: (input: AdInput) => request<AdCreateResult>('POST', '/ads', { body: input }),
+
+  /** GET /ads/mine — the current user's submitted ads. */
+  myAds: () => request<UserAd[]>('GET', '/ads/mine'),
+
+  /** POST /cooperation — a partnership / cooperation request (stub). */
+  cooperation: (input: CooperationInput) => request<{ ok: true }>('POST', '/cooperation', { body: input }),
 };

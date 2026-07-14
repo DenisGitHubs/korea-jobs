@@ -99,6 +99,24 @@ export function sendMessage(
   return tgCall('sendMessage', { chat_id: chatId, text, ...extra });
 }
 
+/** Acknowledge a callback_query (stops the client spinner). Optional toast `text`. */
+export function answerCallbackQuery(callbackQueryId: string, text?: string): Promise<TgResponse> {
+  return tgCall('answerCallbackQuery', {
+    callback_query_id: callbackQueryId,
+    ...(text ? { text } : {}),
+  });
+}
+
+/** Edit a sent message's text (used to drop the inline keyboard after a decision). */
+export function editMessageText(
+  chatId: number | string,
+  messageId: number,
+  text: string,
+  extra: Record<string, unknown> = {},
+): Promise<TgResponse> {
+  return tgCall('editMessageText', { chat_id: chatId, message_id: messageId, text, ...extra });
+}
+
 /**
  * Classify "recipient unavailable" (a 403: user blocked the bot / never started it /
  * deactivated). De-facto behaviour. The notify worker suppresses the send, does NOT
