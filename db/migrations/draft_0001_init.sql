@@ -131,6 +131,19 @@ $$;
 comment on function kj_normalize_phone(text)  is 'Korean phone -> digits in 82... form; NULL when not phone-like.';
 comment on function kj_normalize_contact(text) is 'Phone-like -> normalized phone; else lowercased handle/id; NULL when empty.';
 
+-- enum -> text is catalog-dependent (labels can be renamed), so Postgres treats a
+-- bare `col::text` as STABLE and refuses it in a generated column
+-- ("generation expression is not immutable"). These wrappers are language plpgsql
+-- ON PURPOSE: a `language sql` wrapper would be inlined and the check would see the
+-- enum cast through it; plpgsql is opaque to the planner, so the IMMUTABLE label is
+-- honored. Safe here — our enum labels are never renamed, and the wrapper returns
+-- the exact same label text a plain cast would.
+create or replace function kj_work_type_text(work_type)
+returns text language plpgsql immutable as $$ begin return $1::text; end; $$;
+
+create or replace function kj_gender_text(gender)
+returns text language plpgsql immutable as $$ begin return $1::text; end; $$;
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- config — feature flags / tunables (mirrors cargobob cb_config).
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -310,14 +323,18 @@ create table if not exists vacancies (
   posted_at          timestamptz not null default now(),
   -- dedup
   dedup_extra        text,                           -- parser-supplied core when no contact
+  -- digest(text,'sha256') from pgcrypto, NOT sha256(convert_to(...,'UTF8')):
+  -- convert_to is STABLE (encoding-dependent) and cannot drive a generated column,
+  -- whereas pgcrypto's digest is IMMUTABLE. On a UTF8 database the bytes hashed are
+  -- identical, so the hash value is unchanged.
   content_hash       text generated always as (
-    encode(sha256(convert_to(
+    encode(digest(
       coalesce(kj_normalize_contact(contact_raw), 'nocontact') || '|' ||
       coalesce(city_id::text, 'nocity')                        || '|' ||
-      coalesce(work_type::text, 'nowork')                      || '|' ||
-      coalesce(gender::text, 'any')                            || '|' ||
+      coalesce(kj_work_type_text(work_type), 'nowork')         || '|' ||
+      coalesce(kj_gender_text(gender), 'any')                  || '|' ||
       coalesce(nullif(btrim(dedup_extra), ''), '')
-    , 'UTF8')), 'hex')
+    , 'sha256'), 'hex')
   ) stored,
   duplicate_of       uuid references vacancies (id) on delete set null,
   repost_count       integer not null default 0,
