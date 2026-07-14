@@ -1,10 +1,11 @@
-// api/[...path].ts
+// api/index.ts
 //
-// Catch-all serverless entry: ONE Vercel function for the whole API, so the Hobby
-// 12-function ceiling is respected. The filename is a Vercel catch-all dynamic route
-// ([...path]), so EVERY /api/<anything> request is filesystem-routed here with the
-// ORIGINAL req.url preserved (no rewrite needed) — the router below reads req.url and
-// strips the leading 'api' segment. Routes are matched by path segments; each thin
+// Single serverless entry: ONE Vercel function for the whole API, so the Hobby
+// 12-function ceiling is respected. NOTE: filename catch-all ([...path]) is a Next.js
+// router feature — on a non-Next.js project Vercel only matches a single path segment
+// by filename, so nested /api/a/b would 404 at the platform before reaching us. We
+// therefore rewrite  /api/:path*  ->  /api/index?path=:path*  (see vercel.json) and read
+// the logical route from req.query.path. Routes are matched by path segments; each thin
 // handler owns its own method-routing, auth and status codes.
 //
 // app/ and api/ deploy as ONE Vercel project (same-origin), so no CORS is needed for
@@ -89,30 +90,36 @@ function matchRoute(route: Route, parts: string[]): { id: string | null } | fals
 }
 
 export default async function router(req: ReqLike, res: ResLike): Promise<void> {
-  const rawUrl = req.url ?? '/';
-  let pathname: string;
-  let search: URLSearchParams;
-  try {
-    const u = new URL(rawUrl, 'http://internal');
-    pathname = u.pathname;
-    search = u.searchParams;
-  } catch {
-    return send(res, httpStatusFor(ApiErrorCode.NotFound), makeError(ApiErrorCode.NotFound, `bad url`));
-  }
+  // The rewrite delivers the logical route in req.query.path (segments joined by '/');
+  // the rest of req.query is the real query (cities, work_types, cursor, ...). Fall back
+  // to req.url for a direct/local call made without the rewrite.
+  const query: Record<string, string | string[] | undefined> = { ...(req.query ?? {}) };
+  const rawPath = query.path;
+  const pathStr = Array.isArray(rawPath) ? rawPath.join('/') : (rawPath ?? '');
+  delete query.path; // internal routing param — never forwarded to handlers
 
-  // Vercel filesystem catch-all routing delivers the original path (/api/<...>), so we
-  // strip the leading 'api' segment to get the logical route. Kept tolerant of a path
-  // arriving without /api (e.g. a local/dev invocation).
-  let parts = splitPath(pathname);
-  if (parts[0] === 'api') parts = parts.slice(1);
-
-  // Mirror Vercel's req.query (single-value map, arrays for repeats).
-  const query: Record<string, string | string[] | undefined> = {};
-  for (const [k, v] of search.entries()) {
-    const existing = query[k];
-    if (existing === undefined) query[k] = v;
-    else if (Array.isArray(existing)) existing.push(v);
-    else query[k] = [existing, v];
+  let parts: string[];
+  if (pathStr) {
+    parts = splitPath(pathStr);
+  } else {
+    let pathname = '/';
+    try {
+      const u = new URL(req.url ?? '/', 'http://internal');
+      pathname = u.pathname;
+      // If the platform did not pre-parse the query into req.query, take it from the URL.
+      if (Object.keys(query).length === 0) {
+        for (const [k, v] of u.searchParams.entries()) {
+          const existing = query[k];
+          if (existing === undefined) query[k] = v;
+          else if (Array.isArray(existing)) existing.push(v);
+          else query[k] = [existing, v];
+        }
+      }
+    } catch {
+      return send(res, httpStatusFor(ApiErrorCode.NotFound), makeError(ApiErrorCode.NotFound, `bad url`));
+    }
+    parts = splitPath(pathname);
+    if (parts[0] === 'api') parts = parts.slice(1);
   }
 
   for (const route of ROUTES) {
@@ -129,5 +136,5 @@ export default async function router(req: ReqLike, res: ResLike): Promise<void> 
     }
   }
 
-  return send(res, httpStatusFor(ApiErrorCode.NotFound), makeError(ApiErrorCode.NotFound, `no route ${pathname}`));
+  return send(res, httpStatusFor(ApiErrorCode.NotFound), makeError(ApiErrorCode.NotFound, `no route /${parts.join('/')}`));
 }

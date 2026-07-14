@@ -3,9 +3,10 @@
   "buildCommand": "npm --prefix app install && npm --prefix app run build",
   "outputDirectory": "app/dist",
   "functions": {
-    "api/[...path].ts": { "maxDuration": 60 }
+    "api/index.ts": { "maxDuration": 60 }
   },
   "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/index?path=:path*" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "headers": [
