@@ -3,7 +3,8 @@
 -- tg_chat_id is left NULL — the reader (userbot) resolves and fills it on join.
 -- Idempotent: each row inserted only if that username is not already present.
 --
--- DRAFT ONLY. Apply after 0001–0002.
+-- DRAFT ONLY. Apply after draft_0001_init.sql and draft_seed.sql. draft_0002_rls.sql
+-- is optional and NOT applied on Neon — see db/README.md.
 --
 -- Note: 4 of 5 are Gwangju-focused (Кванджу) — the owner's initial city focus.
 -- More sources are added later (Stage 5) after the owner approves each.

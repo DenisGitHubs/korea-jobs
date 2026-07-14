@@ -16,7 +16,9 @@ import {
   header,
   readJsonBody,
   constantTimeEquals,
+  sendError,
 } from '../core/http.js';
+import { ApiErrorCode } from '../core/errors.js';
 import { sendMessage, maskToken } from './telegram.js';
 
 const RATE_LIMIT_PER_MINUTE = 20;
@@ -81,11 +83,7 @@ function unauthorized(res: ResLike): void {
 }
 
 export async function botWebhook(req: ReqLike, res: ResLike): Promise<void> {
-  if ((req.method ?? 'GET') !== 'POST') {
-    res.statusCode = 404;
-    res.end('');
-    return;
-  }
+  if ((req.method ?? 'GET') !== 'POST') return sendError(res, ApiErrorCode.NotFound);
 
   // (a) secret — constant-time; 401 with no body on mismatch/absence.
   if (!constantTimeEquals(header(req, 'x-telegram-bot-api-secret-token'), process.env.TG_WEBHOOK_SECRET)) {

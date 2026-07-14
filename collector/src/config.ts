@@ -33,9 +33,20 @@ export const config = {
   get tgSession(): string {
     return process.env.TG_SESSION ?? '';
   },
-  /** Base API URL of the backend, e.g. https://<host>/api. Collector uses /ingest and /sources. */
-  get ingestBaseUrl(): string {
-    return req('INGEST_URL').replace(/\/+$/, '');
+  /**
+   * Origin of the deployed backend, e.g. https://<host>. INGEST_URL is normalized to
+   * the bare origin: trailing slashes and a legacy trailing `/api` segment are stripped
+   * (older configs used `.../api`). The ingest client appends the constant paths
+   * `/api/ingest` and `/api/sources`, so both `https://host` and `https://host/api`
+   * resolve to the same, correct endpoints — a URL without `/api` can no longer slip
+   * past the SPA fallback and be mistaken for success.
+   */
+  get apiBase(): string {
+    return req('INGEST_URL')
+      .trim()
+      .replace(/\/+$/, '') // drop trailing slash(es)
+      .replace(/\/api$/i, '') // drop a trailing /api segment if present
+      .replace(/\/+$/, ''); // drop any slash left before the removed /api
   },
   /** Shared bearer secret; must match the backend's INGEST_SECRET. */
   get ingestSecret(): string {

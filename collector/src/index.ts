@@ -23,23 +23,46 @@ const MIN_TEXT_LEN = 2; // cheap pre-filter; the AI cost-guard lives in the back
 
 /** Active source chat ids (as strings). Refreshed periodically. */
 const activeChatIds = new Set<string>();
+/** Active source usernames (lower-case, no leading @). Lets a source match before its
+ *  tg_chat_id is known — the seed rows start with tg_chat_id NULL and the backend
+ *  backfills the id from the first forwarded message. */
+const activeUsernames = new Set<string>();
+/** Flips true only after the first SUCCESSFUL sources load. Until then we forward
+ *  nothing, so a cold reader can never leak messages from unrelated chats. */
+let sourcesLoaded = false;
+
+/** Normalize a Telegram username for comparison: strip a leading @ and lower-case.
+ *  Returns null for empty/absent input. */
+function normUsername(u: string | null | undefined): string | null {
+  if (!u) return null;
+  const s = u.trim().replace(/^@/, '').toLowerCase();
+  return s.length > 0 ? s : null;
+}
 
 async function refreshSources(): Promise<void> {
   try {
     const sources = await fetchSources();
     activeChatIds.clear();
+    activeUsernames.clear();
     for (const s of sources) {
-      if (s.is_active && s.tg_chat_id) activeChatIds.add(String(s.tg_chat_id));
+      if (!s.is_active) continue;
+      if (s.tg_chat_id) activeChatIds.add(String(s.tg_chat_id));
+      const uname = normUsername(s.username);
+      if (uname) activeUsernames.add(uname);
     }
-    log.info('sources refreshed', { active: activeChatIds.size });
+    sourcesLoaded = true;
+    log.info('sources refreshed', { chatIds: activeChatIds.size, usernames: activeUsernames.size });
   } catch (err) {
-    log.warn('sources refresh failed (keeping previous set)', { size: activeChatIds.size });
+    log.warn('sources refresh failed (keeping previous set)', {
+      chatIds: activeChatIds.size,
+      usernames: activeUsernames.size,
+    });
   }
 }
 
 async function main(): Promise<void> {
   // Fail fast on misconfig before connecting.
-  void config.ingestBaseUrl;
+  void config.apiBase;
   void config.ingestSecret;
   if (!config.tgSession) {
     throw new Error('TG_SESSION is empty — run `npm run login` first (the owner enters the code).');
@@ -60,12 +83,27 @@ async function main(): Promise<void> {
 
       const chatId = event.chatId ? String(event.chatId) : msg?.chatId ? String(msg.chatId) : null;
       if (!chatId) return;
-      // Accept only known active sources. The backend re-checks, but filtering here
-      // avoids forwarding private chats / noise.
-      if (activeChatIds.size > 0 && !activeChatIds.has(chatId)) return;
+
+      // Resolve the chat's public @username (channels/supergroups). getChat() returns
+      // an Entity union (User | Chat | Channel | ...) and only some members carry
+      // `username`, so guard with an `in` check. Keep the original case for the
+      // payload; compare on a normalized (lower-case) key.
+      const chat = await event.getChat();
+      const chatUsername = chat && 'username' in chat ? (chat.username as string | undefined) ?? null : null;
+      const chatUsernameKey = normUsername(chatUsername);
+
+      // Never forward before the first successful sources load (no "empty set == allow
+      // everything"). Then accept only known active sources — by chat id, or by
+      // username while the id is not yet backfilled. The backend re-checks; filtering
+      // here drops private chats / noise before they leave the reader.
+      if (!sourcesLoaded) return;
+      const known =
+        activeChatIds.has(chatId) || (chatUsernameKey !== null && activeUsernames.has(chatUsernameKey));
+      if (!known) return;
 
       await postRaw({
         tg_chat_id: chatId,
+        username: chatUsername,
         tg_message_id: msg.id,
         sender_id: msg.senderId ? String(msg.senderId) : null,
         text,

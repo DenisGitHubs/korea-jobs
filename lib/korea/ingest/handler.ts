@@ -100,9 +100,12 @@ export async function ingestPost(req: ReqLike, res: ResLike): Promise<void> {
     if (byId[0]) source = byId[0] as { id: string; is_active: boolean };
 
     if (!source && body.username) {
+      // Telegram usernames are case-insensitive; the seed may store a different case,
+      // so match case-insensitively. This path runs only until tg_chat_id is backfilled
+      // (first message), after which resolution goes through the fast tg_chat_id branch.
       const byName = await sql`
         select id, is_active from sources
-        where tg_chat_id is null and username = ${body.username} limit 1`;
+        where tg_chat_id is null and lower(username) = lower(${body.username}) limit 1`;
       if (byName[0]) {
         source = byName[0] as { id: string; is_active: boolean };
         await sql`update sources set tg_chat_id = ${chatId}::bigint where id = ${source.id}::uuid`;

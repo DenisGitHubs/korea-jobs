@@ -1,8 +1,11 @@
-// api/index.ts
+// api/[...path].ts
 //
 // Catch-all serverless entry: ONE Vercel function for the whole API, so the Hobby
-// 12-function ceiling is respected (cargobob pattern). Routes are matched by path
-// segments; each thin handler owns its own method-routing, auth and status codes.
+// 12-function ceiling is respected. The filename is a Vercel catch-all dynamic route
+// ([...path]), so EVERY /api/<anything> request is filesystem-routed here with the
+// ORIGINAL req.url preserved (no rewrite needed) — the router below reads req.url and
+// strips the leading 'api' segment. Routes are matched by path segments; each thin
+// handler owns its own method-routing, auth and status codes.
 //
 // app/ and api/ deploy as ONE Vercel project (same-origin), so no CORS is needed for
 // the Mini App endpoints. The ingest/sources endpoints are server-to-server.
@@ -82,7 +85,9 @@ export default async function router(req: ReqLike, res: ResLike): Promise<void> 
     return send(res, httpStatusFor(ApiErrorCode.NotFound), makeError(ApiErrorCode.NotFound, `bad url`));
   }
 
-  // The stand is mounted at /api/...; a rewrite may hand us the path with or without /api.
+  // Vercel filesystem catch-all routing delivers the original path (/api/<...>), so we
+  // strip the leading 'api' segment to get the logical route. Kept tolerant of a path
+  // arriving without /api (e.g. a local/dev invocation).
   let parts = splitPath(pathname);
   if (parts[0] === 'api') parts = parts.slice(1);
 

@@ -161,7 +161,10 @@ export async function vacancyContact(req: ReqLike, res: ResLike): Promise<void> 
   if (!auth.ok) return sendError(res, ApiErrorCode.Unauthorized);
 
   const id = queryParam(req, 'id');
-  if (!id || !UUID_RE.test(id)) return send(res, 200, { contact: null });
+  // A missing/invalid :id is a not-found, mirroring vacancyDetail (a 200 {contact:null}
+  // here would mask a bad id as "no contact"). The "vacancy exists but has no contact"
+  // case below stays a legitimate 200 {contact:null}.
+  if (!id || !UUID_RE.test(id)) return sendError(res, ApiErrorCode.NotFound);
 
   try {
     const sql = getSql();
