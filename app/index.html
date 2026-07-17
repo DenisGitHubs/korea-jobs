@@ -1,12 +1,21 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
-    <meta name="theme-color" content="#ffffff" />
+    <!-- Dark is the primary theme: paint the shell background before the JS
+         bundle (which loads index.css) runs, so there is no white flash on
+         cold start. theme-color matches the base dark bg (--kj-bg #10161d). -->
+    <meta name="theme-color" content="#10161d" />
+    <style>
+      html,
+      body {
+        background: #10161d;
+      }
+    </style>
     <title>Работа в Корее</title>
   </head>
   <body>

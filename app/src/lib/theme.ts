@@ -10,7 +10,7 @@
  * in-app only.
  */
 import { miniApp, themeParams } from '@telegram-apps/sdk-react';
-import { DARK_THEME, LIGHT_THEME, syncBottomBarColor } from './telegram';
+import { DARK_THEME, LIGHT_THEME, syncBottomBarColor, syncChromeColor } from './telegram';
 
 export type ThemeMode = 'auto' | 'light' | 'dark';
 
@@ -91,6 +91,7 @@ function render(): void {
   else if (currentMode === 'dark') applyForced(DARK_THEME, true);
   else applyAuto();
   syncBottomBarColor();
+  syncChromeColor();
 }
 
 /** Switch theme mode at runtime (from Settings) and re-render immediately. */

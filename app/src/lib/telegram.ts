@@ -167,6 +167,36 @@ export function syncBottomBarColor(): void {
   }
 }
 
+/**
+ * Match Telegram's native header + background to our own base bg (`--kj-bg`), so
+ * the native chrome follows the app's (now dark-by-default) palette instead of
+ * the client's own light/dark theme. Arbitrary-hex header colours are Bot API
+ * 6.9+, background 6.1+. Guarded by isAvailable()/supports() + try/catch, so
+ * older clients and the browser mock are a silent no-op.
+ */
+export function syncChromeColor(): void {
+  try {
+    const bg = getComputedStyle(document.documentElement).getPropertyValue('--kj-bg').trim();
+    if (!bg) return;
+    const app = miniApp as unknown as {
+      setHeaderColor?: { (c: string): void; isAvailable(): boolean; supports?(k: string): boolean };
+      setBackgroundColor?: { (c: string): void; isAvailable(): boolean };
+    };
+    const header = app.setHeaderColor;
+    if (header && typeof header.isAvailable === 'function' && header.isAvailable()) {
+      // Some clients only accept the 'bg_color'/'secondary_bg_color' keys; only
+      // push a raw hex where the client reports it supports arbitrary colours.
+      if (typeof header.supports !== 'function' || header.supports('color')) header(bg);
+    }
+    const background = app.setBackgroundColor;
+    if (background && typeof background.isAvailable === 'function' && background.isAvailable()) {
+      background(bg);
+    }
+  } catch {
+    /* method unsupported / invalid color — ignore */
+  }
+}
+
 function readLaunch(): RetrieveLPResult | undefined {
   try {
     return retrieveLaunchParams();
