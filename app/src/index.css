@@ -131,6 +131,9 @@
 
 * {
   box-sizing: border-box;
+  /* Kill the blue/grey flash Telegram's WebView paints on every tap. Interactive
+     elements provide their own brand feedback (:active scale, tint pills). */
+  -webkit-tap-highlight-color: transparent;
 }
 
 html,
@@ -439,9 +442,9 @@ a {
 }
 
 .check--on {
-  background: var(--kj-button);
-  border-color: var(--kj-button);
-  color: var(--kj-button-text);
+  background: var(--kj-brand);
+  border-color: var(--kj-brand);
+  color: var(--kj-brand-ink);
 }
 
 /* ── Chips (work types) ────────────────────────────────────────────────── */
@@ -2703,7 +2706,7 @@ a {
 }
 
 .consent__input:focus-visible + .consent__box {
-  outline: 2px solid var(--kj-accent);
+  outline: 2px solid var(--kj-brand);
   outline-offset: 2px;
 }
 

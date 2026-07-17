@@ -1,28 +1,27 @@
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../shared/api/client';
-import { useSettingsStore } from '../store/settingsStore';
 import { AppBar } from '../components/AppBar';
 import { Field } from '../components/Field';
 import { EmptyState } from '../components/EmptyState';
 
 export default function PartnersScreen() {
   const { t } = useTranslation();
-  const username = useSettingsStore((s) => s.username);
 
   const [message, setMessage] = useState('');
-  const [contact, setContact] = useState(username ? `@${username}` : '');
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
 
-  const canSend = message.trim().length > 0 || contact.trim().length > 0;
+  const canSend = message.trim().length > 0;
 
   const send = useCallback(async () => {
     if (!canSend || sending) return;
     setSending(true);
     try {
+      // The author's Telegram handle comes from the verified initData on the
+      // backend (authenticate()), so we no longer collect it in the form. The
+      // `contact` field is optional in the contract — we simply omit it.
       await api.cooperation({
-        contact: contact.trim() || undefined,
         message: message.trim() || undefined,
       });
       setSent(true);
@@ -31,7 +30,7 @@ export default function PartnersScreen() {
     } finally {
       setSending(false);
     }
-  }, [canSend, sending, contact, message]);
+  }, [canSend, sending, message]);
 
   if (sent) {
     return (
@@ -62,13 +61,6 @@ export default function PartnersScreen() {
             multiline
             rows={5}
             maxLength={1000}
-          />
-          <Field
-            label={t('partners.contactLabel')}
-            value={contact}
-            onChange={setContact}
-            placeholder={t('partners.contactPlaceholder')}
-            hint={t('partners.contactHint')}
           />
           <button className="btn btn--primary btn--block" onClick={send} disabled={!canSend || sending}>
             {sending ? t('common.saving') : t('partners.send')}

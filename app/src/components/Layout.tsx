@@ -4,18 +4,18 @@ import { syncBottomBarColor } from '../lib/telegram';
 import { useUiStore } from '../store/uiStore';
 import { TabBar } from './TabBar';
 
-/** Top-level routes that keep the bottom TabBar. */
+/** Top-level routes that keep the bottom TabBar (incl. the "Post" wizard). */
 const TOP_TABS = ['/feed', '/settings', '/post', '/partners'];
-/** Routes where an active MainButton owns the bottom — hide the TabBar. */
-const MAIN_BUTTON_ROUTES = ['/post'];
 
 export function Layout() {
   const { pathname } = useLocation();
 
+  // Transient overlays (e.g. the filter sheet with its own MainButton) hide the
+  // TabBar via the UI store; every top-level tab otherwise keeps it visible.
   const tabBarHidden = useUiStore((s) => s.tabBarHidden);
 
   const isTop = TOP_TABS.includes(pathname);
-  const showTabBar = isTop && !MAIN_BUTTON_ROUTES.includes(pathname) && !tabBarHidden;
+  const showTabBar = isTop && !tabBarHidden;
 
   // Keep the native bottom bar / Android nav bar tinted to our panel color.
   useEffect(() => {

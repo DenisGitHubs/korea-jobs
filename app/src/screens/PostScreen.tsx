@@ -17,7 +17,6 @@ import {
 } from '../shared/labels';
 import { useSettingsStore } from '../store/settingsStore';
 import { useBackButton } from '../hooks/useBackButton';
-import { useMainButton } from '../hooks/useMainButton';
 import { AppBar } from '../components/AppBar';
 import { Field } from '../components/Field';
 import { Segmented } from '../components/Segmented';
@@ -168,22 +167,6 @@ export default function PostScreen() {
   }, [phase, step, navigate]);
 
   useBackButton(true, back);
-  useMainButton({
-    text:
-      phase === 'result'
-        ? t('post.toFeed')
-        : step < LAST
-          ? t('post.next')
-          : submitting
-            ? t('common.saving')
-            : t('post.publish'),
-    visible: true,
-    enabled: phase === 'result' ? true : stepValid(step) && !submitting,
-    loading: submitting,
-    onClick: phase === 'result' ? () => navigate('/feed') : next,
-  });
-
-  const isReal = useSettingsStore((s) => s.isReal);
 
   const workOptions = useMemo<ChipOption<WorkType>[]>(
     () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), emoji: WORK_TYPE_EMOJI[w] })),
@@ -338,16 +321,17 @@ export default function PostScreen() {
           </div>
         )}
 
-        {!isReal ? (
-          <div className="wizard__nav">
-            <button className="btn btn--ghost" onClick={back}>
-              {step === 0 ? t('nav.back') : t('post.prev')}
-            </button>
-            <button className="btn btn--primary" onClick={next} disabled={!stepValid(step) || submitting}>
-              {step < LAST ? t('post.next') : submitting ? t('common.saving') : t('post.publish')}
-            </button>
-          </div>
-        ) : null}
+        {/* In-app wizard nav is the primary CTA on this screen. We drive it in the
+            DOM (brand-orange) instead of the native Telegram MainButton so the
+            action is on-brand and the bottom TabBar can stay visible. */}
+        <div className="wizard__nav">
+          <button className="btn btn--ghost" onClick={back}>
+            {step === 0 ? t('nav.back') : t('post.prev')}
+          </button>
+          <button className="btn btn--primary" onClick={next} disabled={!stepValid(step) || submitting}>
+            {step < LAST ? t('post.next') : submitting ? t('common.saving') : t('post.publish')}
+          </button>
+        </div>
       </div>
     </div>
   );
