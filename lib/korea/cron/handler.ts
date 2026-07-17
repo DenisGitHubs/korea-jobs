@@ -21,6 +21,7 @@ import { ApiErrorCode } from '../core/errors.js';
 import { runParse } from '../parser/run.js';
 import { runNotify } from '../notify/run.js';
 import { runCleanup } from '../cleanup/run.js';
+import { runReferralConfirm } from '../referral/confirm.js';
 
 function authorized(req: ReqLike): boolean {
   return constantTimeEquals(bearerToken(req), process.env.CRON_SECRET);
@@ -61,6 +62,20 @@ export async function cronCleanup(req: ReqLike, res: ResLike): Promise<void> {
   if (!authorized(req)) return unauthorized(res);
   try {
     const result = await runCleanup();
+    send(res, 200, { ok: true, ...result });
+  } catch {
+    sendError(res, ApiErrorCode.Internal);
+  }
+}
+
+/** POST /api/cron/referral-confirm — flip eligible pending referral credits to confirmed
+ *  (per-recipient daily cap + L1 diminishing/hard-wall), single-flight guarded. No balance
+ *  cache: reads sum the ledger. Returns run counters incl. an oldest-pending stall metric. */
+export async function cronReferralConfirm(req: ReqLike, res: ResLike): Promise<void> {
+  if ((req.method ?? 'GET') !== 'POST') return sendError(res, ApiErrorCode.NotFound);
+  if (!authorized(req)) return unauthorized(res);
+  try {
+    const result = await runReferralConfirm();
     send(res, 200, { ok: true, ...result });
   } catch {
     sendError(res, ApiErrorCode.Internal);

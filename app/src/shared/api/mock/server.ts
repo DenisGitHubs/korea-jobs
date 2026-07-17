@@ -8,6 +8,7 @@ import type {
   AdInput,
   Me,
   Page,
+  RawView,
   Subscription,
   UserAd,
   UserAdStatus,
@@ -15,7 +16,16 @@ import type {
   VisaType,
   WorkType,
 } from '../../types/api';
-import { CITIES, DEFAULT_ME, buildVacancies, type MockVacancy } from './fixtures';
+import {
+  CITIES,
+  DEFAULT_ME,
+  DEFAULT_REFERRAL,
+  INITIAL_SAVED_IDS,
+  MOCK_SOURCES_COUNT,
+  RAW_ITEMS,
+  buildVacancies,
+  type MockVacancy,
+} from './fixtures';
 
 const PAGE_SIZE = 8;
 const ALL: MockVacancy[] = buildVacancies();
@@ -23,6 +33,8 @@ const ALL: MockVacancy[] = buildVacancies();
 // Mutable session state (resets on reload).
 let me: Me = structuredClone(DEFAULT_ME);
 const myAds: UserAd[] = [];
+/** Bookmarked offer ids (source of truth for is_saved in every projection). */
+const savedIds = new Set<string>(INITIAL_SAVED_IDS);
 
 interface MockError {
   __mockHttp: number;
@@ -38,9 +50,9 @@ function fail(status: number, error: string): never {
 
 const delay = (ms = 200): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** Feed/detail projection: drop the contact, keep the has_contact flag. */
+/** Feed/detail projection: drop the contact, project the live is_saved state. */
 function withoutContact(v: MockVacancy): VacancyView {
-  const copy: MockVacancy = { ...v };
+  const copy: MockVacancy = { ...v, is_saved: savedIds.has(v.id) };
   delete copy.contact;
   return copy;
 }
@@ -144,6 +156,12 @@ export async function handleMock(method: string, path: string, body?: unknown): 
       return page;
     }
 
+    // GET /vacancies/count — match count (same filter/union as the feed).
+    // Must precede the parametric /vacancies/:id route below.
+    if (method === 'GET' && seg.length === 2 && seg[1] === 'count') {
+      return { count: filterFeed(url.searchParams).length };
+    }
+
     // GET /vacancies/:id — single card (no contact).
     if (method === 'GET' && seg.length === 2) {
       const v = ALL.find((x) => x.id === seg[1]);
@@ -164,15 +182,59 @@ export async function handleMock(method: string, path: string, body?: unknown): 
       if (!v) return fail(404, 'not_found');
       return { ok: true };
     }
+
+    // POST /vacancies/:id/save — bookmark; DELETE — remove bookmark (idempotent).
+    if (seg.length === 3 && seg[2] === 'save') {
+      const v = ALL.find((x) => x.id === seg[1]);
+      if (!v) return fail(404, 'not_found');
+      if (method === 'POST') {
+        savedIds.add(seg[1]);
+        return { is_saved: true };
+      }
+      if (method === 'DELETE') {
+        savedIds.delete(seg[1]);
+        return { is_saved: false };
+      }
+    }
+  }
+
+  if (method === 'GET' && p === '/stats') {
+    return { vacancies_count: ALL.length, sources_count: MOCK_SOURCES_COUNT };
+  }
+
+  if (method === 'GET' && p === '/saved') {
+    const cursor = Number.parseInt(url.searchParams.get('cursor') ?? '0', 10) || 0;
+    const items = ALL.filter((v) => savedIds.has(v.id));
+    const slice = items.slice(cursor, cursor + PAGE_SIZE).map(withoutContact);
+    const next_cursor = cursor + PAGE_SIZE < items.length ? String(cursor + PAGE_SIZE) : null;
+    const page: Page<VacancyView> = { items: slice, next_cursor };
+    return page;
+  }
+
+  if (method === 'GET' && p === '/raw') {
+    const cursor = Number.parseInt(url.searchParams.get('cursor') ?? '0', 10) || 0;
+    const slice = RAW_ITEMS.slice(cursor, cursor + PAGE_SIZE);
+    const next_cursor = cursor + PAGE_SIZE < RAW_ITEMS.length ? String(cursor + PAGE_SIZE) : null;
+    const page: Page<RawView> = { items: slice, next_cursor };
+    return page;
   }
 
   if (method === 'GET' && p === '/me') {
     return me;
   }
 
+  if (method === 'GET' && p === '/referral') {
+    return DEFAULT_REFERRAL;
+  }
+
   if (method === 'POST' && p === '/terms/accept') {
     me = { ...me, terms: { ...me.terms, required: false } };
     return { ok: true, version: me.terms.version };
+  }
+
+  if (method === 'POST' && p === '/onboarded') {
+    me = { ...me, onboarded: true };
+    return { onboarded: true };
   }
 
   if (method === 'POST' && p === '/subscription') {
@@ -249,6 +311,7 @@ export async function handleMock(method: string, path: string, body?: unknown): 
           has_meals: ad.has_meals,
           source_kind: 'user',
           repost: false,
+          is_saved: false,
           contact: ad.contact_raw
             ? { kind: ad.contact_kind ?? 'other', value: ad.contact_raw }
             : undefined,

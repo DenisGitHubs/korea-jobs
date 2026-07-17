@@ -17,10 +17,14 @@ interface SubscriptionState extends SubscriptionValue {
   publicId: string;
   termsRequired: boolean;
   termsVersion: string;
+  /** First-run onboarding completed (from /me; server-persisted). */
+  onboarded: boolean;
   hydrate: (m: Me) => void;
   apply: (s: Subscription) => void;
   setNotify: (b: boolean) => void;
   acceptTerms: () => void;
+  /** Mark onboarding done locally (after POST /onboarded) so the overlay closes. */
+  setOnboarded: () => void;
 }
 
 const EMPTY: SubscriptionValue = {
@@ -77,15 +81,20 @@ export const useSubscriptionStore = create<SubscriptionState>((set) => ({
   publicId: '',
   termsRequired: false,
   termsVersion: '',
+  // Safe default: assume onboarded until /me says otherwise, so the overlay never
+  // flashes before hydrate and a failed /me does not trap the user in onboarding.
+  onboarded: true,
   hydrate: (m) =>
     set({
       ...fromSubscription(m.subscription),
       publicId: m.public_id,
       termsRequired: m.terms?.required ?? false,
       termsVersion: m.terms?.version ?? '',
+      onboarded: m.onboarded ?? true,
       loaded: true,
     }),
   apply: (s) => set({ ...fromSubscription(s), loaded: true }),
   setNotify: (b) => set({ notify: b }),
   acceptTerms: () => set({ termsRequired: false }),
+  setOnboarded: () => set({ onboarded: true }),
 }));

@@ -1,14 +1,20 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { api } from './shared/api/client';
+import { api, USE_MOCK } from './shared/api/client';
 import { useSubscriptionStore } from './store/subscriptionStore';
 import { Splash } from './components/Splash';
 import { Layout } from './components/Layout';
+import { ConsentGate } from './components/ConsentGate';
+import { Onboarding } from './components/Onboarding';
 import FeedScreen from './screens/FeedScreen';
 import VacancyScreen from './screens/VacancyScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import PostScreen from './screens/PostScreen';
 import PartnersScreen from './screens/PartnersScreen';
+import ReferralScreen from './screens/ReferralScreen';
+import SafetyScreen from './screens/SafetyScreen';
+import PrivacyScreen from './screens/PrivacyScreen';
+import RulesScreen from './screens/RulesScreen';
 
 export default function App() {
   const loaded = useSubscriptionStore((s) => s.loaded);
@@ -22,23 +28,27 @@ export default function App() {
         if (alive) hydrate(m);
       })
       .catch(() => {
-        // Live API unavailable — start empty so the feed still opens (shows all).
-        if (alive) {
-          hydrate({
-            public_id: '',
-            lang: 'ru',
-            terms: { required: false, version: '' },
-            subscription: {
-              city_slugs: [],
-              work_types: [],
-              notify: true,
-              visa_types: [],
-              placement_fee: null,
-              require_housing: null,
-              require_meals: null,
-            },
-          });
-        }
+        if (!alive) return;
+        // Mock/dev has no backend, so consent does not apply there and we can start
+        // empty. On a REAL API error (network / cold start / stale initData / 5xx) we
+        // FAIL CLOSED: keep terms required so ConsentGate blocks the app instead of
+        // silently skipping the mandatory consent.
+        hydrate({
+          public_id: '',
+          lang: 'ru',
+          terms: { required: !USE_MOCK, version: '' },
+          points_total: 0,
+          onboarded: true,
+          subscription: {
+            city_slugs: [],
+            work_types: [],
+            notify: true,
+            visa_types: [],
+            placement_fee: null,
+            require_housing: null,
+            require_meals: null,
+          },
+        });
       });
     return () => {
       alive = false;
@@ -49,6 +59,10 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      {/* Order matters: consent must be granted before onboarding collects any
+          preferences; onboarding (guarded by !termsRequired) then runs before the app. */}
+      <ConsentGate />
+      <Onboarding />
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<Navigate to="/feed" replace />} />
@@ -57,6 +71,10 @@ export default function App() {
           <Route path="settings" element={<SettingsScreen />} />
           <Route path="post" element={<PostScreen />} />
           <Route path="partners" element={<PartnersScreen />} />
+          <Route path="referral" element={<ReferralScreen />} />
+          <Route path="safety" element={<SafetyScreen />} />
+          <Route path="privacy" element={<PrivacyScreen />} />
+          <Route path="rules" element={<RulesScreen />} />
           <Route path="*" element={<Navigate to="/feed" replace />} />
         </Route>
       </Routes>

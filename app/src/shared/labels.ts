@@ -21,14 +21,19 @@ export const WORK_TYPES: readonly WorkType[] = [
 
 export const GENDERS: readonly Gender[] = ['any', 'male', 'female', 'couple'] as const;
 
-/** Visas usable as filter chips / ad options ('any' = no restriction, omitted here). */
+/** Visas usable as filter chips / ad options ('any' = no restriction, omitted here).
+    Order follows the visa reference (_docs/research/korea-visas-and-scams.md §1). */
 export const VISA_TYPES: readonly VisaType[] = [
-  'e9',
-  'e7',
-  'e8',
+  'f4',
   'h2',
+  'e9',
+  'e8',
+  'e7',
+  'f6',
   'f_series',
+  'd10',
   'd_series',
+  'g1',
   'tourist',
   'other',
 ] as const;

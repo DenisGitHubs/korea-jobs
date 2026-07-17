@@ -1,6 +1,19 @@
 import type { TFunction } from 'i18next';
 import type { SalaryPeriod, VacancyView } from '../shared/types/api';
 
+/** A posting older than this many days shows the "may be taken" caution. */
+export const STALE_AFTER_DAYS = 3;
+
+/**
+ * True when a posting is older than STALE_AFTER_DAYS (age from `posted_at`).
+ * Fresh offers (≤ STALE_AFTER_DAYS) return false — the caution is hidden.
+ */
+export function isStale(iso: string): boolean {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return false;
+  return Date.now() - then > STALE_AFTER_DAYS * 86400000;
+}
+
 /** Human "time ago" using the i18n time.* keys. */
 export function timeAgo(iso: string, t: TFunction): string {
   const then = new Date(iso).getTime();

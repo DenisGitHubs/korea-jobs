@@ -37,7 +37,9 @@ export const EMPTY_FILTER: FilterValue = {
 
 export function filterFromSubscription(s: SubscriptionValue): FilterValue {
   return {
-    cities: [...s.citySlugs],
+    // City filter is temporarily hidden from the UI — don't seed it into the
+    // feed filter so the live feed is never silently narrowed by a city.
+    cities: [],
     workTypes: [...s.workTypes],
     visa: [...s.visaTypes],
     paid: s.placementFee === 'free' || s.placementFee === 'paid' ? s.placementFee : null,
@@ -67,7 +69,7 @@ export function filterSignature(v: FilterValue): string {
   return JSON.stringify({
     c: [...v.cities].sort(),
     w: [...v.workTypes].sort(),
-    v: [...v.visa].sort(),
+    vi: [...v.visa].sort(),
     p: v.paid,
     h: v.housing,
     m: v.meals,

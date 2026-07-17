@@ -6,6 +6,7 @@
   "description": "korea-jobs reader (userbot): joins approved Telegram chats and posts raw messages to the backend ingest endpoint. Separate host — holds only the TG session + ingest secret.",
   "scripts": {
     "login": "tsx src/login.ts",
+    "join": "tsx src/join.ts",
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit"

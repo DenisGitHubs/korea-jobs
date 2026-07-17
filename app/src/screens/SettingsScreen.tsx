@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api } from '../shared/api/client';
 import type { VisaType, WorkType } from '../shared/types/api';
@@ -11,7 +12,6 @@ import { AppBar } from '../components/AppBar';
 import { Switch } from '../components/Switch';
 import { Segmented } from '../components/Segmented';
 import { ChipSelect, type ChipOption } from '../components/ChipSelect';
-import { CityPicker } from '../components/CityPicker';
 
 function sameSet(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
@@ -21,6 +21,7 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
 
 export default function SettingsScreen() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   const lang = useSettingsStore((s) => s.lang);
   const setLang = useSettingsStore((s) => s.setLang);
@@ -36,7 +37,6 @@ export default function SettingsScreen() {
   const sMeals = useSubscriptionStore((s) => s.requireMeals);
   const sNotify = useSubscriptionStore((s) => s.notify);
 
-  const [cities, setCities] = useState<string[]>(() => sCities);
   const [work, setWork] = useState<WorkType[]>(() => sWork);
   const [visa, setVisa] = useState<VisaType[]>(() => sVisa);
   const [paid, setPaid] = useState<'free' | 'paid' | null>(() =>
@@ -48,7 +48,6 @@ export default function SettingsScreen() {
   const [saving, setSaving] = useState(false);
 
   const dirty =
-    !sameSet(cities, sCities) ||
     !sameSet(work, sWork) ||
     !sameSet(visa, sVisa) ||
     paid !== (sFee === 'free' || sFee === 'paid' ? sFee : null) ||
@@ -61,7 +60,8 @@ export default function SettingsScreen() {
     setSaving(true);
     try {
       const body = toSubscription({
-        citySlugs: cities,
+        // City selection is temporarily hidden; keep the saved cities untouched.
+        citySlugs: sCities,
         workTypes: work,
         notify,
         visaTypes: visa,
@@ -76,7 +76,7 @@ export default function SettingsScreen() {
     } finally {
       setSaving(false);
     }
-  }, [saving, cities, work, notify, visa, paid, housing, meals, apply]);
+  }, [saving, sCities, work, notify, visa, paid, housing, meals, apply]);
 
   const workOptions = useMemo<ChipOption<WorkType>[]>(
     () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), emoji: WORK_TYPE_EMOJI[w] })),
@@ -145,11 +145,6 @@ export default function SettingsScreen() {
           </div>
         </div>
 
-        <div className="region">
-          <div className="region__title">{t('settings.citiesTitle')}</div>
-          <CityPicker value={cities} onChange={setCities} />
-        </div>
-
         <button
           className="btn btn--primary btn--block"
           onClick={save}
@@ -158,6 +153,47 @@ export default function SettingsScreen() {
         >
           {saving ? t('common.saving') : dirty ? t('settings.saveSubscription') : t('settings.saved')}
         </button>
+
+        <div className="region">
+          <div className="section">
+            <button className="row row--nav" onClick={() => navigate('/referral')}>
+              <div className="row__label">
+                <div>{t('settings.inviteFriends')}</div>
+                <div className="row__sub">{t('settings.inviteFriendsHint')}</div>
+              </div>
+              <span className="row__chevron" aria-hidden>
+                ›
+              </span>
+            </button>
+            <button className="row row--nav" onClick={() => navigate('/safety')}>
+              <div className="row__label">
+                <div>{t('settings.safety')}</div>
+                <div className="row__sub">{t('settings.safetyHint')}</div>
+              </div>
+              <span className="row__chevron" aria-hidden>
+                ›
+              </span>
+            </button>
+            <button className="row row--nav" onClick={() => navigate('/rules')}>
+              <div className="row__label">
+                <div>{t('settings.rules')}</div>
+                <div className="row__sub">{t('settings.rulesHint')}</div>
+              </div>
+              <span className="row__chevron" aria-hidden>
+                ›
+              </span>
+            </button>
+            <button className="row row--nav" onClick={() => navigate('/privacy')}>
+              <div className="row__label">
+                <div>{t('settings.privacy')}</div>
+                <div className="row__sub">{t('settings.privacyHint')}</div>
+              </div>
+              <span className="row__chevron" aria-hidden>
+                ›
+              </span>
+            </button>
+          </div>
+        </div>
 
         <div className="region">
           <div className="region__title">{t('settings.appearance')}</div>

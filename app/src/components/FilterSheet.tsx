@@ -1,15 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { PlacementFee, VisaType, WorkType } from '../shared/types/api';
-import { FRESHNESS_DAYS, VISA_TYPES, WORK_TYPES, WORK_TYPE_EMOJI, freshnessKey, visaKey, workTypeKey } from '../shared/labels';
-import { EMPTY_FILTER, useFilterStore, type FilterValue } from '../store/filterStore';
+import type { VisaType, WorkType } from '../shared/types/api';
+import {
+  FRESHNESS_DAYS,
+  VISA_TYPES,
+  WORK_TYPES,
+  WORK_TYPE_EMOJI,
+  freshnessKey,
+  visaKey,
+  workTypeKey,
+} from '../shared/labels';
+import { EMPTY_FILTER, filterToQuery, useFilterStore, type FilterValue } from '../store/filterStore';
+import { api } from '../shared/api/client';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUiStore } from '../store/uiStore';
 import { useMainButton } from '../hooks/useMainButton';
 import { Sheet } from './Sheet';
 import { Field } from './Field';
 import { ChipSelect, type ChipOption } from './ChipSelect';
-import { CityPicker } from './CityPicker';
 import { Switch } from './Switch';
 
 interface FilterSheetProps {
@@ -25,11 +33,34 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
   const setTabBarHidden = useUiStore((s) => s.setTabBarHidden);
 
   const [draft, setDraft] = useState<FilterValue>(EMPTY_FILTER);
+  // Live match count for the current draft; null = unknown (soft-degrade to plain label).
+  const [count, setCount] = useState<number | null>(null);
 
   // Seed the draft from the applied filter each time the sheet opens.
   useEffect(() => {
     if (open) setDraft(useFilterStore.getState().value);
   }, [open]);
+
+  // Live "Show N" counter: debounced fetch on every draft change while open.
+  // The previous count is kept while a new one loads (never blocks Apply).
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      api
+        .vacanciesCount(filterToQuery(draft))
+        .then((r) => {
+          if (alive) setCount(r.count);
+        })
+        .catch(() => {
+          /* keep the previous count on error */
+        });
+    }, 300);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [draft, open]);
 
   // Hide the TabBar while the sheet (with its Apply MainButton) is open.
   useEffect(() => {
@@ -44,7 +75,10 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
     onClose();
   }, [apply, draft, onClose]);
 
-  useMainButton({ text: t('filter.apply'), visible: open, enabled: true, onClick: doApply });
+  // Soft-degrade to plain "Apply" until the first count arrives.
+  const applyLabel = count === null ? t('filter.apply') : t('filter.showCount', { count });
+
+  useMainButton({ text: applyLabel, visible: open, enabled: true, onClick: doApply });
 
   const workOptions = useMemo<ChipOption<WorkType>[]>(
     () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), emoji: WORK_TYPE_EMOJI[w] })),
@@ -54,9 +88,11 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
     () => VISA_TYPES.map((v) => ({ value: v, label: t(visaKey(v)) })),
     [t],
   );
-  const paidOptions: ChipOption<'free' | 'paid'>[] = [
-    { value: 'free', label: t('fee.free') },
+  // '' = "Неважно" (no fee filter, default). ChipSelect keeps it as a single-select radio.
+  const paidOptions: ChipOption<'' | 'free' | 'paid'>[] = [
+    { value: '', label: t('fee.any') },
     { value: 'paid', label: t('fee.paid') },
+    { value: 'free', label: t('fee.free') },
   ];
   const freshnessOptions: ChipOption<string>[] = [
     { value: '', label: t('freshness.any') },
@@ -103,7 +139,7 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
         <section className="filter__block">
           <div className="region__title">{t('filter.visa')}</div>
           <ChipSelect options={visaOptions} value={draft.visa} onChange={(v) => patch({ visa: v })} />
-          <div className="hint">{t('filter.rareHint')}</div>
+          <p className="field__hint">{t('visa.disclaimer')}</p>
         </section>
 
         <section className="filter__block">
@@ -111,39 +147,30 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
           <ChipSelect
             single
             options={paidOptions}
-            value={draft.paid === 'free' || draft.paid === 'paid' ? [draft.paid] : []}
-            onChange={(next) => patch({ paid: (next[0] as PlacementFee) ?? null })}
+            value={[draft.paid === 'free' || draft.paid === 'paid' ? draft.paid : '']}
+            onChange={(next) => {
+              const v = next[0];
+              patch({ paid: v === 'free' || v === 'paid' ? v : null });
+            }}
           />
-          <div className="hint">{t('filter.rareHint')}</div>
         </section>
 
         <section className="filter__block">
           <div className="section">
             <div className="row">
-              <div className="row__label">
-                <div>{t('filter.housing')}</div>
-                <div className="row__sub">{t('filter.rareHint')}</div>
-              </div>
+              <div className="row__label">{t('filter.housing')}</div>
               <Switch checked={draft.housing} onChange={(v) => patch({ housing: v })} label={t('filter.housing')} />
             </div>
             <div className="row">
-              <div className="row__label">
-                <div>{t('filter.meals')}</div>
-                <div className="row__sub">{t('filter.rareHint')}</div>
-              </div>
+              <div className="row__label">{t('filter.meals')}</div>
               <Switch checked={draft.meals} onChange={(v) => patch({ meals: v })} label={t('filter.meals')} />
             </div>
           </div>
         </section>
 
-        <section className="filter__block">
-          <div className="region__title">{t('filter.citiesSection')}</div>
-          <CityPicker value={draft.cities} onChange={(v) => patch({ cities: v })} />
-        </section>
-
         {!isReal ? (
           <button className="btn btn--primary btn--block" onClick={doApply}>
-            {t('filter.apply')}
+            {applyLabel}
           </button>
         ) : null}
       </div>

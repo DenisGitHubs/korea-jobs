@@ -11,6 +11,9 @@ import type {
   CooperationInput,
   Me,
   Page,
+  RawView,
+  ReferralView,
+  Stats,
   Subscription,
   TermsAcceptResult,
   UserAd,
@@ -112,6 +115,25 @@ export const api = {
   /** GET /vacancies — cursor-paginated feed. Never carries contact. */
   vacancies: (q: VacancyQuery) => request<Page<VacancyView>>('GET', `/vacancies${vacancyQuery(q)}`),
 
+  /** GET /vacancies/count — how many offers match `q` (same union/rules as the feed). */
+  vacanciesCount: (q: VacancyQuery) =>
+    request<{ count: number }>('GET', `/vacancies/count${vacancyQuery(q)}`),
+
+  /** GET /saved — the user's bookmarked offers (same shape as the feed). */
+  saved: (q: { cursor?: string } = {}) =>
+    request<Page<VacancyView>>('GET', `/saved${qs({ cursor: q.cursor })}`),
+
+  /** GET /raw — unparsed listings (contacts scrubbed), cursor-paginated. */
+  raw: (q: { cursor?: string } = {}) => request<Page<RawView>>('GET', `/raw${qs({ cursor: q.cursor })}`),
+
+  /** POST /vacancies/:id/save — bookmark (idempotent). */
+  saveVacancy: (id: string) =>
+    request<{ is_saved: true }>('POST', `/vacancies/${encodeURIComponent(id)}/save`, { body: {} }),
+
+  /** DELETE /vacancies/:id/save — remove bookmark (idempotent). */
+  unsaveVacancy: (id: string) =>
+    request<{ is_saved: false }>('DELETE', `/vacancies/${encodeURIComponent(id)}/save`),
+
   /** GET /vacancies/:id — single card (no contact). */
   vacancy: (id: string) => request<VacancyView>('GET', `/vacancies/${encodeURIComponent(id)}`),
 
@@ -134,6 +156,9 @@ export const api = {
   /** POST /subscription — persistent filter that drives feed default + bot notifications. */
   saveSubscription: (s: Subscription) => request<Subscription>('POST', '/subscription', { body: s }),
 
+  /** POST /onboarded — mark first-run onboarding complete (idempotent). */
+  markOnboarded: () => request<{ onboarded: true }>('POST', '/onboarded', { body: {} }),
+
   /** POST /ads — submit a user ad; may be approved / pending / rejected. */
   createAd: (input: AdInput) => request<AdCreateResult>('POST', '/ads', { body: input }),
 
@@ -142,4 +167,10 @@ export const api = {
 
   /** POST /cooperation — a partnership / cooperation request (stub). */
   cooperation: (input: CooperationInput) => request<{ ok: true }>('POST', '/cooperation', { body: input }),
+
+  /** GET /referral — invite code/link, loyalty balance and per-tier counters. */
+  referral: () => request<ReferralView>('GET', '/referral'),
+
+  /** GET /stats — feed-wide totals for the aggregator bar. */
+  stats: () => request<Stats>('GET', '/stats'),
 };

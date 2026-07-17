@@ -38,11 +38,11 @@ export interface LaunchContext {
 export const LIGHT_THEME = {
   bg_color: '#ffffff',
   text_color: '#0f0f10',
-  hint_color: '#8e8e93',
+  hint_color: '#86868c',
   link_color: '#2481cc',
   button_color: '#2481cc',
   button_text_color: '#ffffff',
-  secondary_bg_color: '#efeff4',
+  secondary_bg_color: '#f1f1f6',
   header_bg_color: '#ffffff',
   accent_text_color: '#2481cc',
   section_bg_color: '#ffffff',
@@ -53,22 +53,24 @@ export const LIGHT_THEME = {
   bottom_bar_bg_color: '#f7f7f9',
 } as const;
 
+// Forced-dark palette: a real 4-step lightness ladder so cards sit ABOVE the
+// page (bottom-bar #0c1218 < bg #10161d < secondary #1a222c < section #212b37).
 export const DARK_THEME = {
-  bg_color: '#17212b',
-  text_color: '#f5f5f5',
-  hint_color: '#7d8b99',
+  bg_color: '#10161d',
+  text_color: '#f2f3f5',
+  hint_color: '#8c99a6',
   link_color: '#6ab3f3',
   button_color: '#5288c1',
   button_text_color: '#ffffff',
-  secondary_bg_color: '#232e3c',
-  header_bg_color: '#17212b',
+  secondary_bg_color: '#1a222c',
+  header_bg_color: '#10161d',
   accent_text_color: '#6ab3f3',
-  section_bg_color: '#1d2733',
-  section_header_text_color: '#6ab3f3',
-  subtitle_text_color: '#7d8b99',
-  destructive_text_color: '#ec3942',
-  section_separator_color: '#101921',
-  bottom_bar_bg_color: '#151e27',
+  section_bg_color: '#212b37',
+  section_header_text_color: '#7fb3e8',
+  subtitle_text_color: '#8c99a6',
+  destructive_text_color: '#ff6b62',
+  section_separator_color: '#26313e',
+  bottom_bar_bg_color: '#0c1218',
 } as const;
 
 function prefersDark(): boolean {

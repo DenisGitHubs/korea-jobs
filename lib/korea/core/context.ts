@@ -8,6 +8,7 @@
 import { getSql } from './db.js';
 import { verifyInitData } from './auth.js';
 import { type ReqLike, tmaInitData } from './http.js';
+import { getConfigNumber } from '../config.js';
 
 export interface AuthedUser {
   id: string;
@@ -19,6 +20,20 @@ export interface AuthedUser {
 }
 
 export type AuthResult = { ok: true; user: AuthedUser } | { ok: false };
+
+/**
+ * A referral code is a `users.public_id`: exactly 16 hex chars
+ * (encode(gen_random_bytes(8),'hex') is lowercase). Normalize to lowercase and reject
+ * anything else — including null/empty — so a malformed or absent start_param resolves
+ * to "no referrer" (null), never to a partial/injected match. Shared by the Mini App
+ * (start_param) and the bot `/start <code>` attribution paths.
+ */
+const REF_CODE_RE = /^[0-9a-f]{16}$/i;
+export function normalizeRefCode(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim();
+  return REF_CODE_RE.test(s) ? s.toLowerCase() : null;
+}
 
 /** Verify `Authorization: tma <initData>` and upsert the user. Fail-closed. */
 export async function authenticate(req: ReqLike): Promise<AuthResult> {
@@ -37,19 +52,79 @@ export async function authenticate(req: ReqLike): Promise<AuthResult> {
   // Upsert: refresh profile + last_seen; allows_write_to_pm is only ever RAISED
   // (a stale payload that omits it must never lower a granted flag). lang is set on
   // first insert only — the app owns the display language after that.
-  const rows = await sql`
-    insert into users (telegram_id, username, first_name, last_name, lang, allows_write_to_pm)
-    values (
-      ${idt.telegramId}::bigint, ${idt.username ?? null}, ${idt.firstName ?? null},
-      ${idt.lastName ?? null}, ${idt.languageCode ?? 'ru'}, ${idt.allowsWriteToPm === true}
-    )
-    on conflict (telegram_id) do update set
-      username = excluded.username,
-      first_name = excluded.first_name,
-      last_name = excluded.last_name,
-      last_seen_at = now(),
-      allows_write_to_pm = users.allows_write_to_pm or excluded.allows_write_to_pm
-    returning id, telegram_id, public_id, lang, allows_write_to_pm, is_blocked`;
+  //
+  // Referral attribution only matters when a code is actually present, so the hot path
+  // (no start_param) runs the plain upsert untouched. With a code the branch is structural:
+  //   * a fresh INSERT binds the ancestors from the resolved code (VALUES) — first touch;
+  //   * the ON CONFLICT (UPDATE) path binds ONLY if the existing row is still EMPTY: no
+  //     referrer yet, created inside the bind window, and no activation/contact reveal on
+  //     record. That narrow window lets the current base opt into virality without ever
+  //     re-attributing / hijacking a mature account.
+  // Every condition reads the actual target row (users.*), so the outcome is independent
+  // of which path inserted first (the Mini App vs the bot /start) — the attribution race
+  // is gone without needing to test xmax.
+  const refCode = normalizeRefCode(idt.startParam ?? null);
+  const rows = refCode
+    ? await (async () => {
+        const bindWindowHours = await getConfigNumber('referral_bind_window_hours', 72);
+        return sql`
+          with ref as (
+            select id as ref_id, referred_by as l2, ref_l2 as l3
+            from users
+            where public_id = ${refCode} and telegram_id <> ${idt.telegramId}::bigint
+            limit 1
+          )
+          insert into users (
+            telegram_id, username, first_name, last_name, lang, allows_write_to_pm,
+            referred_by, ref_l2, ref_l3
+          )
+          values (
+            ${idt.telegramId}::bigint, ${idt.username ?? null}, ${idt.firstName ?? null},
+            ${idt.lastName ?? null}, ${idt.languageCode ?? 'ru'}, ${idt.allowsWriteToPm === true},
+            (select ref_id from ref), (select l2 from ref), (select l3 from ref)
+          )
+          on conflict (telegram_id) do update set
+            username = excluded.username,
+            first_name = excluded.first_name,
+            last_name = excluded.last_name,
+            last_seen_at = now(),
+            allows_write_to_pm = users.allows_write_to_pm or excluded.allows_write_to_pm,
+            referred_by = case when (select ref_id from ref) is not null
+                and users.referred_by is null
+                and users.created_at > now() - make_interval(hours => ${bindWindowHours})
+                and not exists (select 1 from referral_activations a where a.user_id = users.id)
+                and not exists (select 1 from contact_reveals cr where cr.user_id = users.id)
+                and not exists (select 1 from ad_contact_reveals ar where ar.user_id = users.id)
+              then (select ref_id from ref) else users.referred_by end,
+            ref_l2 = case when (select ref_id from ref) is not null
+                and users.referred_by is null
+                and users.created_at > now() - make_interval(hours => ${bindWindowHours})
+                and not exists (select 1 from referral_activations a where a.user_id = users.id)
+                and not exists (select 1 from contact_reveals cr where cr.user_id = users.id)
+                and not exists (select 1 from ad_contact_reveals ar where ar.user_id = users.id)
+              then (select l2 from ref) else users.ref_l2 end,
+            ref_l3 = case when (select ref_id from ref) is not null
+                and users.referred_by is null
+                and users.created_at > now() - make_interval(hours => ${bindWindowHours})
+                and not exists (select 1 from referral_activations a where a.user_id = users.id)
+                and not exists (select 1 from contact_reveals cr where cr.user_id = users.id)
+                and not exists (select 1 from ad_contact_reveals ar where ar.user_id = users.id)
+              then (select l3 from ref) else users.ref_l3 end
+          returning id, telegram_id, public_id, lang, allows_write_to_pm, is_blocked`;
+      })()
+    : await sql`
+        insert into users (telegram_id, username, first_name, last_name, lang, allows_write_to_pm)
+        values (
+          ${idt.telegramId}::bigint, ${idt.username ?? null}, ${idt.firstName ?? null},
+          ${idt.lastName ?? null}, ${idt.languageCode ?? 'ru'}, ${idt.allowsWriteToPm === true}
+        )
+        on conflict (telegram_id) do update set
+          username = excluded.username,
+          first_name = excluded.first_name,
+          last_name = excluded.last_name,
+          last_seen_at = now(),
+          allows_write_to_pm = users.allows_write_to_pm or excluded.allows_write_to_pm
+        returning id, telegram_id, public_id, lang, allows_write_to_pm, is_blocked`;
 
   const u = rows[0];
   if (!u) return { ok: false };

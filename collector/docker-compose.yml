@@ -1,0 +1,21 @@
+# korea-jobs collector — 24/7 reader worker (Oracle Always Free / any Docker host).
+# `restart: unless-stopped` = auto-restart on crash AND on VM reboot. Combined with
+# the in-process stall watchdog (src/index.ts) this keeps the reader alive unattended.
+#
+# 007: this host holds ONLY the reader session + ingest secret (see .env.example).
+# No Supabase service-role key, no bot token. Blast radius stays "spam into raw".
+
+services:
+  collector:
+    build: .
+    image: korea-jobs-collector:latest
+    container_name: korea-collector
+    restart: unless-stopped
+    env_file: .env
+    # No published ports: the reader only makes OUTBOUND connections
+    # (Telegram MTProto + the backend ingest endpoint). Nothing listens.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"   # cap each log file so a small VM disk never fills
+        max-file: "3"

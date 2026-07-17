@@ -1,7 +1,14 @@
 // lib/korea/vacancies/read.ts
 //
-// The vacancy feed + detail + contact reveal. Matches the mini-app contract
-// (app/src/shared/types/api.ts) exactly.
+// The vacancy feed + detail + contact reveal + SAVED (bookmarks). Matches the mini-app
+// contract (app/src/shared/types/api.ts) exactly.
+//
+// SAVED (Phase 3a): a private per-user bookmark list is the SAME feed projection scoped to
+// the caller's saved_vacancies / saved_ads rows (GET /api/saved), plus a heart toggle
+// (POST|DELETE /api/vacancies/:id/save). Every feed/detail row carries `is_saved` (a LEFT
+// JOIN of the caller's bookmarks) so the card can render its heart state. Nothing new is
+// exposed: the saved list uses the same `toView` projection (contacts stay hidden behind
+// has_contact / the /contact endpoint); only the scope changes to auth.user.id.
 //
 // The feed is the UNION of scraped vacancies and APPROVED, unexpired user_ads, paged
 // by a single cursor over (posted_at, id). Each row carries source_kind so the client
@@ -23,8 +30,10 @@ import { getSql } from '../core/db.js';
 import { type ReqLike, type ResLike, send, sendError, queryParam } from '../core/http.js';
 import { ApiErrorCode } from '../core/errors.js';
 import { authenticate } from '../core/context.js';
-import { getConfigNumber } from '../config.js';
+import { getConfigNumber, getConfigString } from '../config.js';
 import { WORK_TYPES, VISA_TYPES } from '../parser/prompt.js';
+import { scrubContacts } from '../core/scrub.js';
+import { recordReferralActivation } from '../referral/accrue.js';
 
 const PAGE_SIZE = 20;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -53,15 +62,10 @@ interface Row {
   has_meals: boolean | null;
   source_kind: string;
   repost: boolean;
-}
-
-/** Strip obvious contacts (phones, @handles, t.me/wa.me/kakao links) from free text. */
-function scrubContacts(text: string | null): string | null {
-  if (!text) return text;
-  return text
-    .replace(/(?:https?:\/\/)?(?:t\.me|wa\.me|open\.kakao\.com|kakao\.com)\/\S+/gi, '[скрыто]')
-    .replace(/@[A-Za-z0-9_]{4,}/g, '[скрыто]')
-    .replace(/\+?\d[\d\s().-]{7,}\d/g, '[скрыто]');
+  is_saved: boolean;
+  // Only populated by the saved feed (savedUnionSql) — the bookmark's created_at, used as
+  // the saved-list cursor. Absent (undefined) on the main feed / detail rows.
+  saved_at?: string;
 }
 
 /** DB row -> VacancyView (feed/detail projection; never includes `contact`). */
@@ -86,6 +90,7 @@ function toView(r: Row) {
     has_meals: r.has_meals,
     source_kind: r.source_kind,
     repost: r.repost === true,
+    is_saved: r.is_saved === true,
   };
 }
 
@@ -96,11 +101,165 @@ function decodeCursor(c: string | undefined): { p: string; i: string } | null {
   if (!c) return null;
   try {
     const o = JSON.parse(Buffer.from(c, 'base64url').toString('utf8')) as { p?: unknown; i?: unknown };
-    if (typeof o.p === 'string' && typeof o.i === 'string' && UUID_RE.test(o.i)) return { p: o.p, i: o.i };
+    // Validate `p` as a real timestamp: a non-timestamptz string would blow up the `::timestamptz`
+    // cast in SQL and surface as a 500. A bad/forged cursor must degrade to the first page, not error.
+    if (typeof o.p === 'string' && typeof o.i === 'string' && UUID_RE.test(o.i) && !Number.isNaN(Date.parse(o.p)))
+      return { p: o.p, i: o.i };
   } catch {
     /* bad cursor -> first page */
   }
   return null;
+}
+
+/** The parsed VacancyQuery filters (everything EXCEPT paging/cursor). Shared, so the feed
+ *  and the /count preview apply identical filter semantics. */
+interface FeedFilters {
+  slugs: string[];
+  workTypes: string[];
+  regions: string[];
+  visa: string[];
+  paid: 'free' | 'paid' | null;
+  housing: boolean;
+  meals: boolean;
+  q: string;
+  freshnessDays: number | null;
+}
+
+/** Parse the shared VacancyQuery filters from the request (identical for feed + count). */
+function parseFeedFilters(req: ReqLike): FeedFilters {
+  const csv = (name: string): string[] =>
+    (queryParam(req, name) ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  const paidRaw = queryParam(req, 'paid');
+  const qRaw = queryParam(req, 'q') ?? queryParam(req, 'keywords') ?? '';
+  const freshRaw = Number(queryParam(req, 'freshness'));
+  return {
+    slugs: csv('cities'),
+    workTypes: csv('work_types').filter((w) => WORK_TYPE_SET.has(w)),
+    regions: csv('regions'),
+    visa: csv('visa').filter((v) => VISA_TYPE_SET.has(v)),
+    paid: paidRaw === 'free' || paidRaw === 'paid' ? paidRaw : null,
+    housing: ['1', 'true'].includes(queryParam(req, 'housing') ?? ''),
+    meals: ['1', 'true'].includes(queryParam(req, 'meals') ?? ''),
+    q: qRaw.replace(/\./g, ' ').trim(),
+    freshnessDays: FRESHNESS_DAYS.has(freshRaw) ? freshRaw : null,
+  };
+}
+
+// The feed's row set: scraped vacancies ∪ APPROVED, unexpired user ads (a user ad's
+// posted_at is its created_at). `search_tsv` is carried for the keyword filter. This is
+// the SINGLE source of the union — the feed and the counter both wrap it, so they can
+// never diverge on which rows exist.
+//
+// `is_saved`: when a caller id placeholder is given, LEFT JOIN the caller's bookmarks so
+// each row carries whether it is saved. scraped rows join saved_vacancies; user ads join
+// saved_ads (the two saved tables mirror the two feed sources). With `null` (the /count
+// query, which returns no rows) the join is skipped and is_saved is a `false` literal.
+// The join is on (id + fixed user_id) against a PK, so it never fans a row out.
+function feedUnionSql(savedUserPh: string | null): string {
+  const svJoin = savedUserPh
+    ? `left join saved_vacancies sv on sv.vacancy_id = v.id and sv.user_id = ${savedUserPh}::uuid`
+    : '';
+  const svSel = savedUserPh ? '(sv.user_id is not null)' : 'false';
+  const saJoin = savedUserPh
+    ? `left join saved_ads sa on sa.ad_id = a.id and sa.user_id = ${savedUserPh}::uuid`
+    : '';
+  const saSel = savedUserPh ? '(sa.user_id is not null)' : 'false';
+  return `
+  select v.id, c.slug as city_slug, c.name as city_name, v.region_slug,
+         v.work_type::text as work_type, v.gender::text as gender,
+         v.salary_text, v.salary_min, v.salary_max, v.salary_period::text as salary_period,
+         v.employer, v.description, v.posted_at,
+         (v.contact_normalized is not null) as has_contact,
+         v.visa_types, v.placement_fee::text as placement_fee, v.has_housing, v.has_meals,
+         'scraped'::text as source_kind, (v.repost_count > 0) as repost, ${svSel} as is_saved, v.search_tsv
+  from vacancies v
+  left join cities c on c.id = v.city_id
+  ${svJoin}
+  where v.is_active and v.duplicate_of is null
+  union all
+  select a.id, c.slug as city_slug, c.name as city_name, a.region_slug,
+         a.work_type::text as work_type, 'any'::text as gender,
+         a.salary_text, null::int as salary_min, null::int as salary_max, null::text as salary_period,
+         null::text as employer, a.description, a.created_at as posted_at,
+         (a.contact_raw is not null) as has_contact,
+         a.visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
+         'user'::text as source_kind, false as repost, ${saSel} as is_saved, a.search_tsv
+  from user_ads a
+  left join cities c on c.id = a.city_id
+  ${saJoin}
+  where a.status = 'approved' and (a.expires_at is null or a.expires_at > now())`;
+}
+
+// The SAVED feed's row set: the SAME projection as the main feed, but driven FROM the
+// caller's bookmark tables (so we page over idx_saved_*_user) and INNER-joined to the
+// content with the SAME visibility predicates as the feed. A bookmark whose vacancy/ad is
+// no longer visible (inactive / taken down / expired / rejected) simply drops out — the
+// row stays in saved_* but never surfaces stale/taken-down content (007). is_saved is a
+// `true` literal here by construction; `saved_at` (the bookmark's created_at) is the cursor.
+function savedUnionSql(userPh: string): string {
+  return `
+  select v.id, c.slug as city_slug, c.name as city_name, v.region_slug,
+         v.work_type::text as work_type, v.gender::text as gender,
+         v.salary_text, v.salary_min, v.salary_max, v.salary_period::text as salary_period,
+         v.employer, v.description, v.posted_at,
+         (v.contact_normalized is not null) as has_contact,
+         v.visa_types, v.placement_fee::text as placement_fee, v.has_housing, v.has_meals,
+         'scraped'::text as source_kind, (v.repost_count > 0) as repost, true as is_saved,
+         s.created_at as saved_at
+  from saved_vacancies s
+  join vacancies v on v.id = s.vacancy_id and v.is_active and v.duplicate_of is null
+  left join cities c on c.id = v.city_id
+  where s.user_id = ${userPh}::uuid
+  union all
+  select a.id, c.slug as city_slug, c.name as city_name, a.region_slug,
+         a.work_type::text as work_type, 'any'::text as gender,
+         a.salary_text, null::int as salary_min, null::int as salary_max, null::text as salary_period,
+         null::text as employer, a.description, a.created_at as posted_at,
+         (a.contact_raw is not null) as has_contact,
+         a.visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
+         'user'::text as source_kind, false as repost, true as is_saved,
+         s.created_at as saved_at
+  from saved_ads s
+  join user_ads a on a.id = s.ad_id and a.status = 'approved' and (a.expires_at is null or a.expires_at > now())
+  left join cities c on c.id = a.city_id
+  where s.user_id = ${userPh}::uuid`;
+}
+
+/**
+ * Build the shared, parameterized filter WHERE for the union `f` (paging/cursor EXCLUDED —
+ * that is feed-only, and must not affect a total count). Returns the `where ...` text plus
+ * the positional params, so the feed and /count run byte-identical filter semantics.
+ *
+ * Matching is PERMISSIVE for rare attributes (Sanya/Roma K2): a filter excludes only rows
+ * that EXPLICITLY contradict it; "not stated"/empty always passes.
+ * EXCEPTION (owner rule 2026-07-15): the housing / meals toggles are STRICT — when on they
+ * show ONLY rows that EXPLICITLY state housing/meals (has_* is true); "not stated" (null) is
+ * excluded. This applies to both the feed and the /count so they stay 1:1.
+ */
+function buildFilterWhere(f: FeedFilters): { where: string; params: unknown[] } {
+  const params: unknown[] = [];
+  const ph = (v: unknown): string => {
+    params.push(v);
+    return `$${params.length}`;
+  };
+  const citiesEmpty = f.slugs.length === 0;
+  const wtEmpty = f.workTypes.length === 0;
+  const regionsEmpty = f.regions.length === 0;
+  const visaEmpty = f.visa.length === 0;
+  const paidNull = f.paid === null;
+  const hasQ = f.q.length > 0;
+  const noFreshness = f.freshnessDays === null;
+
+  const where = `where (${ph(citiesEmpty)} or f.city_slug = any(${ph(f.slugs)}::text[]))
+      and (${ph(wtEmpty)} or f.work_type = any(${ph(f.workTypes)}::text[]))
+      and (${ph(regionsEmpty)} or f.region_slug = any(${ph(f.regions)}::text[]))
+      and (${ph(visaEmpty)} or cardinality(f.visa_types) = 0 or 'any' = any(f.visa_types) or f.visa_types && ${ph(f.visa)}::visa_type[])
+      and (${ph(paidNull)} or f.placement_fee = ${ph(f.paid)} or f.placement_fee = 'unknown')
+      and (not ${ph(f.housing)} or f.has_housing is true)
+      and (not ${ph(f.meals)} or f.has_meals is true)
+      and (not ${ph(hasQ)} or f.search_tsv @@ websearch_to_tsquery('simple', ${ph(f.q)}))
+      and (${ph(noFreshness)} or f.posted_at > now() - make_interval(days => ${ph(f.freshnessDays ?? 0)}))`;
+  return { where, params };
 }
 
 /** GET /api/vacancies — cursor feed over (scraped vacancies ∪ approved user ads). */
@@ -109,74 +268,34 @@ export async function vacanciesFeed(req: ReqLike, res: ResLike): Promise<void> {
   const auth = await authenticate(req);
   if (!auth.ok) return sendError(res, ApiErrorCode.Unauthorized);
 
-  const csv = (name: string): string[] =>
-    (queryParam(req, name) ?? '').split(',').map((x) => x.trim()).filter(Boolean);
-
-  const slugs = csv('cities');
-  const workTypes = csv('work_types').filter((w) => WORK_TYPE_SET.has(w));
-  const regions = csv('regions');
-  const visa = csv('visa').filter((v) => VISA_TYPE_SET.has(v));
-  const paidRaw = queryParam(req, 'paid');
-  const paidVal = paidRaw === 'free' || paidRaw === 'paid' ? paidRaw : null;
-  const housing = queryParam(req, 'housing') === '1';
-  const meals = queryParam(req, 'meals') === '1';
-  const qRaw = queryParam(req, 'q') ?? queryParam(req, 'keywords') ?? '';
-  const q = qRaw.replace(/\./g, ' ').trim();
-  const freshRaw = Number(queryParam(req, 'freshness'));
-  const freshnessDays = FRESHNESS_DAYS.has(freshRaw) ? freshRaw : null;
+  const filters = parseFeedFilters(req);
   const cur = decodeCursor(queryParam(req, 'cursor'));
-
-  const citiesEmpty = slugs.length === 0;
-  const wtEmpty = workTypes.length === 0;
-  const regionsEmpty = regions.length === 0;
-  const visaEmpty = visa.length === 0;
-  const paidNull = paidVal === null;
-  const hasQ = q.length > 0;
-  const noFreshness = freshnessDays === null;
-  const noCursor = cur === null;
 
   try {
     const sql = getSql();
-    const rows = (await sql`
-      select f.id, f.city_slug, f.city_name, f.region_slug, f.work_type, f.gender,
+    const { where, params } = buildFilterWhere(filters);
+    // Continue numbering placeholders after the shared filter params (cursor + limit).
+    const p = params.slice();
+    const ph = (v: unknown): string => {
+      p.push(v);
+      return `$${p.length}`;
+    };
+    // Bind the caller id for the is_saved LEFT JOINs (scope is ALWAYS auth.user.id).
+    const savedUserPh = ph(auth.user.id);
+    const noCursor = cur === null;
+    const cursorClause =
+      `and (${ph(noCursor)} or (f.posted_at, f.id) < (${ph(cur?.p ?? null)}::timestamptz, ${ph(cur?.i ?? null)}::uuid))`;
+    const text =
+      `select f.id, f.city_slug, f.city_name, f.region_slug, f.work_type, f.gender,
              f.salary_text, f.salary_min, f.salary_max, f.salary_period, f.employer,
              f.description, f.posted_at, f.has_contact, f.visa_types, f.placement_fee,
-             f.has_housing, f.has_meals, f.source_kind, f.repost
-      from (
-        select v.id, c.slug as city_slug, c.name as city_name, v.region_slug,
-               v.work_type::text as work_type, v.gender::text as gender,
-               v.salary_text, v.salary_min, v.salary_max, v.salary_period::text as salary_period,
-               v.employer, v.description, v.posted_at,
-               (v.contact_normalized is not null) as has_contact,
-               v.visa_types, v.placement_fee::text as placement_fee, v.has_housing, v.has_meals,
-               'scraped'::text as source_kind, (v.repost_count > 0) as repost, v.search_tsv
-        from vacancies v
-        left join cities c on c.id = v.city_id
-        where v.is_active and v.duplicate_of is null
-        union all
-        select a.id, c.slug as city_slug, c.name as city_name, a.region_slug,
-               a.work_type::text as work_type, 'any'::text as gender,
-               a.salary_text, null::int as salary_min, null::int as salary_max, null::text as salary_period,
-               null::text as employer, a.description, a.created_at as posted_at,
-               (a.contact_raw is not null) as has_contact,
-               a.visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
-               'user'::text as source_kind, false as repost, a.search_tsv
-        from user_ads a
-        left join cities c on c.id = a.city_id
-        where a.status = 'approved' and (a.expires_at is null or a.expires_at > now())
-      ) f
-      where (${citiesEmpty} or f.city_slug = any(${slugs}::text[]))
-        and (${wtEmpty} or f.work_type = any(${workTypes}::text[]))
-        and (${regionsEmpty} or f.region_slug = any(${regions}::text[]))
-        and (${visaEmpty} or cardinality(f.visa_types) = 0 or 'any' = any(f.visa_types) or f.visa_types && ${visa}::visa_type[])
-        and (${paidNull} or f.placement_fee = ${paidVal} or f.placement_fee = 'unknown')
-        and (not ${housing} or f.has_housing is true or f.has_housing is null)
-        and (not ${meals} or f.has_meals is true or f.has_meals is null)
-        and (not ${hasQ} or f.search_tsv @@ websearch_to_tsquery('simple', ${q}))
-        and (${noFreshness} or f.posted_at > now() - make_interval(days => ${freshnessDays ?? 0}))
-        and (${noCursor} or (f.posted_at, f.id) < (${cur?.p ?? null}::timestamptz, ${cur?.i ?? null}::uuid))
+             f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved
+      from (${feedUnionSql(savedUserPh)}) f
+      ${where}
+      ${cursorClause}
       order by f.posted_at desc, f.id desc
-      limit ${PAGE_SIZE + 1}`) as unknown as Row[];
+      limit ${PAGE_SIZE + 1}`;
+    const rows = (await sql(text, p)) as unknown as Row[];
 
     const hasMore = rows.length > PAGE_SIZE;
     const kept = hasMore ? rows.slice(0, PAGE_SIZE) : rows;
@@ -186,6 +305,36 @@ export async function vacanciesFeed(req: ReqLike, res: ResLike): Promise<void> {
       hasMore && last ? encodeCursor(new Date(last.posted_at).toISOString(), last.id) : null;
 
     send(res, 200, { items, next_cursor });
+  } catch {
+    sendError(res, ApiErrorCode.Internal);
+  }
+}
+
+/**
+ * count(*) over the SAME union and the SAME filter WHERE as vacanciesFeed (no paging), so
+ * the number equals what the feed shows for the same VacancyQuery, 1:1.
+ */
+export async function countVacancies(sql: ReturnType<typeof getSql>, filters: FeedFilters): Promise<number> {
+  const { where, params } = buildFilterWhere(filters);
+  // No caller scope needed: /count returns no rows, so skip the is_saved join (null).
+  const text = `select count(*)::int as c from (${feedUnionSql(null)}) f ${where}`;
+  const rows = (await sql(text, params)) as unknown as { c: number }[];
+  return rows[0]?.c ?? 0;
+}
+
+/** GET /api/vacancies/count — how many feed rows match the given VacancyQuery filters.
+ *  Same auth (tma, 401 without initData) + same union + same soft filters as the feed;
+ *  returns ONLY { count }, no rows. */
+export async function vacanciesCount(req: ReqLike, res: ResLike): Promise<void> {
+  if ((req.method ?? 'GET') !== 'GET') return sendError(res, ApiErrorCode.NotFound);
+  const auth = await authenticate(req);
+  if (!auth.ok) return sendError(res, ApiErrorCode.Unauthorized);
+
+  const filters = parseFeedFilters(req);
+  try {
+    const sql = getSql();
+    const count = await countVacancies(sql, filters);
+    send(res, 200, { count });
   } catch {
     sendError(res, ApiErrorCode.Internal);
   }
@@ -209,7 +358,9 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
              v.employer, v.description, v.posted_at,
              (v.contact_normalized is not null) as has_contact,
              v.visa_types, v.placement_fee::text as placement_fee, v.has_housing, v.has_meals,
-             'scraped'::text as source_kind, (v.repost_count > 0) as repost
+             'scraped'::text as source_kind, (v.repost_count > 0) as repost,
+             (exists (select 1 from saved_vacancies s
+                      where s.user_id = ${auth.user.id}::uuid and s.vacancy_id = v.id)) as is_saved
       from vacancies v
       left join cities c on c.id = v.city_id
       where v.id = ${id}::uuid and v.is_active and v.duplicate_of is null
@@ -223,7 +374,9 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
              null::text as employer, a.description, a.created_at as posted_at,
              (a.contact_raw is not null) as has_contact,
              a.visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
-             'user'::text as source_kind, false as repost
+             'user'::text as source_kind, false as repost,
+             (exists (select 1 from saved_ads s
+                      where s.user_id = ${auth.user.id}::uuid and s.ad_id = a.id)) as is_saved
       from user_ads a
       left join cities c on c.id = a.city_id
       where a.id = ${id}::uuid and a.status = 'approved' and (a.expires_at is null or a.expires_at > now())
@@ -276,6 +429,18 @@ export async function vacancyContact(req: ReqLike, res: ResLike): Promise<void> 
         await sql`
           insert into contact_reveals (user_id, vacancy_id) values (${auth.user.id}::uuid, ${id}::uuid)
           on conflict (user_id, vacancy_id) do nothing`;
+        // Referral accrual: first contact reveal is the target action that credits the
+        // user's ancestors. Best-effort — a failure must never break the reveal response.
+        try {
+          const kind = await getConfigString('referral_activation_kind', 'contact_reveal');
+          await recordReferralActivation(sql, auth.user.id, kind);
+        } catch (err) {
+          // Best-effort: the reveal must still succeed. But do NOT fail silently — a
+          // systemic accrual break would otherwise kill ALL referrals invisibly. Log the
+          // fact (message only, no PII) so monitoring can catch it.
+          // eslint-disable-next-line no-console
+          console.error('[referral] accrual failed (best-effort):', err instanceof Error ? err.message : String(err));
+        }
       }
       const r = vac[0];
       if (!r.contact_raw) return send(res, 200, { contact: null });
@@ -297,10 +462,127 @@ export async function vacancyContact(req: ReqLike, res: ResLike): Promise<void> 
         await sql`
           insert into ad_contact_reveals (user_id, user_ad_id) values (${auth.user.id}::uuid, ${id}::uuid)
           on conflict (user_id, user_ad_id) do nothing`;
+        // Referral accrual (same target action as scraped vacancies). Best-effort.
+        try {
+          const kind = await getConfigString('referral_activation_kind', 'contact_reveal');
+          await recordReferralActivation(sql, auth.user.id, kind);
+        } catch (err) {
+          // Best-effort: the reveal must still succeed. But do NOT fail silently — a
+          // systemic accrual break would otherwise kill ALL referrals invisibly. Log the
+          // fact (message only, no PII) so monitoring can catch it.
+          // eslint-disable-next-line no-console
+          console.error('[referral] accrual failed (best-effort):', err instanceof Error ? err.message : String(err));
+        }
       }
       const r = ad[0];
       if (!r.contact_raw) return send(res, 200, { contact: null });
       return send(res, 200, { contact: { kind: r.contact_kind ?? 'other', value: r.contact_raw } });
+    }
+
+    return sendError(res, ApiErrorCode.NotFound);
+  } catch {
+    sendError(res, ApiErrorCode.Internal);
+  }
+}
+
+/**
+ * GET /api/saved — the caller's own bookmarks as a feed page, newest bookmark first.
+ * Same auth + same `toView` projection as the feed (contacts stay hidden behind
+ * has_contact; reveal is a separate endpoint). Scope is ALWAYS auth.user.id. Cursor pages
+ * over (saved_at, id) — the bookmark's created_at — exactly like the feed's (posted_at, id).
+ */
+export async function savedFeed(req: ReqLike, res: ResLike): Promise<void> {
+  if ((req.method ?? 'GET') !== 'GET') return sendError(res, ApiErrorCode.NotFound);
+  const auth = await authenticate(req);
+  if (!auth.ok) return sendError(res, ApiErrorCode.Unauthorized);
+
+  const cur = decodeCursor(queryParam(req, 'cursor'));
+  try {
+    const sql = getSql();
+    const p: unknown[] = [];
+    const ph = (v: unknown): string => {
+      p.push(v);
+      return `$${p.length}`;
+    };
+    const userPh = ph(auth.user.id);
+    const noCursor = cur === null;
+    const cursorClause =
+      `and (${ph(noCursor)} or (f.saved_at, f.id) < (${ph(cur?.p ?? null)}::timestamptz, ${ph(cur?.i ?? null)}::uuid))`;
+    const text =
+      `select f.id, f.city_slug, f.city_name, f.region_slug, f.work_type, f.gender,
+             f.salary_text, f.salary_min, f.salary_max, f.salary_period, f.employer,
+             f.description, f.posted_at, f.has_contact, f.visa_types, f.placement_fee,
+             f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.saved_at
+      from (${savedUnionSql(userPh)}) f
+      where true
+      ${cursorClause}
+      order by f.saved_at desc, f.id desc
+      limit ${PAGE_SIZE + 1}`;
+    const rows = (await sql(text, p)) as unknown as Row[];
+
+    const hasMore = rows.length > PAGE_SIZE;
+    const kept = hasMore ? rows.slice(0, PAGE_SIZE) : rows;
+    const items = kept.map(toView);
+    const last = kept[kept.length - 1];
+    const next_cursor =
+      hasMore && last && last.saved_at ? encodeCursor(new Date(last.saved_at).toISOString(), last.id) : null;
+
+    send(res, 200, { items, next_cursor });
+  } catch {
+    sendError(res, ApiErrorCode.Internal);
+  }
+}
+
+/**
+ * POST   /api/vacancies/:id/save — bookmark this card (scraped OR user ad). Idempotent
+ *                                  (`on conflict do nothing`). Returns { is_saved: true }.
+ * DELETE /api/vacancies/:id/save — remove the bookmark. Idempotent. Returns { is_saved: false }.
+ *
+ * kind (scraped vs user ad) is resolved from :id exactly like vacancyContact/vacancyDetail.
+ * The user is ALWAYS auth.user.id — NEVER the body/query (007: the only cross-user barrier).
+ * A save requires a VISIBLE row (active scraped vacancy / approved unexpired ad); unsave is
+ * a pure idempotent delete and does not.
+ */
+export async function vacancySave(req: ReqLike, res: ResLike): Promise<void> {
+  const method = (req.method ?? 'GET').toUpperCase();
+  if (method !== 'POST' && method !== 'DELETE') return sendError(res, ApiErrorCode.NotFound);
+  const auth = await authenticate(req);
+  if (!auth.ok) return sendError(res, ApiErrorCode.Unauthorized);
+
+  const id = queryParam(req, 'id');
+  if (!id || !UUID_RE.test(id)) return sendError(res, ApiErrorCode.NotFound);
+
+  try {
+    const sql = getSql();
+
+    if (method === 'DELETE') {
+      // Idempotent unsave. The two saved tables have disjoint id spaces (vacancy vs ad
+      // uuids), so at most one delete matches; unsaving what was never saved is a no-op.
+      await sql`delete from saved_vacancies where user_id = ${auth.user.id}::uuid and vacancy_id = ${id}::uuid`;
+      await sql`delete from saved_ads where user_id = ${auth.user.id}::uuid and ad_id = ${id}::uuid`;
+      return send(res, 200, { is_saved: false });
+    }
+
+    // POST → save. Resolve the id to its source table (only a VISIBLE row is saveable),
+    // then insert into the matching bookmark table. on conflict → idempotent re-save.
+    const vac = await sql`
+      select 1 from vacancies
+      where id = ${id}::uuid and is_active and duplicate_of is null limit 1`;
+    if (vac.length > 0) {
+      await sql`
+        insert into saved_vacancies (user_id, vacancy_id) values (${auth.user.id}::uuid, ${id}::uuid)
+        on conflict (user_id, vacancy_id) do nothing`;
+      return send(res, 200, { is_saved: true });
+    }
+
+    const ad = await sql`
+      select 1 from user_ads
+      where id = ${id}::uuid and status = 'approved' and (expires_at is null or expires_at > now()) limit 1`;
+    if (ad.length > 0) {
+      await sql`
+        insert into saved_ads (user_id, ad_id) values (${auth.user.id}::uuid, ${id}::uuid)
+        on conflict (user_id, ad_id) do nothing`;
+      return send(res, 200, { is_saved: true });
     }
 
     return sendError(res, ApiErrorCode.NotFound);

@@ -55,21 +55,37 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
       }
     }
 
-    // Terms: re-consent required when never accepted OR accepted an older version.
+    // Terms: re-consent required when never accepted OR the accepted version is not the
+    // current one. Exact-inequality (not `<`) is scheme-agnostic: it stays correct whether
+    // versions are ISO dates ("2026-07-15"), "vN", or semver — no fragile lexicographic order.
     const termsRows = (await sql`
-      select terms_accepted_at, terms_version from users where id = ${user.id}::uuid limit 1`) as unknown as {
+      select terms_accepted_at, terms_version, onboarded_at from users where id = ${user.id}::uuid limit 1`) as unknown as {
       terms_accepted_at: string | null;
       terms_version: string | null;
+      onboarded_at: string | null;
     }[];
     const currentVersion = await getConfigString('terms_version', 'unversioned');
     const acceptedAt = termsRows[0]?.terms_accepted_at ?? null;
     const acceptedVersion = termsRows[0]?.terms_version ?? null;
-    const termsRequired = acceptedAt === null || (acceptedVersion ?? '') < currentVersion;
+    const termsRequired = acceptedAt === null || (acceptedVersion ?? '') !== currentVersion;
+    // One-time onboarding gate for the client (users.onboarded_at; POST /api/onboarded).
+    const onboarded = (termsRows[0]?.onboarded_at ?? null) !== null;
+
+    // Loyalty balance for the header badge. The ledger is the SINGLE source of truth
+    // (there is no cached balance column) — confirmed rows only.
+    const balRows = (await sql`
+      select coalesce(sum(amount) filter (where status = 'confirmed'), 0)::int as points_total
+      from referral_points_ledger where user_id = ${user.id}::uuid`) as unknown as {
+      points_total: number;
+    }[];
+    const pointsTotal = balRows[0]?.points_total ?? 0;
 
     send(res, 200, {
       public_id: user.publicId,
       lang: user.lang,
       terms: { required: termsRequired, version: currentVersion },
+      points_total: pointsTotal,
+      onboarded,
       subscription: {
         city_slugs: citySlugs,
         work_types: workTypes,

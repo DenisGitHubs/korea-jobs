@@ -19,7 +19,15 @@ import { neon } from '@neondatabase/serverless';
 // union (any[][] | Record<string,any>[] | FullQueryResults) from surfacing at every
 // call site. Callers cast rows to their own row shape where they read fields.
 type Row = Record<string, unknown>;
-type SqlTag = (strings: TemplateStringsArray, ...params: unknown[]) => Promise<Row[]>;
+// Two call forms, both PARAMETERIZED by the driver (values are bound, never interpolated):
+//   * tagged template  sql`... ${v} ...`         — the everyday form
+//   * ordinary call    sql(queryText, [v, ...])  — lets a handler compose a shared,
+//     parameterized fragment (e.g. the vacancy filter WHERE reused by feed + count) so
+//     the two queries stay byte-identical instead of drifting apart.
+interface SqlTag {
+  (strings: TemplateStringsArray, ...params: unknown[]): Promise<Row[]>;
+  (query: string, params?: unknown[]): Promise<Row[]>;
+}
 
 let sql: SqlTag | null = null;
 

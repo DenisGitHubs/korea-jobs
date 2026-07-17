@@ -22,6 +22,8 @@ import { ApiErrorCode } from '../core/errors.js';
 import { sendMessage, answerCallbackQuery, editMessageText, maskToken } from './telegram.js';
 import { isAdminTelegramId } from '../admin/auth.js';
 import { moderateAd } from '../ads/rw.js';
+import { normalizeRefCode } from '../core/context.js';
+import { getConfigNumber } from '../config.js';
 
 const RATE_LIMIT_PER_MINUTE = 20;
 
@@ -118,12 +120,59 @@ async function dispatch(u: ParsedUpdate): Promise<void> {
   // Starting the bot makes the user PM-writable → mark it so notifications can reach
   // them. It is also an authoritative "the bot can DM me" signal: clear is_blocked, so a
   // user who previously triggered a 403 (incl. a false positive) re-enters runNotify.
+  //
+  // A deep link `t.me/<bot>?start=<code>` arrives as "/start <code>". Same attribution
+  // policy as the Mini App (context.ts), so the outcome does not depend on which path
+  // inserted the row first: bind the referrer + ancestor snapshot on a genuine INSERT, or
+  // on the UPDATE branch ONLY while the existing row is still EMPTY (no referrer, inside
+  // the bind window, no activation/contact reveal). Without a code the plain upsert runs
+  // untouched. Webhook idempotency is already provided by the bot_updates PK dedup above.
+  const refCode = normalizeRefCode(text.slice('/start'.length).trim());
   const sql = getSql();
-  await sql`
-    insert into users (telegram_id, allows_write_to_pm)
-    values (${u.fromId}::bigint, true)
-    on conflict (telegram_id) do update set
-      allows_write_to_pm = true, is_blocked = false, last_seen_at = now()`;
+  if (refCode) {
+    const bindWindowHours = await getConfigNumber('referral_bind_window_hours', 72);
+    await sql`
+      with ref as (
+        select id as ref_id, referred_by as l2, ref_l2 as l3
+        from users
+        where public_id = ${refCode} and telegram_id <> ${u.fromId}::bigint
+        limit 1
+      )
+      insert into users (telegram_id, allows_write_to_pm, referred_by, ref_l2, ref_l3)
+      values (
+        ${u.fromId}::bigint, true,
+        (select ref_id from ref), (select l2 from ref), (select l3 from ref)
+      )
+      on conflict (telegram_id) do update set
+        allows_write_to_pm = true, is_blocked = false, last_seen_at = now(),
+        referred_by = case when (select ref_id from ref) is not null
+            and users.referred_by is null
+            and users.created_at > now() - make_interval(hours => ${bindWindowHours})
+            and not exists (select 1 from referral_activations a where a.user_id = users.id)
+            and not exists (select 1 from contact_reveals cr where cr.user_id = users.id)
+            and not exists (select 1 from ad_contact_reveals ar where ar.user_id = users.id)
+          then (select ref_id from ref) else users.referred_by end,
+        ref_l2 = case when (select ref_id from ref) is not null
+            and users.referred_by is null
+            and users.created_at > now() - make_interval(hours => ${bindWindowHours})
+            and not exists (select 1 from referral_activations a where a.user_id = users.id)
+            and not exists (select 1 from contact_reveals cr where cr.user_id = users.id)
+            and not exists (select 1 from ad_contact_reveals ar where ar.user_id = users.id)
+          then (select l2 from ref) else users.ref_l2 end,
+        ref_l3 = case when (select ref_id from ref) is not null
+            and users.referred_by is null
+            and users.created_at > now() - make_interval(hours => ${bindWindowHours})
+            and not exists (select 1 from referral_activations a where a.user_id = users.id)
+            and not exists (select 1 from contact_reveals cr where cr.user_id = users.id)
+            and not exists (select 1 from ad_contact_reveals ar where ar.user_id = users.id)
+          then (select l3 from ref) else users.ref_l3 end`;
+  } else {
+    await sql`
+      insert into users (telegram_id, allows_write_to_pm)
+      values (${u.fromId}::bigint, true)
+      on conflict (telegram_id) do update set
+        allows_write_to_pm = true, is_blocked = false, last_seen_at = now()`;
+  }
 
   const appUrl = process.env.APP_URL;
   const extra = appUrl
@@ -183,8 +232,10 @@ export async function botWebhook(req: ReqLike, res: ResLike): Promise<void> {
     // (e) dispatch.
     await dispatch(u);
   } catch (err) {
-    // Never surface a non-2xx to Telegram. (Token-masked; no payload logged.)
-    void maskToken(String(err));
+    // Never surface a non-2xx to Telegram, but DO log the masked error so a systemic
+    // webhook failure stays traceable (token masked; no payload logged).
+    // eslint-disable-next-line no-console
+    console.error('[bot] webhook dispatch error:', maskToken(String(err)));
   }
 
   // (f) ALWAYS 200.

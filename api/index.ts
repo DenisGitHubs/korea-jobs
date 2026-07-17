@@ -13,25 +13,36 @@
 //
 // Auth per route group (see architecture.md):
 //   /api/ingest, /api/sources                         -> Bearer INGEST_SECRET
-//   /api/cities|vacancies|me|subscription|terms|ads|cooperation -> tma <initData>
+//   /api/cities|vacancies|me|subscription|terms|ads|cooperation|referral -> tma <initData>
 //   /api/vacancies/:id/takedown, /api/ads/:id/moderate-> admin (CRON_SECRET | ADMIN_TELEGRAM_IDS)
 //   /api/bot/webhook                                  -> X-Telegram-Bot-Api-Secret-Token
-//   /api/cron/parse|notify|cleanup                    -> Bearer CRON_SECRET
+//   /api/cron/parse|notify|cleanup|referral-confirm   -> Bearer CRON_SECRET
 
 import { type ReqLike, type ResLike, send } from '../lib/korea/core/http.js';
 import { ApiErrorCode, httpStatusFor, makeError } from '../lib/korea/core/errors.js';
 import { sourcesGet, ingestPost } from '../lib/korea/ingest/handler.js';
-import { cronParse, cronNotify, cronCleanup } from '../lib/korea/cron/handler.js';
+import { cronParse, cronNotify, cronCleanup, cronReferralConfirm } from '../lib/korea/cron/handler.js';
 import { botWebhook } from '../lib/korea/bot/webhook.js';
 import { citiesGet } from '../lib/korea/cities/read.js';
-import { vacanciesFeed, vacancyDetail, vacancyContact } from '../lib/korea/vacancies/read.js';
+import {
+  vacanciesFeed,
+  vacanciesCount,
+  vacancyDetail,
+  vacancyContact,
+  savedFeed,
+  vacancySave,
+} from '../lib/korea/vacancies/read.js';
+import { statsGet } from '../lib/korea/stats/read.js';
+import { rawFeed } from '../lib/korea/raw/read.js';
 import { vacancyReport } from '../lib/korea/reports/rw.js';
 import { vacancyTakedown } from '../lib/korea/vacancies/moderate.js';
 import { meGet } from '../lib/korea/users/me.js';
+import { onboardedPost } from '../lib/korea/users/onboarded.js';
 import { subscriptionPost } from '../lib/korea/subscriptions/rw.js';
 import { termsAccept } from '../lib/korea/terms/rw.js';
 import { adsCreate, adsMine, adsModerate } from '../lib/korea/ads/rw.js';
 import { cooperationPost } from '../lib/korea/cooperation/rw.js';
+import { referralGet } from '../lib/korea/referral/read.js';
 
 type Handler = (req: ReqLike, res: ResLike) => Promise<void> | void;
 
@@ -49,25 +60,44 @@ const ROUTES: Route[] = [
   { segments: ['cron', 'parse'], handler: cronParse },
   // Mini app (Authorization: tma <initData>)
   { segments: ['cities'], handler: citiesGet },
+  // Public aggregate scale for the "N вакансий из M чатов" strip (tma auth, no scope).
+  { segments: ['stats'], handler: statsGet },
   { segments: ['vacancies'], handler: vacanciesFeed },
+  // The "UNVERIFIED" stream ("не разобрано"): raw messages the parser couldn't confidently
+  // turn into a vacancy (tma auth, no scope). Literal single segment — declared before any
+  // parametric route so it can never be shadowed. Text is scrubbed; NO contact reveal.
+  { segments: ['raw'], handler: rawFeed },
+  // The caller's own bookmarks ("Сохранённые") as a feed page (tma auth, scope=self).
+  { segments: ['saved'], handler: savedFeed },
+  // Literal 'count' MUST precede the parametric ':id', else /vacancies/count would match
+  // vacancies/:id with id="count" and 404 in vacancyDetail (UUID check).
+  { segments: ['vacancies', 'count'], handler: vacanciesCount },
   { segments: ['vacancies', ':id'], handler: vacancyDetail },
   { segments: ['vacancies', ':id', 'contact'], handler: vacancyContact },
+  // Save/unsave toggle (POST=save, DELETE=unsave). Literal 'save' third segment, so it
+  // never collides with the other ':id' sub-routes.
+  { segments: ['vacancies', ':id', 'save'], handler: vacancySave },
   { segments: ['vacancies', ':id', 'report'], handler: vacancyReport },
   // Admin (bearer CRON_SECRET or ADMIN_TELEGRAM_IDS user)
   { segments: ['vacancies', ':id', 'takedown'], handler: vacancyTakedown },
   { segments: ['me'], handler: meGet },
   { segments: ['subscription'], handler: subscriptionPost },
+  // One-time onboarding flag (POST; stamps users.onboarded_at, first call wins).
+  { segments: ['onboarded'], handler: onboardedPost },
   { segments: ['terms', 'accept'], handler: termsAccept },
   // User ads ("Разместить")
   { segments: ['ads'], handler: adsCreate },
   { segments: ['ads', 'mine'], handler: adsMine },
   { segments: ['ads', ':id', 'moderate'], handler: adsModerate },
   { segments: ['cooperation'], handler: cooperationPost },
+  // Referral / loyalty (Authorization: tma <initData>)
+  { segments: ['referral'], handler: referralGet },
   // Telegram bot webhook (X-Telegram-Bot-Api-Secret-Token)
   { segments: ['bot', 'webhook'], handler: botWebhook },
   // Cron (bearer CRON_SECRET)
   { segments: ['cron', 'notify'], handler: cronNotify },
   { segments: ['cron', 'cleanup'], handler: cronCleanup },
+  { segments: ['cron', 'referral-confirm'], handler: cronReferralConfirm },
 ];
 
 function splitPath(pathname: string): string[] {

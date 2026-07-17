@@ -1,15 +1,23 @@
 /* ─────────────────────────────────────────────────────────────────────────
    Theme variables. JS (lib/theme.ts) sets --kj-* inline on <html> from the
    Telegram theme; these are the fallbacks used before that / outside Telegram.
+
+   Two layers:
+   1. NATIVE tokens (--kj-bg/-text/-link/-button/…) stay Telegram-like. In
+      'auto' they are overwritten live from themeParams, so the app blends into
+      the client's theme.
+   2. BRAND tokens (--kj-brand/-money/…) are a FIXED extra layer, never touched
+      by JS, so the product keeps one recognizable face in every mode. They
+      switch light↔dark purely via [data-theme] (which JS always sets).
    ───────────────────────────────────────────────────────────────────────── */
 :root {
   --kj-bg: #ffffff;
   --kj-text: #0f0f10;
-  --kj-hint: #8e8e93;
+  --kj-hint: #86868c;
   --kj-link: #2481cc;
   --kj-button: #2481cc;
   --kj-button-text: #ffffff;
-  --kj-secondary-bg: #efeff4;
+  --kj-secondary-bg: #f1f1f6;
   --kj-header-bg: #ffffff;
   --kj-accent: #2481cc;
   --kj-section-bg: #ffffff;
@@ -19,28 +27,106 @@
   --kj-separator: #e6e6ea;
   --kj-bottom-bar-bg: #f7f7f9;
 
+  /* Brand accent — fixed across all modes (main actions & status signals).
+     Light fill is tuned to #c2410c so WHITE text on it clears WCAG AA (≈5.2:1). */
+  --kj-brand: #c2410c;
+  --kj-brand-pressed: #b93c0c;
+  --kj-brand-ink: #ffffff;
+  /* Deeper terracotta for brand TEXT sitting on a brand tint (AA on tint ≈5.5:1). */
+  --kj-brand-strong: #9a3412;
+  --kj-brand-tint: color-mix(in srgb, var(--kj-brand) 12%, transparent);
+
+  /* Money — its own colour so a salary never reads as a tappable control. */
+  --kj-money: #0f8a5f;
+  /* Deeper green for money TEXT on a money tint (AA on tint ≈5:1); salary uses --kj-money. */
+  --kj-money-strong: #0a6b48;
+  --kj-money-tint: color-mix(in srgb, var(--kj-money) 12%, transparent);
+
+  /* Radii */
   --kj-radius: 12px;
   --kj-radius-sm: 9px;
-  --kj-gap: 12px;
+  --kj-radius-lg: 16px;
+
+  /* Spacing scale */
+  --kj-space-1: 4px;
+  --kj-space-2: 8px;
+  --kj-space-3: 12px;
+  --kj-space-4: 16px;
+  --kj-space-5: 20px;
+  --kj-space-6: 24px;
+  --kj-space-7: 32px;
+  --kj-gap: var(--kj-space-3); /* legacy alias */
+
   --kj-maxw: 640px;
+
+  /* Elevation (light: soft double shadow; dark overrides below with lightness). */
+  --kj-card-shadow: 0 1px 2px rgba(15, 15, 16, 0.04), 0 2px 8px rgba(15, 15, 16, 0.06);
+  --kj-card-highlight: 0 0 0 0 transparent;
+  --kj-card-border: transparent;
+  --kj-sheet-bg: var(--kj-secondary-bg);
+
+  /* ── Liquid Glass (iOS 26/27) — additive tone layer over --kj-*. ──────────
+     Tone tracks the live Telegram theme via color-mix so it never muddies a
+     custom client palette. Blur/saturate are NOT tokens: iOS Safari 18 ignores
+     CSS vars inside -webkit-backdrop-filter, so those numbers are written as
+     LITERALS in the @supports blocks (real blur only on the few FIXED
+     surfaces; long-list cards get the glass *tone* without backdrop-filter).
+     - --lg-fill: for blurred fixed chrome (appbar/quickfilters/tabbar/sheet).
+     - --lg-card: for cards/sections — tied to the elevated section surface so
+       they keep reading ABOVE the page even without a blur to separate them. */
+  --lg-fill: color-mix(in srgb, var(--kj-secondary-bg) 62%, transparent);
+  --lg-card: color-mix(in srgb, var(--kj-section-bg) 80%, transparent);
+  --lg-hair: rgba(18, 22, 32, 0.08);
+  --lg-brd: rgba(255, 255, 255, 0.55);
+  --lg-rim: inset 0 1px 0 rgba(255, 255, 255, 0.9), inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+  --lg-shadow: 0 12px 34px -14px rgba(24, 28, 48, 0.22);
+  --lg-shadow-sm: 0 6px 18px -8px rgba(24, 28, 48, 0.16);
 }
 
 [data-theme='dark'] {
-  --kj-bg: #17212b;
-  --kj-text: #f5f5f5;
-  --kj-hint: #7d8b99;
+  /* Real 4-step lightness ladder (bottom-bar < bg < secondary < section/card). */
+  --kj-bg: #10161d;
+  --kj-text: #f2f3f5;
+  --kj-hint: #8c99a6;
   --kj-link: #6ab3f3;
   --kj-button: #5288c1;
   --kj-button-text: #ffffff;
-  --kj-secondary-bg: #232e3c;
-  --kj-header-bg: #17212b;
+  --kj-secondary-bg: #1a222c;
+  --kj-header-bg: #10161d;
   --kj-accent: #6ab3f3;
-  --kj-section-bg: #1d2733;
-  --kj-section-header-text: #6ab3f3;
-  --kj-subtitle: #7d8b99;
-  --kj-destructive: #ec3942;
-  --kj-separator: #101921;
-  --kj-bottom-bar-bg: #151e27;
+  --kj-section-bg: #212b37;
+  --kj-section-header-text: #7fb3e8;
+  --kj-subtitle: #8c99a6;
+  --kj-destructive: #ff6b62;
+  --kj-separator: #26313e;
+  --kj-bottom-bar-bg: #0c1218;
+
+  --kj-brand: #ff9354;
+  --kj-brand-pressed: #ffa873;
+  --kj-brand-ink: #1b1300;
+  /* On dark, brand text on a tint stays bright — no darkening needed. */
+  --kj-brand-strong: var(--kj-brand);
+  --kj-brand-tint: color-mix(in srgb, var(--kj-brand) 16%, transparent);
+
+  --kj-money: #34d399;
+  /* On dark, money text on a tint stays bright — no darkening needed. */
+  --kj-money-strong: var(--kj-money);
+  --kj-money-tint: color-mix(in srgb, var(--kj-money) 14%, transparent);
+
+  /* On dark, depth comes from lightness + a thin top highlight, not a shadow. */
+  --kj-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --kj-card-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --kj-card-border: rgba(255, 255, 255, 0.06);
+  --kj-sheet-bg: #26313f; /* one step lighter than a card */
+
+  /* Liquid Glass — dark. Slightly higher opacity so glass reads on dark. */
+  --lg-fill: color-mix(in srgb, var(--kj-secondary-bg) 58%, transparent);
+  --lg-card: color-mix(in srgb, var(--kj-section-bg) 82%, transparent);
+  --lg-hair: rgba(255, 255, 255, 0.1);
+  --lg-brd: rgba(255, 255, 255, 0.12);
+  --lg-rim: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --lg-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.7);
+  --lg-shadow-sm: 0 8px 22px -10px rgba(0, 0, 0, 0.55);
 }
 
 * {
@@ -58,7 +144,7 @@ body {
   color: var(--kj-text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   font-size: 15px;
-  line-height: 1.4;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
 }
@@ -75,6 +161,7 @@ a {
 
 /* ── App shell ─────────────────────────────────────────────────────────── */
 .app {
+  position: relative;
   max-width: var(--kj-maxw);
   margin: 0 auto;
   min-height: 100dvh;
@@ -83,10 +170,61 @@ a {
   flex-direction: column;
 }
 
+/* Ambient aurora — slow-drifting brand/money radial wash behind content.
+   Fixed to the viewport (not absolute) so it never adds page overflow from its
+   scale and reads as a true screen ambient on a scrolling mini-app. */
+.app::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(130% 55% at 12% -6%, color-mix(in srgb, var(--kj-brand) 16%, transparent), transparent 62%),
+    radial-gradient(95% 45% at 105% 4%, color-mix(in srgb, var(--kj-money) 11%, transparent), transparent 58%),
+    radial-gradient(120% 60% at 90% 108%, color-mix(in srgb, var(--kj-brand) 9%, transparent), transparent 60%);
+  opacity: 0.6;
+  animation: kj-ambient 16s ease-in-out infinite alternate;
+}
+
+@keyframes kj-ambient {
+  from {
+    transform: translateY(-1.5%) scale(1.02);
+    opacity: 0.48;
+  }
+  to {
+    transform: translateY(1.5%) scale(1.06);
+    opacity: 0.7;
+  }
+}
+
+/* Static micro-grain overlay (feTurbulence) for tactile glass depth. NOT
+   animated. Fixed so it behaves as a screen film, not attached to content. */
+.app::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Lift interactive content above the aurora (appbar is already sticky, z:20). */
+.screen {
+  position: relative;
+  z-index: 1;
+}
+
 .screen {
   flex: 1;
   padding: var(--kj-gap);
-  padding-bottom: calc(96px + env(safe-area-inset-bottom));
+  /* Clear the floating tab capsule (12px inset + 62px + safe area + breathing).
+     SDK-bound var is primary; env() only for non-Telegram browsers. */
+  padding-bottom: calc(
+    90px + max(env(safe-area-inset-bottom, 0px), var(--tg-viewport-safe-area-inset-bottom, 0px))
+  );
 }
 
 .screen--flush {
@@ -145,18 +283,92 @@ a {
   border-radius: 8px;
 }
 
+/* Bookmarked state for the vacancy AppBar heart. */
+.appbar__btn--fav {
+  color: var(--kj-brand);
+}
+
+/* Active-filter dot on the feed filter button — now brand-coloured. */
+.appbar__btn--dot {
+  position: relative;
+}
+
+.appbar__btn--dot::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--kj-brand);
+  border: 2px solid var(--kj-header-bg);
+}
+
+/* ── Quick filters (active conditions under the AppBar) ─────────────────── */
+.quickfilters {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 8px 12px;
+  background: var(--kj-header-bg);
+  border-bottom: 1px solid var(--kj-separator);
+}
+
+.quickfilters::-webkit-scrollbar {
+  display: none;
+}
+
+.qf-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 6px 0 10px;
+  border: none;
+  border-radius: 999px;
+  background: var(--kj-brand-tint);
+  color: var(--kj-brand-strong);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.qf-chip__x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 12px;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.75;
+}
+
 /* ── Sections / rows ───────────────────────────────────────────────────── */
 .section {
   background: var(--kj-section-bg);
   border-radius: var(--kj-radius);
   overflow: hidden;
-  margin: 0 0 16px;
+  margin: 0 0 var(--kj-space-4);
+  box-shadow: var(--kj-card-highlight);
+}
+
+[data-theme='dark'] .section {
+  border: 1px solid var(--kj-card-border);
 }
 
 .section__title {
   color: var(--kj-section-header-text);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.4px;
   padding: 6px 4px;
@@ -164,12 +376,12 @@ a {
 }
 
 .region {
-  margin-bottom: 18px;
+  margin-bottom: var(--kj-space-6);
 }
 
 .region__title {
   color: var(--kj-section-header-text);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.4px;
@@ -181,11 +393,12 @@ a {
   align-items: center;
   gap: 12px;
   width: 100%;
+  min-height: 48px;
   border: none;
   background: transparent;
   color: inherit;
   text-align: left;
-  padding: 12px 14px;
+  padding: 14px 16px;
   font-size: 15px;
   position: relative;
 }
@@ -193,7 +406,7 @@ a {
 .row + .row::before {
   content: '';
   position: absolute;
-  left: 14px;
+  left: 16px;
   right: 0;
   top: 0;
   height: 1px;
@@ -207,6 +420,7 @@ a {
 .row__sub {
   color: var(--kj-hint);
   font-size: 13px;
+  font-weight: 600;
 }
 
 /* ── Checkbox ──────────────────────────────────────────────────────────── */
@@ -240,7 +454,7 @@ a {
 
 .chip {
   border: 1px solid var(--kj-separator);
-  background: var(--kj-section-bg);
+  background: var(--kj-secondary-bg);
   color: var(--kj-text);
   border-radius: 999px;
   padding: 7px 13px;
@@ -249,13 +463,35 @@ a {
   align-items: center;
   gap: 6px;
   line-height: 1;
+  transition: transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.2s ease, color 0.2s ease,
+    border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.chip:active {
+  transform: scale(0.94);
 }
 
 .chip--on {
-  background: color-mix(in srgb, var(--kj-button) 16%, transparent);
-  border-color: var(--kj-button);
-  color: var(--kj-accent);
+  border-color: transparent;
+  color: var(--kj-brand-ink);
   font-weight: 600;
+  /* One "selected language": brand → warm-lighter gradient + soft brand glow. */
+  background-image: linear-gradient(120deg, var(--kj-brand), color-mix(in srgb, var(--kj-brand) 66%, #ffca9a));
+  box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--kj-brand) 55%, transparent);
+  /* One-shot spring pop on select (reduced-motion collapses it via global rule). */
+  animation: kj-pop 0.34s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes kj-pop {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.35);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 /* ── Vacancy card ──────────────────────────────────────────────────────── */
@@ -263,21 +499,66 @@ a {
   background: var(--kj-section-bg);
   border-radius: var(--kj-radius);
   padding: 14px;
-  margin-bottom: 12px;
+  margin-bottom: var(--kj-space-3);
   border: none;
   width: 100%;
   text-align: left;
   color: inherit;
   display: block;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--kj-card-shadow);
+  transition: transform 0.12s ease-out, box-shadow 0.12s ease-out;
+}
+
+.card:active {
+  transform: scale(0.98);
+}
+
+[data-theme='dark'] .card {
+  /* On dark, elevation reads via lightness + top highlight, not a black shadow. */
+  box-shadow: var(--kj-card-highlight);
+  border: 1px solid var(--kj-card-border);
 }
 
 .card__top {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+}
+
+.card__cityline {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* Bookmark heart (feed / saved cards). */
+.card__save {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  margin: -6px -6px 0 0;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  color: var(--kj-hint);
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), color 0.15s;
+}
+
+.card__save:active {
+  transform: scale(0.86);
+}
+
+.card__save--on {
+  color: var(--kj-brand);
+  animation: kj-pop 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .card__city {
@@ -288,6 +569,7 @@ a {
 .card__time {
   color: var(--kj-hint);
   font-size: 12.5px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -299,15 +581,18 @@ a {
 }
 
 .card__salary {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--kj-text);
-  margin-bottom: 6px;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--kj-money);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 8px;
 }
 
 .card__desc {
-  color: var(--kj-subtitle);
-  font-size: 14px;
+  color: var(--kj-text);
+  opacity: 0.82;
+  font-size: 14.5px;
+  line-height: 1.45;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -318,6 +603,7 @@ a {
   margin-top: 8px;
   color: var(--kj-hint);
   font-size: 13px;
+  font-weight: 600;
 }
 
 /* ── Badges ────────────────────────────────────────────────────────────── */
@@ -328,26 +614,52 @@ a {
   border-radius: 999px;
   padding: 3px 9px;
   font-size: 12.5px;
+  font-weight: 500;
   background: var(--kj-secondary-bg);
   color: var(--kj-text);
   line-height: 1.3;
 }
 
 .badge--work {
-  background: color-mix(in srgb, var(--kj-accent) 15%, transparent);
-  color: var(--kj-accent);
+  background: var(--kj-brand-tint);
+  color: var(--kj-brand-strong);
+  font-weight: 600;
+}
+
+.badge--perk {
+  background: var(--kj-money-tint);
+  color: var(--kj-money-strong);
   font-weight: 600;
 }
 
 .badge--gender {
   background: var(--kj-secondary-bg);
-  color: var(--kj-subtitle);
+  color: var(--kj-hint);
+}
+
+.badge--source {
+  background: var(--kj-secondary-bg);
+  color: var(--kj-hint);
+}
+
+.badge--repost {
+  background: var(--kj-secondary-bg);
+  color: var(--kj-hint);
+}
+
+.badge--count {
+  background: transparent;
+  color: var(--kj-hint);
+  padding: 3px 4px;
 }
 
 /* ── Buttons ───────────────────────────────────────────────────────────── */
 .btn {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
   border: none;
-  border-radius: 10px;
+  border-radius: var(--kj-radius);
   padding: 13px 16px;
   font-size: 15px;
   font-weight: 600;
@@ -355,24 +667,131 @@ a {
   align-items: center;
   justify-content: center;
   gap: 8px;
+  transition: background 0.15s ease, transform 0.1s ease-out, opacity 0.15s ease;
 }
 
 .btn--block {
   width: 100%;
+  min-height: 48px;
 }
 
 .btn--primary {
-  background: var(--kj-button);
-  color: var(--kj-button-text);
+  color: var(--kj-brand-ink);
+  /* Motor pass: drifting gradient + sliding sheen + inner top highlight + glow. */
+  background-image: linear-gradient(
+    110deg,
+    var(--kj-brand) 0%,
+    color-mix(in srgb, var(--kj-brand) 58%, #ffca9a) 50%,
+    var(--kj-brand) 100%
+  );
+  background-size: 220% 100%;
+  box-shadow: 0 8px 22px -8px color-mix(in srgb, var(--kj-brand) 62%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  animation: kj-flow 5.5s ease-in-out infinite;
+}
+
+.btn--primary::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 -65%;
+  width: 42%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+  transform: skewX(-18deg);
+  z-index: 1;
+  pointer-events: none;
+  animation: kj-sheen 5s ease-in-out infinite;
+}
+
+.btn--primary:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .btn--primary:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
+  animation: none;
+}
+
+.btn--primary:disabled::after {
+  display: none;
 }
 
 .btn--secondary {
   background: var(--kj-secondary-bg);
   color: var(--kj-text);
+  border: 1px solid var(--kj-separator);
+}
+
+.btn--secondary:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Telegram-native action (real external links keep the client's blue). */
+.btn--tg {
+  color: var(--kj-button-text);
+  background-image: linear-gradient(
+    110deg,
+    var(--kj-button) 0%,
+    color-mix(in srgb, var(--kj-button) 62%, #8fd0ff) 50%,
+    var(--kj-button) 100%
+  );
+  background-size: 220% 100%;
+  box-shadow: 0 8px 22px -8px color-mix(in srgb, var(--kj-button) 60%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  animation: kj-flow 5.5s ease-in-out infinite;
+}
+
+.btn--tg::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 -65%;
+  width: 42%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+  transform: skewX(-18deg);
+  z-index: 1;
+  pointer-events: none;
+  animation: kj-sheen 5s ease-in-out infinite 0.6s;
+}
+
+.btn--tg:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.btn--tg:disabled {
+  opacity: 0.4;
+  animation: none;
+}
+
+.btn--tg:disabled::after {
+  display: none;
+}
+
+@keyframes kj-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes kj-sheen {
+  0%,
+  55% {
+    left: -65%;
+  }
+  82%,
+  100% {
+    left: 135%;
+  }
+}
+
+/* Ghost / low-emphasis (wizard "back"). */
+.btn--ghost {
+  background: transparent;
+  color: var(--kj-hint);
 }
 
 /* ── Sticky bottom bar ─────────────────────────────────────────────────── */
@@ -399,7 +818,7 @@ a {
 
 .empty__title {
   font-size: 17px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--kj-text);
   margin-bottom: 6px;
 }
@@ -415,7 +834,7 @@ a {
   height: 26px;
   border-radius: 50%;
   border: 3px solid var(--kj-separator);
-  border-top-color: var(--kj-accent);
+  border-top-color: var(--kj-brand);
   animation: kj-spin 0.7s linear infinite;
 }
 
@@ -441,7 +860,57 @@ a {
   }
 }
 
-/* ── Toggle switch ─────────────────────────────────────────────────────── */
+/* ── Skeleton (feed loading) ───────────────────────────────────────────── */
+.skeleton-card {
+  background: var(--kj-section-bg);
+  border-radius: var(--kj-radius);
+  padding: 14px;
+  margin-bottom: var(--kj-space-3);
+  box-shadow: var(--kj-card-shadow);
+}
+
+[data-theme='dark'] .skeleton-card {
+  box-shadow: var(--kj-card-highlight);
+  border: 1px solid var(--kj-card-border);
+}
+
+.skeleton-line {
+  height: 12px;
+  border-radius: 6px;
+  margin-bottom: 10px;
+  background: linear-gradient(
+    90deg,
+    var(--kj-secondary-bg) 25%,
+    color-mix(in srgb, var(--kj-hint) 18%, var(--kj-secondary-bg)) 37%,
+    var(--kj-secondary-bg) 63%
+  );
+  background-size: 400% 100%;
+  animation: kj-shimmer 1.2s linear infinite;
+}
+
+.skeleton-line--sm {
+  width: 40%;
+}
+
+.skeleton-line--lg {
+  width: 70%;
+  height: 18px;
+}
+
+.skeleton-line:last-child {
+  margin-bottom: 0;
+}
+
+@keyframes kj-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+
+/* ── Toggle switch (system iOS-green "on" kept intentionally) ───────────── */
 .switch {
   position: relative;
   width: 50px;
@@ -473,7 +942,7 @@ a {
   transform: translateX(20px);
 }
 
-/* ── Segmented (language) ──────────────────────────────────────────────── */
+/* ── Segmented (theme / language) ──────────────────────────────────────── */
 .segmented {
   display: inline-flex;
   background: var(--kj-secondary-bg);
@@ -489,13 +958,15 @@ a {
   padding: 6px 14px;
   border-radius: 7px;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 500;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .segmented__opt--on {
-  background: var(--kj-section-bg);
-  color: var(--kj-text);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  color: var(--kj-brand-ink);
+  font-weight: 600;
+  background-image: linear-gradient(120deg, var(--kj-brand), color-mix(in srgb, var(--kj-brand) 68%, #ffca9a));
+  box-shadow: 0 3px 10px -3px color-mix(in srgb, var(--kj-brand) 50%, transparent);
 }
 
 /* ── Contact reveal ────────────────────────────────────────────────────── */
@@ -505,19 +976,32 @@ a {
   justify-content: space-between;
   gap: 10px;
   background: var(--kj-secondary-bg);
-  border-radius: 10px;
+  border-radius: var(--kj-radius);
   padding: 12px 14px;
 }
 
 .contact__value {
   font-size: 16px;
-  font-weight: 600;
+  font-weight: 700;
   word-break: break-all;
 }
 
 .contact__kind {
   color: var(--kj-hint);
   font-size: 12.5px;
+  font-weight: 500;
+}
+
+/* Prepayment safety reminder shown under the "show contact" action. */
+.contact-note {
+  color: var(--kj-brand-strong);
+  background: var(--kj-brand-tint);
+  border-radius: var(--kj-radius-sm);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  padding: 8px 12px;
+  margin: 10px 0 0;
 }
 
 /* ── Misc ──────────────────────────────────────────────────────────────── */
@@ -527,7 +1011,8 @@ a {
 
 .hint {
   color: var(--kj-hint);
-  font-size: 13px;
+  font-size: 12.5px;
+  font-weight: 500;
   padding: 6px 4px 0;
 }
 
@@ -536,8 +1021,9 @@ a {
 }
 
 .hero__title {
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 700;
+  line-height: 1.25;
   margin: 0 0 6px;
 }
 
@@ -547,24 +1033,40 @@ a {
   margin: 0;
 }
 
+.hero__note {
+  display: inline-block;
+  color: var(--kj-brand-strong);
+  background: var(--kj-brand-tint);
+  border-radius: var(--kj-radius-sm);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  padding: 6px 10px;
+  margin: 8px 0 0;
+}
+
 .stack {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
+.stack--wizard {
+  gap: var(--kj-space-5);
+}
+
 .dl {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 12px 14px;
+  padding: 14px 16px;
   position: relative;
 }
 
 .dl + .dl::before {
   content: '';
   position: absolute;
-  left: 14px;
+  left: 16px;
   right: 0;
   top: 0;
   height: 1px;
@@ -574,16 +1076,19 @@ a {
 .dl__k {
   color: var(--kj-hint);
   font-size: 12.5px;
+  font-weight: 500;
 }
 
 .dl__v {
   font-size: 15px;
 }
 
-.hero__note {
-  color: var(--kj-hint);
-  font-size: 12.5px;
-  margin: 6px 0 0;
+/* Salary on the details screen — same "money" accent as the card. */
+.dl__v--money {
+  color: var(--kj-money);
+  font-size: 19px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Bottom tab bar ────────────────────────────────────────────────────── */
@@ -591,23 +1096,34 @@ a {
   position: relative;
 }
 
+/* Floating rounded glass capsule: 12px off the sides + bottom (safe area).
+   Centered on wide screens via left/right:0 + auto margins (no transform, to
+   avoid breaking the descendant backdrop-filter). Bottom offset uses the
+   SDK-bound safe-area var; env() is only a fallback for non-Telegram browsers
+   (Telegram iOS resolves env(safe-area-*) to 0). Opaque fallback bg here;
+   real glass is layered in the @supports block below. */
 .tabbar {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 0;
+  bottom: calc(12px + max(env(safe-area-inset-bottom, 0px), var(--tg-viewport-safe-area-inset-bottom, 0px)));
   margin: 0 auto;
-  max-width: var(--kj-maxw);
+  width: calc(100% - 24px);
+  max-width: calc(var(--kj-maxw) - 24px);
+  height: 62px;
   z-index: 30;
   display: flex;
+  align-items: center;
+  border-radius: 26px;
   background: var(--kj-bottom-bar-bg);
-  border-top: 1px solid var(--kj-separator);
-  padding-bottom: max(env(safe-area-inset-bottom), var(--tg-viewport-safe-area-inset-bottom, 0px));
+  border: 1px solid var(--kj-separator);
+  box-shadow: var(--kj-card-shadow);
 }
 
 .tabbar__item {
+  position: relative;
   flex: 1;
-  height: 56px;
+  height: 62px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -616,47 +1132,52 @@ a {
   color: var(--kj-hint);
   text-decoration: none;
   font-size: 11px;
+  transition: color 0.18s ease;
 }
 
 .tabbar__item--on {
-  color: var(--kj-link);
+  color: var(--kj-brand);
 }
 
-.tabbar__emoji {
-  font-size: 21px;
-  line-height: 1;
+/* Active tab: soft brand-tint pill behind the icon+label (static scale-in). */
+.tabbar__item::before {
+  content: '';
+  position: absolute;
+  inset: 6px 3px;
+  border-radius: 20px;
+  background: var(--kj-brand-tint);
+  opacity: 0;
+  transform: scale(0.82);
+  transition: opacity 0.2s ease, transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.tabbar__item--on::before {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* Inline line-icon (24×24, currentColor). position:relative keeps the icon
+   painting above the ::before pill. */
+.tabbar__ico {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.22s ease;
+}
+
+.tabbar__item--on .tabbar__ico {
+  transform: translateY(-1px);
+  filter: drop-shadow(0 3px 8px color-mix(in srgb, var(--kj-brand) 45%, transparent));
 }
 
 .tabbar__label {
-  font-weight: 600;
-}
-
-/* Active-filter dot on the feed filter button. */
-.appbar__btn--dot {
   position: relative;
-}
-
-.appbar__btn--dot::after {
-  content: '';
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--kj-button);
-  border: 2px solid var(--kj-header-bg);
-}
-
-/* ── Extra badges ──────────────────────────────────────────────────────── */
-.badge--source {
-  background: color-mix(in srgb, var(--kj-accent) 12%, transparent);
-  color: var(--kj-accent);
-}
-
-.badge--repost {
-  background: var(--kj-secondary-bg);
-  color: var(--kj-subtitle);
+  font-weight: 600;
 }
 
 /* ── Text field (.field) ───────────────────────────────────────────────── */
@@ -678,7 +1199,7 @@ a {
   background: var(--kj-section-bg);
   color: var(--kj-text);
   border: 1px solid var(--kj-separator);
-  border-radius: 10px;
+  border-radius: var(--kj-radius-sm);
   padding: 12px 14px;
   font-size: 15px;
   font-family: inherit;
@@ -687,7 +1208,7 @@ a {
 }
 
 .field__input:focus {
-  border-color: var(--kj-button);
+  border-color: var(--kj-brand);
 }
 
 .field__input::placeholder {
@@ -698,6 +1219,15 @@ a {
   resize: vertical;
   min-height: 96px;
   line-height: 1.4;
+}
+
+/* Helper text under a field (keyword filter, ad description, contact, …). */
+.field__hint {
+  color: var(--kj-hint);
+  font-size: 12.5px;
+  font-weight: 500;
+  margin-top: 2px;
+  padding-left: 2px;
 }
 
 /* Radio-style checkmark for single-select pickers. */
@@ -721,10 +1251,17 @@ a {
 }
 
 /* ── Wizard (post) ─────────────────────────────────────────────────────── */
+.steps__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 var(--kj-space-5);
+}
+
 .steps {
   display: flex;
   gap: 6px;
-  margin: 4px 0 8px;
+  flex: 1;
 }
 
 .steps__seg {
@@ -732,17 +1269,27 @@ a {
   height: 4px;
   border-radius: 2px;
   background: var(--kj-separator);
-  transition: background 0.15s;
+  transition: background 0.25s ease;
 }
 
 .steps__seg--on {
-  background: var(--kj-button);
+  background: var(--kj-brand);
 }
 
 .steps__count {
   font-size: 12.5px;
+  font-weight: 500;
   color: var(--kj-hint);
-  margin-bottom: 14px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.wizard__headline {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--kj-text);
+  margin: 4px 0 16px;
 }
 
 .wizard__nav {
@@ -751,7 +1298,7 @@ a {
   margin-top: 22px;
 }
 
-.wizard__nav .btn {
+.wizard__nav .btn--primary {
   flex: 1;
 }
 
@@ -759,10 +1306,12 @@ a {
   display: flex;
   gap: 10px;
   align-items: flex-start;
-  padding: 6px 2px;
+  padding: 12px;
   font-size: 13.5px;
   line-height: 1.4;
   color: var(--kj-text);
+  background: var(--kj-secondary-bg);
+  border-radius: var(--kj-radius-sm);
 }
 
 .consent input {
@@ -770,7 +1319,7 @@ a {
   width: 18px;
   height: 18px;
   flex: 0 0 auto;
-  accent-color: var(--kj-button);
+  accent-color: var(--kj-brand);
 }
 
 /* ── Bottom sheet (filter) ─────────────────────────────────────────────── */
@@ -787,6 +1336,7 @@ a {
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.45);
+  animation: kj-fade-in 0.18s ease;
 }
 
 .sheet__panel {
@@ -797,9 +1347,24 @@ a {
   max-height: 92dvh;
   display: flex;
   flex-direction: column;
-  background: var(--kj-secondary-bg);
-  border-radius: 16px 16px 0 0;
-  animation: kj-sheet-up 0.22s ease;
+  background: var(--kj-sheet-bg);
+  border-radius: var(--kj-radius-lg) var(--kj-radius-lg) 0 0;
+  padding-top: 10px;
+  animation: kj-sheet-up 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Drag handle. */
+.sheet__panel::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--kj-hint);
+  opacity: 0.3;
 }
 
 @keyframes kj-sheet-up {
@@ -808,6 +1373,15 @@ a {
   }
   to {
     transform: translateY(0);
+  }
+}
+
+@keyframes kj-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 
@@ -822,8 +1396,8 @@ a {
 .sheet__title {
   flex: 1;
   text-align: center;
-  font-weight: 600;
-  font-size: 16px;
+  font-weight: 700;
+  font-size: 17px;
 }
 
 .sheet__close {
@@ -858,10 +1432,11 @@ a {
 .sheet__footer {
   padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--kj-separator);
+  background: var(--kj-bottom-bar-bg);
 }
 
 .filter__block {
-  margin-bottom: 16px;
+  margin-bottom: var(--kj-space-4);
 }
 
 /* ── Modal (terms consent) ─────────────────────────────────────────────── */
@@ -885,8 +1460,8 @@ a {
   position: relative;
   width: 100%;
   max-width: 420px;
-  background: var(--kj-section-bg);
-  border-radius: 16px;
+  background: var(--kj-sheet-bg);
+  border-radius: var(--kj-radius-lg);
   padding: 22px 20px;
 }
 
@@ -905,4 +1480,1349 @@ a {
   color: var(--kj-subtitle);
   line-height: 1.45;
   margin: 0;
+}
+
+.modal__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+}
+
+/* ── Navigable row (settings → referral) ───────────────────────────────── */
+.row--nav {
+  cursor: pointer;
+}
+
+.row--nav:active {
+  background: var(--kj-secondary-bg);
+}
+
+.row__chevron {
+  flex: 0 0 auto;
+  color: var(--kj-hint);
+  font-size: 22px;
+  line-height: 1;
+}
+
+/* ── Referral: invite banner (feed) ────────────────────────────────────── */
+.ref-banner {
+  display: flex;
+  align-items: stretch;
+  background: var(--kj-brand-tint);
+  border-radius: var(--kj-radius);
+  margin-bottom: var(--kj-space-3);
+  overflow: hidden;
+}
+
+.ref-banner__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.ref-banner__body:active {
+  transform: scale(0.99);
+}
+
+.ref-banner__emoji {
+  font-size: 24px;
+  flex: 0 0 auto;
+}
+
+.ref-banner__text {
+  min-width: 0;
+}
+
+.ref-banner__title {
+  display: block;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--kj-text);
+}
+
+.ref-banner__cta {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--kj-brand-strong);
+}
+
+.ref-banner__close {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--kj-hint);
+  font-size: 15px;
+  padding: 0 14px;
+  align-self: stretch;
+}
+
+/* ── Referral: balance ─────────────────────────────────────────────────── */
+.ref-balance {
+  text-align: center;
+  padding: 22px 16px;
+  margin-bottom: var(--kj-space-5);
+  background: var(--kj-brand-tint);
+  border-radius: var(--kj-radius-lg);
+}
+
+.ref-balance__label {
+  color: var(--kj-brand-strong);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.ref-balance__num {
+  margin-top: 4px;
+  color: var(--kj-brand-strong);
+  font-size: 46px;
+  font-weight: 800;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.ref-balance__unit {
+  margin-left: 6px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.ref-balance__pending {
+  margin-top: 8px;
+  color: var(--kj-brand-strong);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ref-balance__pending-note {
+  margin-top: 2px;
+  color: var(--kj-brand-strong);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+/* Status badge + progress to the next tier (computed on the client). */
+.ref-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.ref-status__badge {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.ref-status__name {
+  color: var(--kj-brand-strong);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.ref-status__next {
+  margin-top: 6px;
+  color: var(--kj-brand-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* Points-earned nudge (shown once when the confirmed balance grows). */
+.ref-toast {
+  margin-bottom: var(--kj-space-3);
+  padding: 12px 14px;
+  background: var(--kj-brand);
+  color: var(--kj-brand-ink);
+  border-radius: var(--kj-radius);
+  font-size: 14.5px;
+  font-weight: 700;
+  text-align: center;
+  animation: kj-fade-in 0.2s ease;
+}
+
+/* ── Referral: "rewards soon" teaser ───────────────────────────────────── */
+.ref-reward {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  position: relative;
+}
+
+.ref-reward + .ref-reward::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: var(--kj-separator);
+}
+
+.ref-reward__icon {
+  flex: 0 0 auto;
+  width: 22px;
+  font-size: 18px;
+  line-height: 1;
+  text-align: center;
+}
+
+.ref-reward__text {
+  flex: 1;
+  min-width: 0;
+}
+
+/* "Planned" tag — neutral grey, NOT the money-green (that stays for salaries). */
+.ref-soon {
+  flex: 0 0 auto;
+  background: var(--kj-secondary-bg);
+  color: var(--kj-hint);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+/* ── Referral: link + share ────────────────────────────────────────────── */
+.ref-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--kj-section-bg);
+  border: 1px solid var(--kj-separator);
+  border-radius: var(--kj-radius);
+}
+
+.ref-link__url {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--kj-text);
+  word-break: break-all;
+}
+
+.ref-share {
+  margin-top: var(--kj-space-3);
+}
+
+/* Secondary "copy link" — a plain text link under the primary Share button. */
+.ref-copy {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px;
+  border: none;
+  background: transparent;
+  color: var(--kj-link);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* ── Referral: per-tier stats ──────────────────────────────────────────── */
+.ref-level {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  position: relative;
+}
+
+.ref-level + .ref-level::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: var(--kj-separator);
+}
+
+.ref-level__name {
+  font-weight: 600;
+}
+
+.ref-level__stats {
+  display: flex;
+  gap: 14px;
+  flex: 0 0 auto;
+}
+
+.ref-level__stat {
+  color: var(--kj-hint);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ref-level__stat b {
+  color: var(--kj-text);
+  font-size: 15px;
+}
+
+.ref-level__stat--pts b {
+  color: var(--kj-brand-strong);
+}
+
+/* Empty network (no invites yet) — keep the screen, nudge to share. */
+.ref-empty {
+  padding: 22px 16px;
+  text-align: center;
+}
+
+.ref-empty__emoji {
+  font-size: 40px;
+  margin-bottom: 10px;
+}
+
+.ref-empty__title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.ref-empty__hint {
+  color: var(--kj-hint);
+  font-size: 13.5px;
+}
+
+/* ── Referral: how it works ────────────────────────────────────────────── */
+.ref-how {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  position: relative;
+}
+
+.ref-how + .ref-how::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: var(--kj-separator);
+}
+
+.ref-how__n {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--kj-brand);
+  color: var(--kj-brand-ink);
+  font-size: 13px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Prominent reassurance ("not a pyramid") — brand callout, not fine print. */
+.ref-reassure {
+  margin: 0 0 var(--kj-space-5);
+  padding: 12px 14px;
+  background: var(--kj-brand-tint);
+  border-radius: var(--kj-radius);
+  color: var(--kj-brand-strong);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.ref-disclaimer {
+  color: var(--kj-hint);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 0 4px;
+  margin: 4px 0 0;
+}
+
+/* ── First-run onboarding overlay ──────────────────────────────────────────
+   Full-screen over the shell (TabBar hidden while up). Research tone: dot
+   progress (not segments), slide-in steps, floating welcome mark, and a green
+   "ceremony" check on the final step. */
+.onb {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  background: var(--kj-secondary-bg);
+}
+
+.onb__top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: calc(env(safe-area-inset-top) + 14px) 18px 6px;
+  min-height: 46px;
+  flex: 0 0 auto;
+}
+
+.onb__dots {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+}
+
+.onb__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--kj-separator);
+  transition: width 0.28s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.28s;
+}
+
+.onb__dot--on {
+  width: 22px;
+  background: var(--kj-brand);
+}
+
+.onb__skip {
+  border: none;
+  background: transparent;
+  color: var(--kj-hint);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 6px 4px;
+}
+
+.onb__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 22px 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+.onb__body::-webkit-scrollbar {
+  width: 0;
+}
+
+.onb__step {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  animation: kj-onb-in 0.34s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes kj-onb-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.onb__q {
+  font-size: 25px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--kj-text);
+  margin: 6px 0 6px;
+}
+
+.onb__hint {
+  font-size: 14.5px;
+  line-height: 1.45;
+  color: var(--kj-hint);
+  margin: 0 0 22px;
+}
+
+.chips--onb {
+  gap: 10px;
+}
+
+.chips--onb .chip {
+  padding: 11px 16px;
+  font-size: 15px;
+  border-radius: 14px;
+}
+
+.onb__foot {
+  flex: 0 0 auto;
+  padding: 12px 18px
+    calc(16px + max(env(safe-area-inset-bottom, 0px), var(--tg-viewport-safe-area-inset-bottom, 0px)));
+  background: var(--kj-secondary-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Welcome */
+.onb__welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 12px 6px 20px;
+}
+
+.onb__mark {
+  width: 84px;
+  height: 84px;
+  border-radius: 26px;
+  background: linear-gradient(160deg, color-mix(in srgb, var(--kj-brand) 80%, #ffca9a), var(--kj-brand-strong));
+  background-size: 160% 160%;
+  color: var(--kj-brand-ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 18px 40px -10px color-mix(in srgb, var(--kj-brand) 55%, transparent);
+  margin-bottom: 24px;
+  animation: kj-mark-in 0.6s cubic-bezier(0.34, 1.56, 0.64, 1), kj-float 4.5s ease-in-out 0.6s infinite,
+    kj-flow 6s ease-in-out infinite;
+}
+
+[data-theme='dark'] .onb__mark {
+  color: #1b1300;
+}
+
+.onb__mark svg {
+  width: 46px;
+  height: 46px;
+}
+
+@keyframes kj-mark-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes kj-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+.onb__title {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  color: var(--kj-text);
+  margin: 0 0 10px;
+}
+
+.onb__lead {
+  font-size: 15.5px;
+  line-height: 1.5;
+  color: var(--kj-hint);
+  margin: 0 0 26px;
+  max-width: 300px;
+}
+
+.onb__feats {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 320px;
+  text-align: left;
+}
+
+.onb__feat {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+.onb__feat-ico {
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--kj-brand-tint);
+  color: var(--kj-brand-strong);
+}
+
+.onb__feat-ico svg {
+  width: 20px;
+  height: 20px;
+}
+
+.onb__feat-t {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--kj-text);
+  line-height: 1.35;
+}
+
+/* Done — ceremony */
+.onb__done {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 20px 6px;
+}
+
+.onb__check {
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  background: var(--kj-money-tint);
+  color: var(--kj-money-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 22px;
+  animation: kj-mark-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.onb__check svg {
+  width: 48px;
+  height: 48px;
+}
+
+.onb__sum {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 6px;
+  max-width: 320px;
+}
+
+/* ── Feed search bar ───────────────────────────────────────────────────────
+   Glass TONE only (scrolls with the feed → no backdrop-filter, per perf brief).
+   Solid fallback here; glass tone layered in the @supports block below. */
+.searchbar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--kj-section-bg);
+  border: 1px solid var(--kj-separator);
+  border-radius: var(--kj-radius);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.searchbar:focus-within {
+  border-color: var(--kj-brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--kj-brand) 14%, transparent);
+}
+
+.searchbar svg {
+  color: var(--kj-hint);
+  flex: 0 0 auto;
+}
+
+.searchbar input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--kj-text);
+  font: inherit;
+  font-size: 15px;
+}
+
+.searchbar input::placeholder {
+  color: var(--kj-hint);
+}
+
+.searchbar__clear {
+  border: none;
+  background: transparent;
+  color: var(--kj-hint);
+  font-size: 15px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.searchbar--filled .searchbar__clear {
+  display: inline-flex;
+}
+
+/* ── Aggregator bar (product value: "N vacancies from M chats") ────────────── */
+.aggbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  margin: 0 0 var(--kj-space-3);
+  border-radius: var(--kj-radius);
+  background: var(--kj-brand-tint);
+  color: var(--kj-brand-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.aggbar__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--kj-money);
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--kj-money) 60%, transparent);
+  animation: kj-pulse 2.4s ease-out infinite;
+}
+
+@keyframes kj-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--kj-money) 55%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+}
+
+.aggbar b {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Feed cards cascade (soft stagger on mount) ────────────────────────────
+   One-shot animation → the global reduced-motion rule collapses it to instant.
+   Cards past the 7th (appended by pagination) fade in with no extra delay. */
+.feed-list > .card {
+  animation: kj-card-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.feed-list > .card:nth-child(2) {
+  animation-delay: 0.02s;
+}
+.feed-list > .card:nth-child(3) {
+  animation-delay: 0.06s;
+}
+.feed-list > .card:nth-child(4) {
+  animation-delay: 0.1s;
+}
+.feed-list > .card:nth-child(5) {
+  animation-delay: 0.14s;
+}
+.feed-list > .card:nth-child(6) {
+  animation-delay: 0.18s;
+}
+.feed-list > .card:nth-child(7) {
+  animation-delay: 0.22s;
+}
+
+@keyframes kj-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ── Count-up numbers (helper: useCountUp) ─────────────────────────────────
+   The JS hook ticks the value 0 → target and toggles `.kj-num--pop` on settle.
+   Under reduced-motion the hook shows the final value instantly (no tick, no
+   pop). inline-block lets the settle scale animate without reflowing text. */
+.card__pay-val,
+.payhero__val,
+.pstat__n,
+.ref-balance__num,
+.metaline b,
+.aggbar b {
+  display: inline-block;
+}
+
+.kj-num--pop {
+  display: inline-block;
+  animation: kj-numin 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes kj-numin {
+  from {
+    transform: scale(1.16);
+    opacity: 0.35;
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* ── Segmented block (feed source switch) ──────────────────────────────────*/
+.segmented--block {
+  display: flex;
+  width: 100%;
+  margin-bottom: var(--kj-space-3);
+}
+
+.segmented--block .segmented__opt {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+}
+
+/* ── "Не разобрано" raw listings — AMBER is reserved strictly for this signal. */
+.badge--raw {
+  background: color-mix(in srgb, #b26a00 15%, transparent);
+  color: #a5670a;
+  font-weight: 600;
+}
+
+[data-theme='dark'] .badge--raw {
+  background: color-mix(in srgb, #f0a848 16%, transparent);
+  color: #f0b866;
+}
+
+.card--raw {
+  border-left: 3px solid color-mix(in srgb, #b26a00 55%, transparent);
+}
+
+[data-theme='dark'] .card--raw {
+  border-left-color: color-mix(in srgb, #f0a848 55%, transparent);
+}
+
+/* Raw text shows in full (scrubbed), italic — no line clamp. */
+.card__desc--raw {
+  display: block;
+  -webkit-line-clamp: none;
+  overflow: visible;
+  font-style: italic;
+  opacity: 0.85;
+  white-space: pre-wrap;
+}
+
+.rawnote {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  background: color-mix(in srgb, #b26a00 12%, var(--kj-section-bg));
+  border-radius: var(--kj-radius);
+  padding: 13px 14px;
+  margin-bottom: var(--kj-space-3);
+}
+
+[data-theme='dark'] .rawnote {
+  background: color-mix(in srgb, #f0a848 12%, var(--kj-section-bg));
+  border: 1px solid var(--kj-card-border);
+}
+
+.rawnote__ico {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, #b26a00 20%, transparent);
+  color: #a5670a;
+}
+
+[data-theme='dark'] .rawnote__ico {
+  color: #f0b866;
+}
+
+.rawnote__t {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--kj-text);
+  margin-bottom: 2px;
+}
+
+.rawnote__s {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--kj-hint);
+}
+
+/* ── Trust card (vacancy + safety screens) ─────────────────────────────────*/
+.trust {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  background: var(--kj-section-bg);
+  border-radius: var(--kj-radius);
+  padding: 13px 14px;
+  margin-top: 8px;
+  box-shadow: var(--kj-card-shadow);
+}
+
+[data-theme='dark'] .trust {
+  box-shadow: var(--kj-card-highlight);
+  border: 1px solid var(--kj-card-border);
+}
+
+.trust__ico {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--kj-brand-tint);
+  color: var(--kj-brand-strong);
+}
+
+.trust__t {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--kj-text);
+  margin-bottom: 2px;
+}
+
+.trust__s {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--kj-hint);
+}
+
+/* ── Feed empty states (saved) ─────────────────────────────────────────────*/
+.feed-empty {
+  text-align: center;
+  padding: 44px 26px 20px;
+  animation: kj-card-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.feed-empty__art {
+  width: 92px;
+  height: 92px;
+  margin: 0 auto 18px;
+  border-radius: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--kj-brand-tint);
+  color: var(--kj-brand-strong);
+}
+
+.feed-empty__art svg {
+  width: 42px;
+  height: 42px;
+}
+
+.feed-empty__title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--kj-text);
+  margin-bottom: 7px;
+}
+
+.feed-empty__sub {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--kj-hint);
+  max-width: 260px;
+  margin: 0 auto;
+}
+
+/* ── Safety screen ─────────────────────────────────────────────────────────*/
+.safehero {
+  padding: 4px 4px 10px;
+}
+
+.safe-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  padding: 13px 14px;
+  position: relative;
+  background: transparent;
+  border: none;
+  color: inherit;
+}
+
+.safe-row + .safe-row::before {
+  content: '';
+  position: absolute;
+  left: 14px;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: var(--kj-separator);
+}
+
+.safe-row__ico {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.safe-row__ico svg {
+  width: 18px;
+  height: 18px;
+}
+
+.safe-row__ico--bad {
+  background: color-mix(in srgb, var(--kj-destructive) 15%, transparent);
+  color: var(--kj-destructive);
+}
+
+.safe-row__ico--good {
+  background: var(--kj-money-tint);
+  color: var(--kj-money-strong);
+}
+
+.safe-row__ico--call {
+  background: var(--kj-brand-tint);
+  color: var(--kj-brand-strong);
+}
+
+.safe-row__t {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--kj-text);
+  margin-bottom: 2px;
+}
+
+.safe-row__s {
+  font-size: 13px;
+  line-height: 1.42;
+  color: var(--kj-hint);
+}
+
+.safe-row__tel {
+  color: var(--kj-brand-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Dashed brand CTA linking to the safety guide (from a vacancy). */
+.safe-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 11px;
+  border: 1px dashed color-mix(in srgb, var(--kj-brand) 45%, var(--kj-separator));
+  background: var(--kj-brand-tint);
+  color: var(--kj-brand-strong);
+  border-radius: var(--kj-radius);
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Liquid Glass surfaces — progressive enhancement.
+
+   Real backdrop blur is applied ONLY to the few FIXED surfaces (appbar,
+   quickfilters, floating tabbar, sheet, modal); long-list cards would jank
+   mid-range Android, so they get the translucent glass *tone* + rim only.
+   Blur/saturate are LITERALS (iOS Safari 18 ignores CSS vars inside
+   -webkit-backdrop-filter); both -webkit- and unprefixed are declared together.
+   Wrapped in @supports so old WebViews fall back to the opaque --kj-* surfaces.
+   ───────────────────────────────────────────────────────────────────────── */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  /* Fixed chrome — real blur, tier "lg" (22px / 175%). */
+  .appbar,
+  .quickfilters {
+    background: var(--lg-fill);
+    -webkit-backdrop-filter: blur(22px) saturate(175%);
+    backdrop-filter: blur(22px) saturate(175%);
+    border-bottom: 1px solid var(--lg-hair);
+    box-shadow: var(--lg-rim);
+  }
+
+  .tabbar {
+    background: var(--lg-fill);
+    -webkit-backdrop-filter: blur(22px) saturate(175%);
+    backdrop-filter: blur(22px) saturate(175%);
+    border: 1px solid var(--lg-brd);
+    box-shadow: var(--lg-rim), var(--lg-shadow);
+  }
+
+  /* Cards & sections & trust — glass TONE only, NO backdrop-filter (Android perf). */
+  .section,
+  .card,
+  .trust {
+    background: var(--lg-card);
+    border: 1px solid var(--lg-hair);
+    box-shadow: var(--lg-rim), var(--lg-shadow-sm);
+  }
+
+  [data-theme='dark'] .section,
+  [data-theme='dark'] .card,
+  [data-theme='dark'] .trust {
+    border-color: var(--lg-brd);
+    box-shadow: var(--lg-rim), var(--lg-shadow-sm);
+  }
+
+  /* Feed source switch — glass track. */
+  .segmented--block {
+    background: var(--lg-card);
+    border: 1px solid var(--lg-hair);
+  }
+
+  /* Sheet & modal — strongest blur, tier "xl" (34px / 190%). */
+  .sheet__panel {
+    background: var(--lg-fill);
+    -webkit-backdrop-filter: blur(34px) saturate(190%);
+    backdrop-filter: blur(34px) saturate(190%);
+    border: 1px solid var(--lg-brd);
+    border-bottom: none;
+    box-shadow: var(--lg-rim), 0 -12px 44px rgba(0, 0, 0, 0.34);
+  }
+
+  .modal__card {
+    background: var(--lg-fill);
+    -webkit-backdrop-filter: blur(34px) saturate(190%);
+    backdrop-filter: blur(34px) saturate(190%);
+    border: 1px solid var(--lg-brd);
+    box-shadow: var(--lg-rim), var(--lg-shadow);
+  }
+
+  /* Search bar — glass tone only (no backdrop-filter: it scrolls with the feed). */
+  .searchbar {
+    background: var(--lg-card);
+    border-color: var(--lg-hair);
+    box-shadow: var(--lg-rim);
+  }
+  [data-theme='dark'] .searchbar {
+    border-color: var(--lg-brd);
+  }
+}
+
+/* ── Consent gate (shown before onboarding) ────────────────────────────────
+   Reuses the onboarding overlay shell (.onb) with a centered single step. */
+.consent .onb__step {
+  justify-content: center;
+  gap: 4px;
+}
+
+.consent__mark {
+  width: 60px;
+  height: 60px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  margin: 0 0 16px;
+  color: var(--kj-brand);
+  background: var(--kj-brand-tint);
+}
+
+.consent__mark svg {
+  width: 30px;
+  height: 30px;
+}
+
+.consent__check {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 22px 0 0;
+  padding: 16px;
+  border-radius: var(--kj-radius);
+  background: var(--kj-section-bg);
+  box-shadow: var(--kj-card-highlight);
+  cursor: pointer;
+}
+
+[data-theme='dark'] .consent__check {
+  border: 1px solid var(--kj-card-border);
+}
+
+/* Visually-hidden real checkbox (keeps native semantics + keyboard focus). */
+.consent__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  margin: 0;
+}
+
+.consent__box {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+  border-radius: 7px;
+  border: 2px solid var(--kj-separator);
+  background: var(--kj-bg);
+  display: grid;
+  place-items: center;
+  color: transparent;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.consent__box svg {
+  width: 15px;
+  height: 15px;
+}
+
+.consent__input:checked + .consent__box {
+  background: var(--kj-brand);
+  border-color: var(--kj-brand);
+  color: var(--kj-brand-ink);
+}
+
+.consent__input:focus-visible + .consent__box {
+  outline: 2px solid var(--kj-accent);
+  outline-offset: 2px;
+}
+
+.consent__text {
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: var(--kj-text);
+}
+
+.consent__link {
+  color: var(--kj-link);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.consent__error {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: #e5484d;
+  text-align: center;
+}
+
+/* ── Legal documents (Privacy / Rules sub-screens) ─────────────────────────── */
+.legal {
+  max-width: var(--kj-maxw);
+  margin: 0 auto;
+  padding: 4px 2px 8px;
+}
+
+.legal__draft {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--kj-brand-strong);
+  background: var(--kj-brand-tint);
+  border-radius: var(--kj-radius-sm);
+  padding: 10px 12px;
+  margin: 0 0 12px;
+}
+
+.legal__meta {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--kj-hint);
+  margin: 0 0 20px;
+}
+
+.legal__section {
+  margin: 0 0 22px;
+}
+
+.legal__h {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  color: var(--kj-text);
+  margin: 0 0 8px;
+}
+
+.legal__p {
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--kj-text);
+  margin: 0 0 10px;
+}
+
+.legal__list {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.legal__list li {
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--kj-text);
+  margin: 0 0 6px;
+}
+
+.legal__list--ol {
+  list-style: decimal;
+}
+
+/* ── Reduced motion: collapse decorative motion to instant/opacity ─────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* INFINITE animations must be fully OFF here: at .001ms they would strobe,
+     not disappear. Pin each to a clean resting/final state. */
+  .app::before {
+    animation: none !important;
+    transform: none;
+    opacity: 0.5;
+  }
+  .btn--primary,
+  .btn--tg {
+    animation: none !important;
+    background-position: 0% 50%;
+  }
+  .btn--primary::after,
+  .btn--tg::after {
+    animation: none !important;
+    display: none;
+  }
+  .aggbar__dot {
+    animation: none !important;
+  }
+  /* Onboarding welcome mark: kill the infinite float/flow (kj-mark-in is one-shot). */
+  .onb__mark {
+    animation: none !important;
+  }
+  /* kj-pop / kj-card-in / kj-numin / kj-onb-in are one-shot — the global rule above
+     already collapses them to instant; the count-up hook also skips ticking. */
 }

@@ -35,14 +35,41 @@ const files = [
   'draft_0001_init.sql',
   'draft_seed.sql',
   'draft_sources_seed.sql',
-  // Phase 1 v2 (0003) — order matters: vacancy_fields creates the visa_type /
-  // placement_fee enums that subscription_filters and user_ads depend on.
+  'draft_sources_seed_2.sql', // owner batch 2 (15.07) — 18 chats, idempotent by username
+
+  // NOTE: draft_0002_rls.sql is Supabase-only and is INTENTIONALLY NOT listed here (see its
+  // file header + db/README.md). On Neon there is no anon PostgREST surface, so RLS is not
+  // applied; security lives in the serverless layer.
+
+  // Phase 1 v2 (0003) — order matters: vacancy_fields creates the visa_type / placement_fee
+  // enums that subscription_filters and user_ads depend on. moderation adds
+  // raw_messages.reject_reason (0007 depends on it); user_ads creates the user_ads table
+  // (0006 depends on it).
   'draft_0003_vacancy_fields.sql',
   'draft_0003_moderation.sql',
   'draft_0003_consent.sql',
   'draft_0003_takedown.sql',
   'draft_0003_subscription_filters.sql',
   'draft_0003_user_ads.sql',
+
+  // Referral graph (0004) — ADDITIVE to users + config (both from 0001). Placed after the
+  // 0003 block per its own header's documented apply order.
+  'draft_0004_referral.sql',
+
+  // Phase 2 redesign (0005) — ADDITIVE. visa_types MUST be its own file/transaction:
+  // ALTER TYPE ADD VALUE cannot be used in the same tx that uses the new label (see the
+  // header in draft_0005_visa_types.sql). apply.mjs sends one query per file, so each 0005
+  // file is its own committed unit — the enum labels land before anything uses them.
+  // visa_types extends the visa_type enum created in draft_0003_vacancy_fields.sql, so it
+  // MUST run after that file.
+  'draft_0005_visa_types.sql',
+  'draft_0005_onboarding.sql',
+
+  // Phase 3 redesign — ADDITIVE. saved (0006) FKs vacancies (0001) + user_ads (0003_user_ads);
+  // raw_read (0007) adds a config tunable + a partial index over raw_messages using
+  // reject_reason (0003_moderation) — both come after the 0003 block above.
+  'draft_0006_saved.sql',
+  'draft_0007_raw_read.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

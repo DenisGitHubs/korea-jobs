@@ -7,13 +7,15 @@ export function Segmented<T extends string>({
   value,
   options,
   onChange,
+  className,
 }: {
   value: T;
   options: Array<SegOption<T>>;
   onChange: (v: T) => void;
+  className?: string;
 }) {
   return (
-    <div className="segmented" role="tablist">
+    <div className={`segmented ${className ?? ''}`} role="tablist">
       {options.map((o) => (
         <button
           key={o.value}

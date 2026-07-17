@@ -16,10 +16,10 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { getSql } from '../core/db.js';
+import { scrubContacts } from '../core/scrub.js';
 import { getConfigNumber, getConfigString } from '../config.js';
 import {
   buildSystemPrompt,
-  buildBatchSchema,
   VISA_TYPES,
   PLACEMENT_FEES,
   type CityRef,
@@ -31,6 +31,24 @@ import {
 const VISA_TYPE_SET = new Set<string>(VISA_TYPES);
 const PLACEMENT_FEE_SET = new Set<string>(PLACEMENT_FEES);
 
+/**
+ * Extract the JSON object from a model reply. strict structured outputs cannot compile
+ * our schema (big object × batch array — rejected as "too complex"/grammar timeout), so
+ * we ask for JSON in the prompt and parse defensively: drop any ```json fences and any
+ * prose around the object by slicing from the first '{' to the last '}'. Throws on bad
+ * JSON — the caller's try/catch then leaves the batch 'pending' for a retry.
+ */
+function extractJson(text: string): unknown {
+  let s = text.trim();
+  const fenced = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const inner = fenced?.[1];
+  if (inner) s = inner.trim();
+  const first = s.indexOf('{');
+  const last = s.lastIndexOf('}');
+  if (first !== -1 && last > first) s = s.slice(first, last + 1);
+  return JSON.parse(s);
+}
+
 /** Keep only known enum values the model may have returned (defense in depth). */
 function cleanVisaTypes(v: unknown): VisaType[] {
   if (!Array.isArray(v)) return [];
@@ -41,6 +59,27 @@ function cleanPlacementFee(v: unknown): PlacementFee {
 }
 function cleanTriState(v: unknown): boolean | null {
   return typeof v === 'boolean' ? v : null;
+}
+
+// Cheap, high-precision spam pre-filter — obvious non-jobs (crypto exchange, money-mule,
+// leaflet gigs) are the bulk of the raw stream. CONSERVATIVE by design (precision >>
+// recall): only near-certain spam matches; anything borderline still goes to the model.
+// Rows are marked reject_reason='spam_prefilter' so the pattern set is tunable from data.
+const SPAM_PATTERNS: RegExp[] = [
+  /\busdt\b|\busdc\b|bitcoin|биткоин/i,
+  /крипт[оаыу]?\b|криптовалют|криптоактив|криптообмен/i,
+  /обмен\s+(валют|usdt|usd|крипт|наличк|денег)/i,
+  /перестановк\w*\s+средств/i,
+  /inside\s*exchange|exchange\s*express|otc[- ]?сервис/i,
+  /доплат\w*\s+за\s+(usdt|крипт)/i,
+  /вон[ыа]?\s*(на|→|->)\s*рубл|рубл\w*\s*(на|→|->)\s*вон/i,
+  /обнал\w+|\bдроп(ы|ов|ами)?\b|аренд\w*\s+карт/i,
+  /листовк/i,
+  /\bbybit\b|трейдинг/i,
+];
+function looksLikeSpam(text: string): boolean {
+  const t = text.toLowerCase();
+  return SPAM_PATTERNS.some((re) => re.test(t));
 }
 
 const MODEL_ALIASES: Record<string, string> = {
@@ -62,14 +101,46 @@ export async function runParse(): Promise<ParseResult> {
   const modelAlias = await getConfigString('parser_model', 'haiku');
   const model = MODEL_ALIASES[modelAlias] ?? modelAlias;
 
-  // 1) Oldest pending raw messages.
-  const pending = await sql`
-    select id, text, source_id, posted_at
-    from raw_messages
-    where status = 'pending'
-    order by fetched_at asc
+  const maxAgeDays = await getConfigNumber('parser_max_age_days', 7);
+
+  // Owner rule: the AI never parses messages older than the freshness window
+  // (default 1 week) — stale postings, and no tokens spent on them. Sweep any
+  // stale 'pending' rows out of the queue first so they cannot accumulate.
+  await sql`
+    update raw_messages
+    set status='skipped', processed_at=now(), reject_reason='too_old'
+    where status='pending' and posted_at < now() - make_interval(days => ${maxAgeDays})`;
+
+  // 1) Oldest pending raw messages WITHIN the freshness window. Join the source so we
+  // can pass the channel title/notes to the model as a per-item city hint (source_hint).
+  const pendingAll = await sql`
+    select r.id, r.text, r.source_id, r.posted_at,
+           s.title as source_title, s.notes as source_notes
+    from raw_messages r
+    left join sources s on s.id = r.source_id
+    where r.status = 'pending'
+      and r.posted_at >= now() - make_interval(days => ${maxAgeDays})
+    order by r.fetched_at asc
     limit ${batchSize}`;
-  if (pending.length === 0) return { processed: 0, vacancies: 0 };
+  if (pendingAll.length === 0) return { processed: 0, vacancies: 0 };
+
+  // Drop obvious spam BEFORE the AI call — no tokens spent on crypto/exchange/leaflet junk
+  // (~2/3 of the raw stream). Conservative matcher; borderline text still reaches the model.
+  const spamIds: string[] = [];
+  const pending = pendingAll.filter((r) => {
+    if (looksLikeSpam((r.text as string | null) ?? '')) {
+      spamIds.push(r.id as string);
+      return false;
+    }
+    return true;
+  });
+  if (spamIds.length > 0) {
+    await sql`update raw_messages set status='skipped', processed_at=now(),
+              reject_reason='spam_prefilter' where id = any(${spamIds}::uuid[])`;
+    // eslint-disable-next-line no-console
+    console.log(`[parser] spam pre-filtered (no AI): ${spamIds.length}`);
+  }
+  if (pending.length === 0) return { processed: spamIds.length, vacancies: 0 };
 
   // 2) Active cities → closed enum + prompt context; slug→id + slug→city map.
   const cityRows = await sql`
@@ -79,16 +150,30 @@ export async function runParse(): Promise<ParseResult> {
     name: r.name as { ru: string; ko: string; en: string },
     region_slug: (r.region_slug as string | null) ?? null,
   }));
-  const citySlugs = cities.map((c) => c.slug);
   const regionSlugs = [...new Set(cityRows.map((r) => r.region_slug).filter(Boolean))] as string[];
   const cityIdBySlug = new Map<string, string>(cityRows.map((r) => [r.slug as string, r.id as string]));
+  // city/region are guided by the prompt (not a schema enum), so re-close the set on the
+  // server: unknown city slug -> null (cityIdBySlug.get below), unknown region -> null here.
+  const regionSlugSet = new Set<string>(regionSlugs);
 
-  // 3) Prompt + schema. City slug is a closed enum the model cannot step outside.
+  // 3) Prompt + input. strict structured outputs can't compile our schema, so the required
+  // JSON shape + enums live in the system prompt; every field is re-validated server-side.
   const system = buildSystemPrompt(cities, regionSlugs);
-  const schema = buildBatchSchema(citySlugs, regionSlugs);
-  const inputItems = pending.map((r) => ({ id: r.id as string, text: (r.text as string | null) ?? '' }));
+  const inputItems = pending.map((r) => {
+    const title = ((r.source_title as string | null) ?? '').trim();
+    const notes = ((r.source_notes as string | null) ?? '').trim();
+    const sourceHint = [title, notes].filter(Boolean).join(' — ');
+    const item: { id: string; text: string; source_hint?: string } = {
+      id: r.id as string,
+      text: (r.text as string | null) ?? '',
+    };
+    if (sourceHint) item.source_hint = sourceHint;
+    return item;
+  });
 
-  // 4) One structured call for the whole batch.
+  // 4) One call for the whole batch. The required JSON shape is specified in the system
+  // prompt (no output_config: strict structured outputs can't compile our schema); we
+  // extract + parse the JSON object from the reply and re-validate everything server-side.
   const client = new Anthropic(); // reads ANTHROPIC_API_KEY from env
   let items: ParsedVacancy[] = [];
   try {
@@ -97,20 +182,20 @@ export async function runParse(): Promise<ParseResult> {
       max_tokens: 16000,
       // Stable city list first → cacheable prefix (harmless if under the min).
       system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
-      // Force the exact output shape; the first text block is valid JSON.
-      output_config: { format: { type: 'json_schema', schema } },
       messages: [{ role: 'user', content: JSON.stringify({ messages: inputItems }) }],
     } as Anthropic.MessageCreateParamsNonStreaming);
 
     const textBlock = resp.content.find((b) => b.type === 'text');
     if (textBlock && 'text' in textBlock) {
-      const parsed = JSON.parse(textBlock.text) as { items?: ParsedVacancy[] };
+      const parsed = extractJson(textBlock.text) as { items?: ParsedVacancy[] };
       items = Array.isArray(parsed.items) ? parsed.items : [];
     }
-  } catch {
-    // Model/transport fault: leave the batch 'pending' for the next tick. No payload logged.
+  } catch (err) {
+    // Model/transport fault: leave the batch 'pending' for the next tick. Log the
+    // error MESSAGE (not the payload) — a silent swallow made a bad schema/request
+    // impossible to diagnose in prod.
     // eslint-disable-next-line no-console
-    console.error('[parser] extraction call failed');
+    console.error('[parser] extraction call failed:', err instanceof Error ? err.message : String(err));
     return { processed: 0, vacancies: 0 };
   }
 
@@ -139,10 +224,16 @@ export async function runParse(): Promise<ParseResult> {
     }
 
     const cityId = it.city_slug ? cityIdBySlug.get(it.city_slug) ?? null : null;
+    const regionSlug = it.region_slug && regionSlugSet.has(it.region_slug) ? it.region_slug : null;
     const visaTypes = cleanVisaTypes(it.visa_types);
     const placementFee = cleanPlacementFee(it.placement_fee);
     const hasHousing = cleanTriState(it.has_housing);
     const hasMeals = cleanTriState(it.has_meals);
+    const title = it.title ? it.title.slice(0, 120) : null; // schema no longer caps length
+    // Owner rule (2026-07-15): description = the FULL original message text minus contacts
+    // (the AI no longer summarizes it, and no longer interprets salary — salary now lives
+    // inside this text). scrubContacts strips phones/@handles/t.me·wa.me·kakao links.
+    const description = scrubContacts((row.text as string | null) ?? null);
 
     // Takedown gate (007 CRIT): never resurrect content taken down for a ToS 5.2(i)
     // contact violation. The prospective content_hash is computed via kj_content_hash
@@ -164,19 +255,20 @@ export async function runParse(): Promise<ParseResult> {
     // Insert; on dedup conflict bump the canonical instead. (xmax = 0) marks a fresh insert.
     let upserted: Record<string, unknown>[];
     try {
+      // Salary columns are intentionally omitted: the model no longer interprets salary
+      // (it confused currency/units — "7000 руб", "2300 тыс вон"), so salary_text/min/max/
+      // period all take their NULL default and salary_currency keeps its NOT NULL 'KRW'
+      // default (never surfaced in the feed). The number stays inside description.
       upserted = await sql`
         insert into vacancies (
           city_id, region_slug, work_type, gender, lang,
           title, description, employer,
-          salary_text, salary_min, salary_max, salary_period, salary_currency,
           contact_raw, contact_kind,
           visa_types, placement_fee, has_housing, has_meals,
           source_id, raw_message_id, posted_at, dedup_extra
         ) values (
-          ${cityId}::uuid, ${it.region_slug ?? null}, ${it.work_type}::work_type, ${it.gender}::gender, ${it.lang ?? null},
-          ${it.title ?? null}, ${it.description ?? null}, ${it.employer ?? null},
-          ${it.salary_text ?? null}, ${it.salary_min ?? null}, ${it.salary_max ?? null},
-          ${it.salary_period ?? null}::salary_period, ${it.salary_currency ?? 'KRW'},
+          ${cityId}::uuid, ${regionSlug}, ${it.work_type}::work_type, ${it.gender}::gender, ${it.lang ?? null},
+          ${title}, ${description}, ${it.employer ?? null},
           ${it.contact_raw ?? null}, ${it.contact_kind ?? null}::contact_kind,
           ${visaTypes}::visa_type[], ${placementFee}::placement_fee, ${hasHousing}, ${hasMeals},
           ${row.source_id}::uuid, ${rawId}::uuid, ${row.posted_at ?? null}, ${it.dedup_extra ?? null}
@@ -207,5 +299,5 @@ export async function runParse(): Promise<ParseResult> {
     await sql`update raw_messages set status='parsed', processed_at=now(), vacancy_id=${vacancyId ?? null}::uuid where id=${rawId}::uuid`;
   }
 
-  return { processed: pending.length, vacancies };
+  return { processed: pending.length + spamIds.length, vacancies };
 }

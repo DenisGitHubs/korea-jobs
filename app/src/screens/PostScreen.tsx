@@ -245,16 +245,18 @@ export default function PostScreen() {
     <div className="app">
       <AppBar title={t('post.title')} onBack={back} />
       <div className="screen">
-        <div className="steps" aria-hidden>
-          {Array.from({ length: STEP_COUNT }, (_, i) => (
-            <span key={i} className={`steps__seg ${i <= step ? 'steps__seg--on' : ''}`} />
-          ))}
+        <div className="steps__head">
+          <div className="steps" aria-hidden>
+            {Array.from({ length: STEP_COUNT }, (_, i) => (
+              <span key={i} className={`steps__seg ${i <= step ? 'steps__seg--on' : ''}`} />
+            ))}
+          </div>
+          <div className="steps__count">{t('post.stepOf', { n: step + 1, total: STEP_COUNT })}</div>
         </div>
-        <div className="steps__count">{t('post.stepOf', { n: step + 1, total: STEP_COUNT })}</div>
 
         {step === 0 ? (
-          <div className="stack">
-            <div className="region__title">{t('post.s1.title')}</div>
+          <div className="stack stack--wizard">
+            <div className="wizard__headline">{t('post.s1.title')}</div>
             <Field label={t('post.titleLabel')} value={d.title} onChange={(v) => patch({ title: v })} placeholder={t('post.titlePlaceholder')} maxLength={80} />
             <div>
               <div className="region__title">{t('post.workTypeLabel')}</div>
@@ -263,8 +265,8 @@ export default function PostScreen() {
             <Field label={t('post.descLabel')} value={d.description} onChange={(v) => patch({ description: v })} placeholder={t('post.descPlaceholder')} multiline rows={5} maxLength={2000} hint={t('post.descHint')} />
           </div>
         ) : step === 1 ? (
-          <div className="stack">
-            <div className="region__title">{t('post.s2.title')}</div>
+          <div className="stack stack--wizard">
+            <div className="wizard__headline">{t('post.s2.title')}</div>
             <Field label={t('post.salaryLabel')} value={d.salaryText} onChange={(v) => patch({ salaryText: v })} placeholder={t('post.salaryPlaceholder')} />
             <div>
               <div className="region__title">{t('post.feeLabel')}</div>
@@ -275,20 +277,20 @@ export default function PostScreen() {
             ) : null}
           </div>
         ) : step === 2 ? (
-          <div className="stack">
-            <div className="region__title">{t('post.s3.title')}</div>
+          <div className="stack stack--wizard">
+            <div className="wizard__headline">{t('post.s3.title')}</div>
             <ChipSelect options={visaOptions} value={d.visa} onChange={(v) => patch({ visa: v })} />
             <div className="hint">{t('post.visaHint')}</div>
           </div>
         ) : step === 3 ? (
-          <div className="stack">
-            <div className="region__title">{t('post.cityLabel')}</div>
+          <div className="stack stack--wizard">
+            <div className="wizard__headline">{t('post.cityLabel')}</div>
             <CityPicker single value={d.city ? [d.city] : []} onChange={(n) => patch({ city: n[0] ?? null })} />
             <Field label={t('post.scheduleLabel')} value={d.schedule} onChange={(v) => patch({ schedule: v })} placeholder={t('post.schedulePlaceholder')} />
           </div>
         ) : step === 4 ? (
-          <div className="stack">
-            <div className="region__title">{t('post.s5.title')}</div>
+          <div className="stack stack--wizard">
+            <div className="wizard__headline">{t('post.s5.title')}</div>
             <div className="section">
               <div className="row">
                 <span className="row__label">{t('filter.housing')}</span>
@@ -309,8 +311,8 @@ export default function PostScreen() {
             ) : null}
           </div>
         ) : step === 5 ? (
-          <div className="stack">
-            <div className="region__title">{t('post.contactLabel')}</div>
+          <div className="stack stack--wizard">
+            <div className="wizard__headline">{t('post.contactLabel')}</div>
             <Field value={d.contactRaw} onChange={(v) => patch({ contactRaw: v })} placeholder={t('post.contactPlaceholder')} hint={t('post.contactHint')} />
             <div>
               <div className="region__title">{t('post.contactKindLabel')}</div>
@@ -318,8 +320,8 @@ export default function PostScreen() {
             </div>
           </div>
         ) : (
-          <div className="stack">
-            <div className="region__title">{t('post.summaryTitle')}</div>
+          <div className="stack stack--wizard">
+            <div className="wizard__headline">{t('post.summaryTitle')}</div>
             <div className="section">
               <SummaryRow k={t('post.titleLabel')} v={d.title || '—'} />
               <SummaryRow k={t('post.workTypeLabel')} v={d.workType ? t(workTypeKey(d.workType)) : '—'} />
@@ -338,7 +340,7 @@ export default function PostScreen() {
 
         {!isReal ? (
           <div className="wizard__nav">
-            <button className="btn btn--secondary" onClick={back}>
+            <button className="btn btn--ghost" onClick={back}>
               {step === 0 ? t('nav.back') : t('post.prev')}
             </button>
             <button className="btn btn--primary" onClick={next} disabled={!stepValid(step) || submitting}>

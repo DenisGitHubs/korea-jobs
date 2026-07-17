@@ -1,17 +1,29 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { postEvent } from '@telegram-apps/sdk-react';
 import { api, ApiError } from '../shared/api/client';
 import type { VacancyContact, VacancyView } from '../shared/types/api';
 import { feeKey, genderKey, visaKey } from '../shared/labels';
 import { useBackButton } from '../hooks/useBackButton';
 import { useSettingsStore } from '../store/settingsStore';
+import { applySaveToCaches, revertSaveInCaches } from '../store/feedStore';
 import { localized } from '../lib/localized';
-import { salaryLine, timeAgo } from '../lib/format';
+import { isStale, timeAgo } from '../lib/format';
 import { AppBar } from '../components/AppBar';
 import { Loading } from '../components/Loading';
 import { EmptyState } from '../components/EmptyState';
 import { WorkTypeBadge } from '../components/WorkTypeBadge';
+import { HeartIcon } from '../components/VacancyCard';
+
+function ShieldIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  );
+}
 
 type ContactState =
   | { status: 'idle' }
@@ -31,11 +43,35 @@ function contactHref(c: VacancyContact): string | null {
   }
 }
 
+/** Max chars of the listing description we prefill into the Telegram message. */
+const TG_MSG_MAX = 700;
+
+/** Value looks like a Telegram handle/link (used to detect tg for non-'telegram' kinds). */
+const TG_LIKE_RE = /^\s*(?:https?:\/\/)?(?:t\.me\/|@|tg:\/\/resolve\?domain=)/i;
+
+/** Extract a bare Telegram username from @nick / t.me/nick / https://t.me/nick / tg://resolve?domain=nick. */
+function telegramUsername(raw: string): string | null {
+  const s = raw
+    .trim()
+    .replace(/^(?:https?:\/\/)?t\.me\//i, '')
+    .replace(/^tg:\/\/resolve\?domain=/i, '')
+    .replace(/^@/, '');
+  const nick = s.split(/[?/\s]/)[0]; // nick is everything up to '?', '/', or whitespace
+  return /^[A-Za-z0-9_]{3,32}$/.test(nick) ? nick : null;
+}
+
+/** True when we can open a Telegram chat with this contact. */
+function isTelegramContact(c: VacancyContact): boolean {
+  if (c.kind === 'telegram') return telegramUsername(c.value) !== null;
+  return TG_LIKE_RE.test(c.value) && telegramUsername(c.value) !== null;
+}
+
 export default function VacancyScreen() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { id = '' } = useParams();
   const lang = useSettingsStore((s) => s.lang);
+  const isReal = useSettingsStore((s) => s.isReal);
 
   const [vacancy, setVacancy] = useState<VacancyView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -43,6 +79,7 @@ export default function VacancyScreen() {
   const [contact, setContact] = useState<ContactState>({ status: 'idle' });
   const [copied, setCopied] = useState(false);
   const [reported, setReported] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -66,6 +103,24 @@ export default function VacancyScreen() {
 
   const goBack = useCallback(() => navigate('/feed'), [navigate]);
   useBackButton(true, goBack);
+
+  // Sync the bookmark state from the loaded vacancy.
+  useEffect(() => {
+    if (vacancy) setSaved(vacancy.is_saved);
+  }, [vacancy]);
+
+  // Optimistic bookmark toggle. On error, revert BOTH local state and the shared
+  // feed caches (identical to FeedScreen), so the heart and the Saved list never
+  // drift from the server.
+  const toggleSave = useCallback(() => {
+    const next = !saved;
+    setSaved(next);
+    applySaveToCaches(id, next);
+    (next ? api.saveVacancy(id) : api.unsaveVacancy(id)).catch(() => {
+      setSaved(saved);
+      revertSaveInCaches(id, saved);
+    });
+  }, [saved, id]);
 
   const revealContact = useCallback(() => {
     setContact({ status: 'loading' });
@@ -94,6 +149,30 @@ export default function VacancyScreen() {
     });
   }, [id]);
 
+  // Open a Telegram chat with the author, prefilling a message referencing this listing.
+  // Real client: raw `web_app_open_tg_link` event (relative path) — bypasses the SDK's
+  // desktop/macOS window.open fallback (tma.js #712). Browser: plain t.me link.
+  const writeTelegram = useCallback(
+    (c: VacancyContact) => {
+      const username = telegramUsername(c.value);
+      if (!username || !vacancy) return;
+      const full = vacancy.description;
+      const desc = full.length > TG_MSG_MAX ? `${full.slice(0, TG_MSG_MAX)} …` : full;
+      const encoded = encodeURIComponent(`${t('contact.writeTelegramPrefix')} ${desc}`);
+      const pathFull = `/${username}?text=${encoded}`;
+      try {
+        if (isReal) {
+          postEvent('web_app_open_tg_link', { path_full: pathFull });
+        } else {
+          window.open(`https://t.me${pathFull}`, '_blank');
+        }
+      } catch {
+        window.open(`https://t.me${pathFull}`, '_blank');
+      }
+    },
+    [vacancy, isReal, t],
+  );
+
   const threeState = (v: boolean | null): string =>
     v === true ? t('common.yes') : v === false ? t('common.no') : t('vacancy.notStated');
 
@@ -101,7 +180,22 @@ export default function VacancyScreen() {
 
   return (
     <div className="app">
-      <AppBar title={t('vacancy.title')} onBack={goBack} />
+      <AppBar
+        title={t('vacancy.title')}
+        onBack={goBack}
+        right={
+          vacancy ? (
+            <button
+              className={`appbar__btn appbar__btn--icon ${saved ? 'appbar__btn--fav' : ''}`}
+              onClick={toggleSave}
+              aria-pressed={saved}
+              aria-label={t(saved ? 'feed.unsave' : 'feed.save')}
+            >
+              <HeartIcon filled={saved} />
+            </button>
+          ) : undefined
+        }
+      />
       <div className="screen">
         {loading ? (
           <Loading text={t('common.loading')} />
@@ -114,7 +208,9 @@ export default function VacancyScreen() {
                 {vacancy.city ? localized(vacancy.city.name, lang) : t('region.other')}
               </h1>
               <p className="hero__sub">{timeAgo(vacancy.posted_at, t)}</p>
-              <p className="hero__note">{t('vacancy.mayBeTaken')}</p>
+              {isStale(vacancy.posted_at) ? (
+                <p className="hero__note">{t('vacancy.mayBeTaken')}</p>
+              ) : null}
             </div>
 
             <div className="card__badges" style={{ marginBottom: 16 }}>
@@ -127,10 +223,6 @@ export default function VacancyScreen() {
             </div>
 
             <div className="section" style={{ marginBottom: 16 }}>
-              <div className="dl">
-                <span className="dl__k">{t('vacancy.salary')}</span>
-                <span className="dl__v">{salaryLine(vacancy, t) ?? t('vacancy.salaryNA')}</span>
-              </div>
               {vacancy.employer ? (
                 <div className="dl">
                   <span className="dl__k">{t('vacancy.employer')}</span>
@@ -182,6 +274,9 @@ export default function VacancyScreen() {
               </div>
             ) : contact.status === 'idle' ? (
               <button className="btn btn--primary btn--block" onClick={revealContact}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
+                </svg>
                 {t('vacancy.showContact')}
               </button>
             ) : contact.status === 'loading' ? (
@@ -192,27 +287,55 @@ export default function VacancyScreen() {
                   <div className="contact__kind">{t(`contactKind.${contact.contact.kind}`)}</div>
                   <div className="contact__value">{contact.contact.value}</div>
                 </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button className="btn btn--secondary" onClick={() => copy(contact.contact!.value)}>
-                    {copied ? t('vacancy.copied') : t('vacancy.copy')}
-                  </button>
-                  {contactHref(contact.contact) ? (
-                    <a
-                      className="btn btn--primary"
-                      href={contactHref(contact.contact) ?? undefined}
-                      target="_blank"
-                      rel="noreferrer"
+                {isTelegramContact(contact.contact) ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <button
+                      className="btn btn--tg btn--block"
+                      onClick={() => writeTelegram(contact.contact!)}
                     >
-                      {t('vacancy.open')}
-                    </a>
-                  ) : null}
-                </div>
+                      {t('contact.writeTelegram')}
+                    </button>
+                    <button className="btn btn--secondary" onClick={() => copy(contact.contact!.value)}>
+                      {copied ? t('vacancy.copied') : t('vacancy.copy')}
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="btn btn--secondary" onClick={() => copy(contact.contact!.value)}>
+                      {copied ? t('vacancy.copied') : t('vacancy.copy')}
+                    </button>
+                    {contactHref(contact.contact) ? (
+                      <a
+                        className="btn btn--tg"
+                        href={contactHref(contact.contact) ?? undefined}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {t('vacancy.open')}
+                      </a>
+                    ) : null}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="muted" style={{ padding: '4px 4px' }}>
                 {t('vacancy.noContact')}
               </div>
             )}
+
+            {/* Trust card + link to the full safety guide (replaces the old prepay note). */}
+            <div className="trust" style={{ marginTop: 16 }}>
+              <span className="trust__ico">
+                <ShieldIcon />
+              </span>
+              <div>
+                <div className="trust__t">{t('safety.trustCard.title')}</div>
+                <div className="trust__s">{t('safety.trustCard.body')}</div>
+              </div>
+            </div>
+            <button className="safe-cta" onClick={() => navigate('/safety')}>
+              {t('safety.link')} →
+            </button>
 
             <div className="report">
               {reported ? (

@@ -10,10 +10,18 @@ interface ChipSelectProps<T extends string> {
   onChange: (next: T[]) => void;
   /** Single-select behaves like radio chips (used by the ad wizard). */
   single?: boolean;
+  /** Extra class on the container (e.g. `chips--onb` for larger onboarding chips). */
+  className?: string;
 }
 
 /** Multi- (or single-) select pill group, themed via `.chip`. */
-export function ChipSelect<T extends string>({ options, value, onChange, single = false }: ChipSelectProps<T>) {
+export function ChipSelect<T extends string>({
+  options,
+  value,
+  onChange,
+  single = false,
+  className,
+}: ChipSelectProps<T>) {
   const toggle = (v: T): void => {
     if (single) {
       onChange(value[0] === v ? [] : [v]);
@@ -22,7 +30,7 @@ export function ChipSelect<T extends string>({ options, value, onChange, single 
     onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);
   };
   return (
-    <div className="chips">
+    <div className={`chips ${className ?? ''}`}>
       {options.map((o) => {
         const on = value.includes(o.value);
         return (

@@ -11,6 +11,8 @@ import type {
   Gender,
   Me,
   PlacementFee,
+  RawView,
+  ReferralView,
   SalaryPeriod,
   SourceKind,
   VacancyContact,
@@ -110,19 +112,25 @@ const REPOSTS = new Set(['v03', 'v11', 'v20']);
 const NO_HOUSING = new Set(['v06', 'v08', 'v16', 'v27']);
 
 const VISA_BY_WORK: Record<WorkType, VisaType[]> = {
-  factory: ['e9', 'h2'],
-  construction: ['h2', 'f_series'],
-  agriculture: ['e8', 'e9'],
-  fishery: ['e9', 'e8'],
-  food: ['e9', 'h2'],
-  logistics: ['h2', 'f_series'],
-  restaurant: ['h2', 'f_series'],
-  cleaning: ['h2', 'f_series'],
-  caregiving: ['h2', 'f_series'],
-  hotel: ['h2', 'e7'],
-  services: ['h2'],
+  factory: ['e9', 'h2', 'f4'],
+  construction: ['h2', 'f_series', 'f4'],
+  agriculture: ['e8', 'e9', 'f4'],
+  fishery: ['e9', 'e8', 'f4'],
+  food: ['e9', 'h2', 'f4'],
+  logistics: ['h2', 'f_series', 'f4'],
+  restaurant: ['h2', 'f_series', 'f6'],
+  cleaning: ['h2', 'f_series', 'f4'],
+  caregiving: ['h2', 'f_series', 'f6'],
+  hotel: ['h2', 'e7', 'f4'],
+  services: ['h2', 'f4', 'd10'],
   other: [],
 };
+
+/** Distinct source chats behind the scraped feed (mock stat for the aggregator). */
+export const MOCK_SOURCES_COUNT = 14;
+
+/** Offers bookmarked at session start (mock is_saved seed). */
+export const INITIAL_SAVED_IDS = ['v05', 'v12', 'v18'];
 
 const FEE_CYCLE: PlacementFee[] = ['free', 'free', 'unknown', 'paid'];
 
@@ -173,16 +181,64 @@ export function buildVacancies(): MockVacancy[] {
       has_meals,
       source_kind,
       repost: REPOSTS.has(r.id),
+      is_saved: INITIAL_SAVED_IDS.includes(r.id),
       // Kept internally so the reveal endpoint can serve it; the feed strips it.
       contact: r.contact ?? undefined,
     };
   }).sort((a, b) => b.posted_at.localeCompare(a.posted_at));
 }
 
+/** Unparsed listings (contacts already scrubbed) for the "Не разобрано" segment. */
+const RAW_MINS_AGO = [40, 220, 1500, 3300, 5000];
+export const RAW_ITEMS: RawView[] = [
+  {
+    id: 'r01',
+    text: 'СРОЧНО!!! на завод в Ансане нужны люди, зп хорошая, жильё есть. кто может выйти завтра пишите в лс. з/п договорная но не обидим 😉',
+    posted_at: new Date(Date.now() - RAW_MINS_AGO[0] * 60000).toISOString(),
+    age_hint: 0,
+    status_hint: 'unverified',
+    source_kind: 'raw',
+  },
+  {
+    id: 'r02',
+    text: 'ищем пару на ферму, теплицы клубника, проживание отдельный домик. подробности при звонке. только серьёзные',
+    posted_at: new Date(Date.now() - RAW_MINS_AGO[1] * 60000).toISOString(),
+    age_hint: 0,
+    status_hint: 'unverified',
+    source_kind: 'raw',
+  },
+  {
+    id: 'r03',
+    text: 'РАБОТА в Сеуле ресторан кухня и зал, график посменно, чаевые. можно без языка научим. писать сюда или на почту',
+    posted_at: new Date(Date.now() - RAW_MINS_AGO[2] * 60000).toISOString(),
+    age_hint: 1,
+    status_hint: 'unverified',
+    source_kind: 'raw',
+  },
+  {
+    id: 'r04',
+    text: 'Стройка Ульсан. бетон опалубка. оплата каждый день наличкой. нужны крепкие мужики с опытом. звоните не пишите',
+    posted_at: new Date(Date.now() - RAW_MINS_AGO[3] * 60000).toISOString(),
+    age_hint: 2,
+    status_hint: 'unverified',
+    source_kind: 'raw',
+  },
+  {
+    id: 'r05',
+    text: 'подработка выходного дня, погрузка-разгрузка, Пусан. оплата сразу. пишите кто рядом',
+    posted_at: null,
+    age_hint: 3,
+    status_hint: 'unverified',
+    source_kind: 'raw',
+  },
+];
+
 export const DEFAULT_ME: Me = {
   public_id: 'demo-user',
   lang: 'ru',
   terms: { required: true, version: '2026-07-01' },
+  points_total: 87,
+  onboarded: false,
   subscription: {
     city_slugs: [],
     work_types: [],
@@ -192,4 +248,17 @@ export const DEFAULT_ME: Me = {
     require_housing: null,
     require_meals: null,
   },
+};
+
+/** GET /referral demo payload (mock mode). Mirrors the agreed backend contract. */
+export const DEFAULT_REFERRAL: ReferralView = {
+  code: 'DEMO42',
+  link: 'https://t.me/korea_rabota_bot/app?startapp=DEMO42',
+  points_total: 87,
+  points_pending: 20,
+  levels: [
+    { level: 1, invited: 4, points: 40 },
+    { level: 2, invited: 7, points: 35 },
+    { level: 3, invited: 12, points: 12 },
+  ],
 };

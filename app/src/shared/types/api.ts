@@ -25,15 +25,22 @@ export type SalaryPeriod = 'hour' | 'day' | 'shift' | 'month' | 'piece';
 
 export type ContactKind = 'phone' | 'telegram' | 'kakao' | 'whatsapp' | 'other';
 
-/** Visa the offer accepts. 'any' = no restriction; f_series/d_series group families. */
+/**
+ * Visa the offer accepts. 'any' = no restriction. F/D families are split:
+ * f4/f6 are called out separately, f_series = F-2/F-5, d_series = D-2/D-4.
+ */
 export type VisaType =
   | 'any'
+  | 'f4'
   | 'e9'
   | 'e7'
   | 'e8'
   | 'h2'
+  | 'f6'
   | 'f_series'
+  | 'd10'
   | 'd_series'
+  | 'g1'
   | 'tourist'
   | 'other';
 
@@ -89,8 +96,26 @@ export interface VacancyView {
   source_kind: SourceKind;
   /** true when this offer was seen again (repost_count > 0) — "Повторное" badge. */
   repost: boolean;
+  /** Whether the current user has bookmarked this offer (present in all projections). */
+  is_saved: boolean;
   /** Present only on the detail/reveal endpoint, never in the feed. */
   contact?: VacancyContact;
+}
+
+/**
+ * GET /api/raw item — a listing the AI could not structure into a VacancyView.
+ * Contacts are scrubbed server-side; shown read-only with an "unverified" signal.
+ */
+export interface RawView {
+  id: string;
+  /** Scrubbed message text (contacts removed). */
+  text: string;
+  /** May be null when the source timestamp is unreliable. */
+  posted_at: string | null;
+  /** Coarse age in days, for display (used when posted_at is missing/unreliable). */
+  age_hint: number;
+  status_hint: 'unverified';
+  source_kind: 'raw';
 }
 
 /** Cursor page. `next_cursor === null` means no more items. */
@@ -144,6 +169,33 @@ export interface Me {
   lang: string;
   terms: TermsState;
   subscription: Subscription;
+  /** Loyalty points balance (referral program). */
+  points_total: number;
+  /** First-run onboarding completed (server-persisted, so it never repeats cross-device). */
+  onboarded: boolean;
+}
+
+/** One referral tier's counters (invited people + points earned from them). */
+export interface ReferralLevelStat {
+  level: number;
+  invited: number;
+  points: number;
+}
+
+/**
+ * GET /api/referral — the invite screen's data. `code`/`link` are minted by the
+ * backend (canonical Mini App deep link); scope is always derived server-side
+ * from the authenticated user, never from the request body.
+ */
+export interface ReferralView {
+  code: string;
+  link: string;
+  /** Confirmed loyalty balance (истина = confirmed ledger rows). */
+  points_total: number;
+  /** Points awaiting confirmation (anti-fraud delay); not yet spendable. */
+  points_pending: number;
+  /** Exactly three tiers, L1→L3. */
+  levels: ReferralLevelStat[];
 }
 
 /** POST /api/terms/accept response. */
@@ -215,4 +267,10 @@ export interface ReportInput {
 /** Generic success envelope: POST /api/vacancies/:id/report, POST /api/cooperation. */
 export interface OkResult {
   ok: true;
+}
+
+/** GET /api/stats — feed-wide totals for the aggregator bar. */
+export interface Stats {
+  vacancies_count: number;
+  sources_count: number;
 }
