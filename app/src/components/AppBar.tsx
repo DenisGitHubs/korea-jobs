@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useSettingsStore } from '../store/settingsStore';
 
 interface AppBarProps {
   title: string;
@@ -11,10 +10,11 @@ interface AppBarProps {
 
 export function AppBar({ title, onBack, left, right }: AppBarProps) {
   const { t } = useTranslation();
-  const isReal = useSettingsStore((s) => s.isReal);
-  // In a real Telegram client the native BackButton covers navigation, so we
-  // only render the in-app back control in the browser (mock).
-  const showBack = Boolean(onBack) && !isReal;
+  // Always render an explicit in-app "Назад" on any sub-screen that provides onBack.
+  // Previously this was shown only in the browser mock and real Telegram relied on the
+  // native BackButton — but that native control is not reliably visible on every client
+  // (users got stuck with no way back), so we always show a clear in-app back control.
+  const showBack = Boolean(onBack);
 
   return (
     <header className="appbar">
