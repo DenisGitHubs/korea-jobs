@@ -110,6 +110,15 @@ const USER_SOURCE = new Set(['v05', 'v09', 'v14', 'v26']);
 const REPOSTS = new Set(['v03', 'v11', 'v20']);
 /** Explicitly no housing (three-state false), otherwise derived from the text. */
 const NO_HOUSING = new Set(['v06', 'v08', 'v16', 'v27']);
+/**
+ * Listings WITHOUT a direct contact whose source channel is public: the detail
+ * screen offers "open in channel" instead of a contact. v09 has no contact and a
+ * public source (button shows); v19 also has no contact but no public source
+ * (falls back to "no contact"). Mirrors the backend `source_post_url` contract.
+ */
+const SOURCE_POST_URL: Record<string, string> = {
+  v09: 'https://t.me/korea_daegu_jobs/1842',
+};
 
 const VISA_BY_WORK: Record<WorkType, VisaType[]> = {
   factory: ['e9', 'h2', 'f4'],
@@ -182,6 +191,8 @@ export function buildVacancies(): MockVacancy[] {
       source_kind,
       repost: REPOSTS.has(r.id),
       is_saved: INITIAL_SAVED_IDS.includes(r.id),
+      // Only for listings without a direct contact (mirrors the backend rule).
+      source_post_url: r.contact === null ? (SOURCE_POST_URL[r.id] ?? null) : null,
       // Kept internally so the reveal endpoint can serve it; the feed strips it.
       contact: r.contact ?? undefined,
     };

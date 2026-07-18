@@ -21,6 +21,10 @@
 //     scrubContacts() here strips any that slip through (defense in depth).
 //   * /contact enforces a per-user daily cap (shared across scraped + user ads) and
 //     records the reveal, so one account can't scrape every employer's phone.
+//   * source_post_url (detail only): for a scraped offer with NO direct contact, fall back
+//     to the PUBLIC original-post link https://t.me/<sources.username>/<tg_message_id>. It
+//     leaks ONLY the source username (owner-approved) — never tg_chat_id / sender_id / any
+//     internal id — and is NOT gated by the reveal cap (a public post link, not a contact).
 // Dynamic filter fields are whitelisted; ids are validated before hitting the DB.
 //
 // Filter matching is PERMISSIVE for rare attributes (Sanya/Roma K2): a filter excludes
@@ -66,6 +70,11 @@ interface Row {
   // Only populated by the saved feed (savedUnionSql) — the bookmark's created_at, used as
   // the saved-list cursor. Absent (undefined) on the main feed / detail rows.
   saved_at?: string;
+  // Deep link to the ORIGINAL channel post, computed ONLY by the detail query
+  // (vacancyDetail, scraped branch) and ONLY when the offer has NO direct contact and its
+  // source channel has a public username. Absent (undefined) on the feed / saved / user-ad
+  // projections, where toView emits null. Never carries anything but the source username.
+  source_post_url?: string | null;
 }
 
 /** DB row -> VacancyView (feed/detail projection; never includes `contact`). */
@@ -91,6 +100,10 @@ function toView(r: Row) {
     source_kind: r.source_kind,
     repost: r.repost === true,
     is_saved: r.is_saved === true,
+    // Present in every projection for a stable shape; non-null ONLY on the detail endpoint
+    // for a contactless scraped offer whose source channel has a username (feed/saved/user
+    // ads leave the column unselected -> undefined -> null). Public link, no reveal gate.
+    source_post_url: r.source_post_url ?? null,
   };
 }
 
@@ -360,9 +373,22 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
              v.visa_types, v.placement_fee::text as placement_fee, v.has_housing, v.has_meals,
              'scraped'::text as source_kind, (v.repost_count > 0) as repost,
              (exists (select 1 from saved_vacancies s
-                      where s.user_id = ${auth.user.id}::uuid and s.vacancy_id = v.id)) as is_saved
+                      where s.user_id = ${auth.user.id}::uuid and s.vacancy_id = v.id)) as is_saved,
+             -- Fallback deep link to the original post ONLY when the offer carries no direct
+             -- contact and its source channel has a public username. Exposes the username in
+             -- the URL and nothing else (no tg_chat_id / sender_id / internal ids). tg_message_id
+             -- is NOT NULL by schema; the guard covers the LEFT JOIN miss (raw_message_id nulled).
+             case
+               when (v.contact_raw is null or v.contact_raw = '')
+                and src.username is not null and src.username <> ''
+                and rm.tg_message_id is not null
+               then 'https://t.me/' || src.username || '/' || rm.tg_message_id::text
+               else null
+             end as source_post_url
       from vacancies v
       left join cities c on c.id = v.city_id
+      left join raw_messages rm on rm.id = v.raw_message_id
+      left join sources src on src.id = v.source_id
       where v.id = ${id}::uuid and v.is_active and v.duplicate_of is null
       limit 1`) as unknown as Row[];
     if (vac[0]) return send(res, 200, toView(vac[0]));

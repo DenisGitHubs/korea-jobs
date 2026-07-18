@@ -149,6 +149,31 @@ export default function VacancyScreen() {
     });
   }, [id]);
 
+  // Open the source-channel post for listings with no direct contact. Reuses the
+  // exact same relative-path mechanism as writeTelegram: raw `web_app_open_tg_link`
+  // in the real client (bypasses the SDK's desktop window.open fallback, tma.js #712),
+  // plain t.me link in the browser. `path_full` is everything after `t.me`.
+  const openSourcePost = useCallback(
+    (url: string) => {
+      const pathFull = url.replace(/^https?:\/\/t\.me/i, '');
+      // Defensive: if it wasn't a t.me URL, open it as-is (backend guarantees t.me).
+      if (pathFull === url) {
+        window.open(url, '_blank');
+        return;
+      }
+      try {
+        if (isReal) {
+          postEvent('web_app_open_tg_link', { path_full: pathFull });
+        } else {
+          window.open(`https://t.me${pathFull}`, '_blank');
+        }
+      } catch {
+        window.open(`https://t.me${pathFull}`, '_blank');
+      }
+    },
+    [isReal],
+  );
+
   // Open a Telegram chat with the author, prefilling a message referencing this listing.
   // Real client: raw `web_app_open_tg_link` event (relative path) — bypasses the SDK's
   // desktop/macOS window.open fallback (tma.js #712). Browser: plain t.me link.
@@ -267,11 +292,26 @@ export default function VacancyScreen() {
               </div>
             </div>
 
-            {/* Contact is revealed only on explicit action (anti-harvesting). */}
+            {/* Contact is revealed only on explicit action (anti-harvesting).
+                No direct contact but a public source post → link to the original. */}
             {!vacancy.has_contact ? (
-              <div className="muted" style={{ padding: '4px 4px' }}>
-                {t('vacancy.noContact')}
-              </div>
+              vacancy.source_post_url ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <button
+                    className="btn btn--tg btn--block"
+                    onClick={() => openSourcePost(vacancy.source_post_url!)}
+                  >
+                    {t('vacancy.openInChannel')}
+                  </button>
+                  <div className="muted" style={{ padding: '0 4px' }}>
+                    {t('vacancy.openInChannelNote')}
+                  </div>
+                </div>
+              ) : (
+                <div className="muted" style={{ padding: '4px 4px' }}>
+                  {t('vacancy.noContact')}
+                </div>
+              )
             ) : contact.status === 'idle' ? (
               <button className="btn btn--primary btn--block" onClick={revealContact}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">

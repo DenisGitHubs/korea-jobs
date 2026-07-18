@@ -100,6 +100,12 @@ export interface VacancyView {
   is_saved: boolean;
   /** Present only on the detail/reveal endpoint, never in the feed. */
   contact?: VacancyContact;
+  /**
+   * Ready-made link to the original post in the source channel
+   * (`https://t.me/<channel>/<post_id>`). Present ONLY when the listing has NO
+   * direct contact AND the source channel has a public username; otherwise null.
+   */
+  source_post_url?: string | null;
 }
 
 /**

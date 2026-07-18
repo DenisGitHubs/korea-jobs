@@ -133,6 +133,8 @@ export const en: typeof ru = {
     copy: 'Copy',
     copied: 'Copied',
     open: 'Open',
+    openInChannel: 'Open the listing in the channel',
+    openInChannelNote: 'This opens the original in the source channel. We have not verified this listing.',
   },
   settings: {
     title: 'Settings',
