@@ -36,6 +36,36 @@ const RE_MSG_ID_MARKER = new RegExp(`${LB}(${MESSENGER})\\s*(?:id|айди)\\s*[
 const RE_MSG_SEP = new RegExp(`${LB}(${MESSENGER})[\\s:：#№.\\-—]+${MSG_ID}`, 'giu');
 const RE_PHONE_LABELLED = new RegExp(`${LB}(?:${PHONE_WORD})\\.?\\s*[:：]?\\s*\\+?\\d[\\d\\s().\\-]{3,}\\d`, 'giu');
 
+// --- Money vocabulary (rule #7 rescue only) --------------------------------------------------
+// A long digit run is normally treated as a phone (rule #7). But salary posts carry big amounts
+// ("2 500 000~3 000 000 вон", "월 2 500 000원") that are NOT contacts. We RESCUE such a run from
+// redaction ONLY when it carries a clear money signal. This never weakens phone detection: a run
+// that looks like a phone (leading '+' or a leading 0 — i.e. every Korean landline/mobile and
+// every international number) is redacted BEFORE money context is consulted, and the default for
+// anything ambiguous stays REDACT. So this can only keep amounts, never leak a number.
+
+// Currency/unit token that sits right AFTER an amount.
+const MONEY_UNIT =
+  '원|만원|만|천원|천만원|억원|억|₩|krw|won|вон|рубл\\w*|руб\\w*|₽|달러|dollars?|\\$|유로|евро|eur|usd';
+
+// Pay marker that sits right BEFORE an amount.
+const SALARY_MARKER =
+  '월급|시급|일급|주급|연봉|시간당|월|зарплат\\w*|оплат\\w*|в\\s*месяц|в\\s*час|в\\s*день|за\\s*час|за\\s*день|за\\s*месяц|per\\s*month|per\\s*hour|salary';
+
+// Money unit right after the number, tolerating a range tail ("N~M원", "2 500 000 - 3 000 000 вон").
+const RE_MONEY_AFTER = new RegExp(`^\\s*(?:[~\\-–—]\\s*[\\d\\s.,]*)?(?:${MONEY_UNIT})`, 'iu');
+// Salary marker immediately before the number ("월 2 500 000", "зарплата 2500000").
+const RE_MONEY_BEFORE = new RegExp(`(?:${SALARY_MARKER})[\\s:：]*$`, 'iu');
+// Generic long digit run (the former rule #7 catch-all pattern), now applied via a callback.
+const RE_GENERIC_PHONE = /\+?\d[\d\s().\-]{7,}\d/g;
+
+// True when a long digit run reads as money (a unit follows, or a pay marker precedes it).
+function isMoneyRun(match: string, offset: number, full: string): boolean {
+  const after = full.slice(offset + match.length, offset + match.length + 32);
+  const before = full.slice(Math.max(0, offset - 24), offset);
+  return RE_MONEY_AFTER.test(after) || RE_MONEY_BEFORE.test(before);
+}
+
 /**
  * Strip obvious contacts (chat links, e-mails, @handles, "<messenger> <id>", phones) from
  * free text. Heuristic and surgical: only contact-shaped constructs are redacted; ordinary
@@ -59,7 +89,15 @@ export function scrubContacts(text: string | null): string | null {
       .replace(/@[A-Za-z0-9_]{4,}/g, REDACT)
       // 6) Labelled phone — a number right after a phone word, even if short/oddly grouped.
       .replace(RE_PHONE_LABELLED, REDACT)
-      // 7) Generic phone: +? and a long run of digits/space/()-. (catch-all; unchanged).
-      .replace(/\+?\d[\d\s().-]{7,}\d/g, REDACT)
+      // 7) Generic phone: a long run of digits/space/()-.  Formerly redacted EVERY such run,
+      //    which also ate big salary amounts ("2 500 000~3 000 000 вон" -> "[скрыто]~[скрыто]").
+      //    Now: still redact anything phone-shaped (leading '+' or a leading 0 — every Korean and
+      //    international number; labelled numbers are already gone via #6), but KEEP a run that
+      //    carries a clear money signal. Default is REDACT, so this only rescues amounts.
+      .replace(RE_GENERIC_PHONE, (m: string, offset: number, full: string) => {
+        const digits = m.replace(/\D/g, '');
+        if (m.includes('+') || digits.startsWith('0')) return REDACT; // phone-shaped
+        return isMoneyRun(m, offset, full) ? m : REDACT;
+      })
   );
 }
