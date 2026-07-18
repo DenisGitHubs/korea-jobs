@@ -76,6 +76,35 @@ const SPAM_PATTERNS: RegExp[] = [
   /обнал\w+|\bдроп(ы|ов|ами)?\b|аренд\w*\s+карт/i,
   /листовк/i,
   /\bbybit\b|трейдинг/i,
+  // --- extended 2026-07-18, data-driven from the reject corpus (Roma). Each pattern was
+  // validated against 392 CONFIRMED real vacancies with ZERO false positives; they only
+  // fire on obvious non-jobs. NOTE: JS \w and \b are ASCII-only, so around Cyrillic we use
+  // explicit [а-яё] classes / plain substrings instead (a \b before Cyrillic never matches).
+  // USDT written in Cyrillic or mixed alphabets slips past the Latin \busdt\b above:
+  // "ЮСДТ", "ЮСД(Т)", "ЮСД[Т]", "USДТ", "USDТ" — only ever crypto exchange, never a job.
+  /юсдт|юсд\s*[([]\s*т|усдт|us[dд]т/i,
+  // Loan-shark "financial help" spam. First-person "помогу" (the lender's voice) anchored to
+  // money nouns — a real vacancy that offers help "с жильём / с оформлением / с визой" (noun
+  // NOT in this set) and the employer voice "поможем" are deliberately left untouched.
+  /помогу\s+с\s+(деньг|финанс|кредит|долг)/i,
+  /закро[а-яё]*\s+(вам\s+)?долг|дам\s+в\s+долг|деньги\s+в\s+долг/i,
+  // Airline-ticket agency ads (Seoul<->Tashkent seat sales). Matches the ticket-selling
+  // service word only; bare "авиабилет" is left alone (a job may pay for a flight).
+  /aviakassa|авиакасс/i,
+  // Crypto-trading recruiting ("набор в Binance", "работа в бинанс").
+  /\bbinance\b|бинанс/i,
+  // Paid micro-task / listing-app promo ("листать вакансии ... задания в каждом городе").
+  /листать\s+вакансии/i,
+  // Money-for-nothing bait links.
+  /(хочешь\s+денег|ищешь\s+деньги)\s*[?!]|залетай\s+сюда/i,
+  // Recruiter self-promo with no concrete offer ("Работа нужна? Пиши на @…").
+  /работа\s+нужна\s*\?\s*пиш/i,
+  // Channel-join captcha system messages ("…подтвердить, что ты не бот…").
+  /что\s+ты\s+не\s+бот|что\s+вы\s+не\s+робот/i,
+  // SMM follower-selling service ("Instagram obunachi xizmati", "накрутка подписчиков").
+  /\bobunachi\b|накрутк[а-яё]*\s+(подписчик|лайк)/i,
+  // Cross-border money-transfer service (Uzbek "pul chiqarish", "ichki o'tkazma").
+  /pul\s+chiqar|ichki\s+o'?tkazm/i,
 ];
 function looksLikeSpam(text: string): boolean {
   const t = text.toLowerCase();
@@ -144,7 +173,7 @@ export async function runParse(): Promise<ParseResult> {
 
   // 2) Active cities → closed enum + prompt context; slug→id + slug→city map.
   const cityRows = await sql`
-    select id, slug, name, region_slug from cities where is_active = true order by sort_order`;
+    select id, slug, name, region_slug from cities where is_active = true order by sort_order, slug`;
   const cities: CityRef[] = cityRows.map((r) => ({
     slug: r.slug as string,
     name: r.name as { ru: string; ko: string; en: string },
@@ -180,8 +209,12 @@ export async function runParse(): Promise<ParseResult> {
     const resp = await client.messages.create({
       model,
       max_tokens: 16000,
-      // Stable city list first → cacheable prefix (harmless if under the min).
-      system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
+      // The system block is the STABLE cacheable prefix (city list + extraction contract,
+      // now ≥4096 tokens so haiku actually caches it — under the min the breakpoint is a
+      // silent no-op). ttl:'1h' keeps the prefix warm across a whole cron sweep instead of
+      // the default 5m. cache_control stays on the system block ONLY; the per-batch messages
+      // below are volatile and MUST come after it so they never enter the cached prefix.
+      system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } }],
       messages: [{ role: 'user', content: JSON.stringify({ messages: inputItems }) }],
     } as Anthropic.MessageCreateParamsNonStreaming);
 

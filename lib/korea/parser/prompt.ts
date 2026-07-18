@@ -205,6 +205,26 @@ ${cityLines}
     * 광주 with 전라 / 호남 / south-west context (the metropolitan city) -> gwangju
     * neither context clear -> city_slug=null.
 
+EXTRA SPELLING VARIANTS (in ADDITION to the ru/ko/en already in the CITY list — map these easy-to-miss variants to the slug on the right; the CITY list stays the source of truth):
+  Бусан / Pusan -> busan;  Инчон -> incheon;  Дэгу -> daegu;  Дэджон / Тэчжон -> daejeon;
+  Пёнтэк / Пхёнтэк -> pyeongtaek;  Пучон -> bucheon;  Songnam -> seongnam;  Йонъин -> yongin;
+  Кимпо -> gimpo;  Кимхе -> gimhae;  Чанвон -> changwon;  Хвасонг -> hwaseong.
+- EASILY CONFUSED — different cities in different provinces, do NOT merge them:
+  Чхонан / Cheonan / 천안 -> cheonan (충남 / Chungnam)
+  Асан / Asan / 아산 -> asan (충남 / Chungnam, right next to Cheonan)
+  Чхонджу / Cheongju / 청주 -> cheongju (충북 / Chungbuk)
+  Чонджу / Jeonju / 전주 -> jeonju (전북 / Jeonbuk)
+  -> a bare Russian "Чонджу/Чхонджу" is ambiguous between cheongju(청주) and jeonju(전주): use 청주·충북 vs 전주·전북 context; if still unclear, city_slug=null.
+- INDUSTRIAL-ZONE HINTS (a well-known 산단 / 공단 pins the city even when the city name is absent): 남동공단 -> incheon; 시화·반월 산단 -> ansan; 향남·봉담 -> hwaseong; 성환·직산 -> cheonan.
+
+EXTRA EDGE-CASES (apply after the city rules; keep them consistent with the FIELDS rules below):
+- One input item = ONE output item, even if the text lists several jobs: return the single dominant / most concrete offer; never split one message into many.
+- "муж+жена" / "семейная пара" / "оила" / "couple" -> gender=couple. "только девушки"/"аёл" -> female; "парни"/"эркак" -> male; otherwise any.
+- Transport is NOT housing: a shuttle / «출퇴근 버스» / «전세버스 제공» / «развозка» does NOT set has_housing.
+- «무료 숙식» / «숙식제공» -> has_housing=true AND has_meals=true. «숙소제공 / жильё есть» -> housing only. «식사제공 / 중식제공 / питание» -> meals only.
+- «수수료 없음» / «소개비 무료» / «без комиссии» -> placement_fee=free; «수수료 있음» / «소개비 OO만원» / «депозит агентству» -> paid; silence -> unknown.
+- A forward/repost that still carries a real employer contact IS a vacancy — extract it normally; duplicate collapsing happens server-side, not here.
+
 FIELDS:
 - work_type: best of the enum (factory, construction, agriculture, fishery, food, logistics, restaurant, cleaning, caregiving, hotel, services, other).
 - gender: any/male/female/couple (who the offer is for).
@@ -250,5 +270,19 @@ Field rules (use JSON null — NOT empty strings — for unknown optional fields
 - dedup_extra: string or null.
 - visa_types: array with a subset of ${list(VISA_TYPES)}; [] when not mentioned.
 - placement_fee: one of ${list(PLACEMENT_FEES)}.
-- has_housing / has_meals: boolean or null.`;
+- has_housing / has_meals: boolean or null.
+
+WORKED EXAMPLES (input item -> the exact item you must return; study the field choices, do NOT copy these ids or values):
+IN  {"id":"ex1","text":"안산 부품 공장 상용직 모집. Завод автозапчастей в Ансане, конвейер. Общежитие + питание бесплатно. З/п 3.500.000 вон/мес. F-4 가능. 010-1234-5678","source_hint":"Работа Ансан вакансии"}
+OUT {"id":"ex1","is_vacancy":true,"confidence":0.96,"reject_reason":null,"lang":"ru","city_slug":"ansan","region_slug":null,"work_type":"factory","gender":"any","title":"Завод автозапчастей, конвейер","employer":null,"contact_raw":"010-1234-5678","contact_kind":"phone","dedup_extra":null,"visa_types":["f4"],"placement_fee":"unknown","has_housing":true,"has_meals":true}
+   (free MEALS -> has_meals=true; placement_fee stays 'unknown' because no AGENCY fee is mentioned; the won amount is left inside the text, never extracted; city known -> region_slug=null.)
+IN  {"id":"ex2","text":"Работа нужна? Пиши в личку — поможем с трудоустройством по всей Корее, огромная база вакансий! @jobs_agent"}
+OUT {"id":"ex2","is_vacancy":false,"confidence":0.05,"reject_reason":"agency_promo","lang":"ru","city_slug":null,"region_slug":null,"work_type":"other","gender":"any","title":null,"employer":null,"contact_raw":null,"contact_kind":null,"dedup_extra":null,"visa_types":[],"placement_fee":"unknown","has_housing":null,"has_meals":null}
+   (recruiter self-promo with no concrete opening -> agency_promo, NOT a vacancy, even though it says "работа" and gives a contact.)
+IN  {"id":"ex3","text":"Ищу работу на заводе, виза F-4, опыт 3 года, живу в Пхёнтхэке, готов к переезду"}
+OUT {"id":"ex3","is_vacancy":false,"confidence":0.06,"reject_reason":"resume_seeking_job","lang":"ru","city_slug":null,"region_slug":null,"work_type":"other","gender":"any","title":null,"employer":null,"contact_raw":null,"contact_kind":null,"dedup_extra":null,"visa_types":[],"placement_fee":"unknown","has_housing":null,"has_meals":null}
+   (a WORKER looking for a job is not an offer -> resume_seeking_job, regardless of the visa/city details in the text.)
+IN  {"id":"ex4","text":"광주 경기도 물류센터 상하차 구인. 주야 가능, 당일지급. 남녀 모두 환영."}
+OUT {"id":"ex4","is_vacancy":true,"confidence":0.9,"reject_reason":null,"lang":"ko","city_slug":"gwangju_gyeonggi","region_slug":null,"work_type":"logistics","gender":"any","title":"물류센터 상하차 구인","employer":null,"contact_raw":null,"contact_kind":null,"dedup_extra":"gwangju gyeonggi logistics","visa_types":[],"placement_fee":"unknown","has_housing":null,"has_meals":null}
+   (광주 + 경기도 context -> gwangju_gyeonggi, NOT the metropolitan gwangju; no contact at all -> fill dedup_extra with a 2-3 token core. A province-only post instead would be city_slug=null with region_slug set.)`;
 }
