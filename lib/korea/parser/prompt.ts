@@ -214,6 +214,7 @@ FIELDS:
 - dedup_extra: ONLY when there is NO contact at all — a 2-3 token normalized core (e.g. "ansan factory autoparts") to tell otherwise-identical no-contact offers apart.
 - lang: ISO 639-1 of the message.
 - SALARY: do NOT extract or interpret pay in any way. There are no salary fields. The pay figure stays inside the original message; never convert currency/units or output a number.
+- CURRENCY: these are jobs in South Korea, so the DEFAULT currency for ANY money figure is the Korean won (₩ / KRW). If a currency is ever attached to or rendered next to a number (e.g. when you write the title), treat a bare amount as won. Use rubles (₽) ONLY when the message text EXPLICITLY says rubles — a "₽" sign, or "руб" / "рубл" / "рублей". Never assume or invent any other currency. This does NOT re-enable salary extraction: still never convert currencies/units and keep the amount exactly as written.
 
 ATTRIBUTES — fill ONLY when the message EXPLICITLY states them; NEVER guess:
 - visa_types: array of accepted visas, ONLY those the offer EXPLICITLY names; [] when visas are not mentioned. Use 'any' only if the offer explicitly says any visa is fine. Recognize:

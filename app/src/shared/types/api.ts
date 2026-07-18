@@ -118,6 +118,17 @@ export interface RawView {
   source_kind: 'raw';
 }
 
+/**
+ * POST /api/raw/reveal — the ORIGINAL (unfiltered) text of an unverified listing,
+ * with the contact inline in free form. Revealed only on explicit user action and
+ * subject to the shared daily reveal limit (same budget as vacancy contacts).
+ */
+export interface RawRevealView {
+  id: string;
+  /** Original message text; the contact is somewhere inside it, unstructured. */
+  text: string;
+}
+
 /** Cursor page. `next_cursor === null` means no more items. */
 export interface Page<T> {
   items: T[];

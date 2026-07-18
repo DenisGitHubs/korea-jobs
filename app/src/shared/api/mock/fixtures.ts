@@ -233,6 +233,19 @@ export const RAW_ITEMS: RawView[] = [
   },
 ];
 
+/**
+ * POST /raw/reveal payloads (mock mode): the ORIGINAL text of each unverified
+ * listing with the contact inline, in free form — exactly what the real reveal
+ * endpoint returns (the feed text above has the contact scrubbed).
+ */
+export const RAW_REVEALS: Record<string, string> = {
+  r01: 'СРОЧНО!!! на завод в Ансане нужны люди, зп хорошая, жильё есть. кто может выйти завтра пишите в лс. з/п договорная но не обидим 😉\nТел: 010-2233-4455, KakaoTalk: ansan_zavod',
+  r02: 'ищем пару на ферму, теплицы клубника, проживание отдельный домик. подробности при звонке. только серьёзные\nЗвонить: 010-7788-1122 (Виктор)',
+  r03: 'РАБОТА в Сеуле ресторан кухня и зал, график посменно, чаевые. можно без языка научим. писать сюда или на почту\nTelegram @seoul_rest_job либо тел 010-3344-5566',
+  r04: 'Стройка Ульсан. бетон опалубка. оплата каждый день наличкой. нужны крепкие мужики с опытом. звоните не пишите\nБригадир: 010-9988-7766',
+  r05: 'подработка выходного дня, погрузка-разгрузка, Пусан. оплата сразу. пишите кто рядом\nTelegram: @busan_weekend',
+};
+
 export const DEFAULT_ME: Me = {
   public_id: 'demo-user',
   lang: 'ru',

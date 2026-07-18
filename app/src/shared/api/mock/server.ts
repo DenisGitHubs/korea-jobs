@@ -8,6 +8,7 @@ import type {
   AdInput,
   Me,
   Page,
+  RawRevealView,
   RawView,
   Subscription,
   UserAd,
@@ -23,6 +24,7 @@ import {
   INITIAL_SAVED_IDS,
   MOCK_SOURCES_COUNT,
   RAW_ITEMS,
+  RAW_REVEALS,
   buildVacancies,
   type MockVacancy,
 } from './fixtures';
@@ -217,6 +219,18 @@ export async function handleMock(method: string, path: string, body?: unknown): 
     const next_cursor = cursor + PAGE_SIZE < RAW_ITEMS.length ? String(cursor + PAGE_SIZE) : null;
     const page: Page<RawView> = { items: slice, next_cursor };
     return page;
+  }
+
+  // POST /raw/reveal — reveal the original (unfiltered) text with the contact inline.
+  // Idempotent: re-revealing the same id keeps returning 200 (no limit accounting here).
+  if (method === 'POST' && p === '/raw/reveal') {
+    const b = (body ?? {}) as { raw_id?: unknown };
+    const id = typeof b.raw_id === 'string' ? b.raw_id.trim() : '';
+    if (!id) return fail(400, 'bad_request');
+    const text = RAW_REVEALS[id];
+    if (!text) return fail(404, 'not_found');
+    const view: RawRevealView = { id, text };
+    return view;
   }
 
   if (method === 'GET' && p === '/me') {

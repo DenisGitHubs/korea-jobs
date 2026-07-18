@@ -39,7 +39,7 @@ export const en: typeof ru = {
     unsave: 'Remove from saved',
     savedEmptyTitle: 'Nothing here yet',
     savedEmptySub: 'Tap ♥ on offers you like — they will show up here so you can come back to them.',
-    rawEmptyTitle: 'All parsed',
+    rawEmptyTitle: 'All verified',
     rawEmptySub: 'There are no unverified listings right now.',
     inviteBannerTitle: 'Invite friends — earn points',
     inviteBannerCta: 'Invite',
@@ -325,8 +325,15 @@ export const en: typeof ru = {
   },
   raw: {
     badge: 'Unverified',
-    noteTitle: 'AI could not parse these',
-    note: 'These listings could not be verified by AI — read carefully, contacts are hidden.',
+    noteTitle: 'AI could not verify these',
+    note: 'You can reveal the contact, but the listing is unverified — be careful.',
+    showContact: 'Show contact',
+    loading: 'Loading…',
+    warning:
+      '⚠️ This listing is unverified — the details may be inaccurate. Never send money upfront; verify the employer.',
+    errorLimit: 'Daily contact-reveal limit reached. Please try again tomorrow.',
+    errorGone: 'This listing is no longer available.',
+    errorGeneric: 'Could not reveal the contact. Please try again.',
   },
   safety: {
     title: 'How to avoid scams',

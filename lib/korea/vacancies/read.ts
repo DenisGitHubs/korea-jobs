@@ -389,12 +389,15 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
   }
 }
 
-/** Total contact reveals by a user in the last 24h, across scraped + user ads. */
-async function reveals24h(sql: ReturnType<typeof getSql>, userId: string): Promise<number> {
+/** Total contact reveals by a user in the last 24h — ONE shared budget across scraped
+ *  vacancies (contact_reveals) + user ads (ad_contact_reveals) + UNVERIFIED raw reveals
+ *  (raw_contact_reveals, see raw/reveal.ts). Exported so the raw reveal counts the SAME cap. */
+export async function reveals24h(sql: ReturnType<typeof getSql>, userId: string): Promise<number> {
   const r = (await sql`
     select (
-      (select count(*) from contact_reveals    where user_id = ${userId}::uuid and revealed_at > now() - interval '24 hours') +
-      (select count(*) from ad_contact_reveals where user_id = ${userId}::uuid and revealed_at > now() - interval '24 hours')
+      (select count(*) from contact_reveals     where user_id = ${userId}::uuid and revealed_at > now() - interval '24 hours') +
+      (select count(*) from ad_contact_reveals  where user_id = ${userId}::uuid and revealed_at > now() - interval '24 hours') +
+      (select count(*) from raw_contact_reveals where user_id = ${userId}::uuid and revealed_at > now() - interval '24 hours')
     )::int as c`) as unknown as { c: number }[];
   return (r[0]?.c as number | undefined) ?? 0;
 }

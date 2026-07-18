@@ -34,6 +34,7 @@ import {
 } from '../lib/korea/vacancies/read.js';
 import { statsGet } from '../lib/korea/stats/read.js';
 import { rawFeed } from '../lib/korea/raw/read.js';
+import { rawReveal } from '../lib/korea/raw/reveal.js';
 import { vacancyReport } from '../lib/korea/reports/rw.js';
 import { vacancyTakedown } from '../lib/korea/vacancies/moderate.js';
 import { meGet } from '../lib/korea/users/me.js';
@@ -67,6 +68,9 @@ const ROUTES: Route[] = [
   // turn into a vacancy (tma auth, no scope). Literal single segment — declared before any
   // parametric route so it can never be shadowed. Text is scrubbed; NO contact reveal.
   { segments: ['raw'], handler: rawFeed },
+  // Reveal ONE unverified raw message's ORIGINAL text on explicit action (POST, body {raw_id}):
+  // shared daily reveal cap + audit; source never leaks. Length-2 literal — no ':id' collision.
+  { segments: ['raw', 'reveal'], handler: rawReveal },
   // The caller's own bookmarks ("Сохранённые") as a feed page (tma auth, scope=self).
   { segments: ['saved'], handler: savedFeed },
   // Literal 'count' MUST precede the parametric ':id', else /vacancies/count would match

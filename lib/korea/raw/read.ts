@@ -19,9 +19,12 @@
 //     "<messenger> <id>", phones, t.me·wa.me·kakao links). It is HEURISTIC, not a proof:
 //     an oddly formatted contact can still slip through, so this is defense-in-depth only,
 //     NOT a guarantee that no contact ever reaches the client.
-//   * There is NO reveal path for raw messages: the content is UNVERIFIED, so we never
-//     expose a stored contact for it (no /contact sibling, no contact field, no has_contact,
-//     no employer) — structurally FEWER fields than the feed.
+//   * This GET stream exposes NO contact/has_contact/employer and ALWAYS the scrubbed text —
+//     structurally FEWER fields than the feed. A reveal path DOES exist but is a separate,
+//     GATED sibling (POST /api/raw/reveal, raw/reveal.ts): on explicit user action it returns
+//     the ORIGINAL (non-scrubbed) text of ONE whitelisted raw row, under the SHARED per-user
+//     daily reveal cap + an audit row (raw_contact_reveals), and it NEVER exposes the source
+//     (only the text). It changes nothing here — this feed stays scrubbed and contact-free.
 //   * CAVEAT — do not read this stream as "safer" than the feed on the contact axis. The raw
 //     text is cleaned ONLY by that regex scrub; unlike the feed's description it did NOT pass
 //     the parser (which is instructed to keep contacts out of the text). So on the

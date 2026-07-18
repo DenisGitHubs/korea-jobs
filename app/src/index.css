@@ -2378,6 +2378,49 @@ a {
   color: var(--kj-hint);
 }
 
+/* ── Raw contact reveal (unverified listing) ───────────────────────────────*/
+.raw-reveal__btn {
+  margin-top: 12px;
+}
+
+.raw-reveal {
+  margin-top: 12px;
+}
+
+.raw-reveal__text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--kj-text);
+  background: var(--kj-secondary-bg);
+  border-radius: var(--kj-radius-sm);
+  padding: 12px 14px;
+}
+
+.raw-reveal__warn {
+  margin-top: 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: #8a5200;
+  background: color-mix(in srgb, #b26a00 15%, var(--kj-section-bg));
+  border-radius: var(--kj-radius-sm);
+  padding: 10px 12px;
+}
+
+[data-theme='dark'] .raw-reveal__warn {
+  color: #f0b866;
+  background: color-mix(in srgb, #f0a848 12%, var(--kj-section-bg));
+}
+
+.raw-reveal__error {
+  margin-top: 8px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--kj-hint);
+}
+
 /* ── Trust card (vacancy + safety screens) ─────────────────────────────────*/
 .trust {
   display: flex;

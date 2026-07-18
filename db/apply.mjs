@@ -70,6 +70,12 @@ const files = [
   // reject_reason (0003_moderation) — both come after the 0003 block above.
   'draft_0006_saved.sql',
   'draft_0007_raw_read.sql',
+
+  // Raw reveal (0008) — ADDITIVE. raw_contact_reveals audits UNVERIFIED-message reveals and
+  // feeds the SHARED daily reveal cap (reveals24h counts contact_reveals + ad_contact_reveals
+  // + this). Depends on users + raw_messages (0001). MUST be applied before the reveal code
+  // goes live: reveals24h() is also used by GET /api/vacancies/:id/contact.
+  'draft_0008_raw_reveal.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

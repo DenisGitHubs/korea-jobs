@@ -11,6 +11,7 @@ import type {
   CooperationInput,
   Me,
   Page,
+  RawRevealView,
   RawView,
   ReferralView,
   Stats,
@@ -125,6 +126,14 @@ export const api = {
 
   /** GET /raw — unparsed listings (contacts scrubbed), cursor-paginated. */
   raw: (q: { cursor?: string } = {}) => request<Page<RawView>>('GET', `/raw${qs({ cursor: q.cursor })}`),
+
+  /**
+   * POST /raw/reveal — reveal the ORIGINAL text (contact inline) of an unverified
+   * listing. Spends from the shared daily reveal budget (429 rate_limited when
+   * exhausted); idempotent — re-revealing the same raw_id never re-charges it.
+   */
+  rawReveal: (rawId: string) =>
+    request<RawRevealView>('POST', '/raw/reveal', { body: { raw_id: rawId } }),
 
   /** POST /vacancies/:id/save — bookmark (idempotent). */
   saveVacancy: (id: string) =>
