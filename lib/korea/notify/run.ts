@@ -88,7 +88,7 @@ export async function runNotify(): Promise<NotifyResult> {
       select u.id as user_id, u.telegram_id
       from subscriptions s join users u on u.id = s.user_id
       where s.notify and u.allows_write_to_pm and not u.is_blocked
-        and s.city_ids @> array[${v.city_id}::uuid]
+        and (cardinality(s.city_ids) = 0 or s.city_ids @> array[${v.city_id}::uuid])
         and (s.work_types is null or cardinality(s.work_types) = 0 or ${v.work_type}::work_type = any(s.work_types))
         and (
           cardinality(s.visa_types) = 0
