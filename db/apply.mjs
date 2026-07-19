@@ -102,6 +102,14 @@ const files = [
   // their own ad; the feed re-floats a bumped ad via greatest(created_at, bumped_at). Depends on
   // user_ads (draft_0003_user_ads.sql) and config (draft_0001_init.sql).
   'draft_0012_my_ads.sql',
+
+  // Reveal FK decouple (0013) — ADDITIVE / idempotent. Turns raw_contact_reveals.raw_id from
+  // ON DELETE CASCADE into ON DELETE SET NULL (and swaps the composite PK for a UNIQUE on the
+  // same columns so raw_id can be nullable). Reason: the 24h raw purge (cleanup step 5) would
+  // otherwise CASCADE-delete reveal audit rows and let reveals24h() under-count the shared daily
+  // cap. Now a purged raw leaves its audit row alive (raw_id nulled); the cap counts by
+  // (user_id, revealed_at) so it stays exact. Depends on raw_contact_reveals (draft_0008_raw_reveal.sql).
+  'draft_0013_reveal_fk.sql',
 ];
 
 const pool = new Pool({ connectionString: url });
