@@ -117,7 +117,7 @@ export async function runParse(): Promise<ParseResult> {
   // 1) Oldest pending raw messages WITHIN the freshness window. Join the source so we
   // can pass the channel title/notes to the model as a per-item city hint (source_hint).
   const pendingAll = await sql`
-    select r.id, r.text, r.source_id, r.posted_at,
+    select r.id, r.text, r.source_id, r.posted_at, r.sender_username,
            s.title as source_title, s.notes as source_notes
     from raw_messages r
     left join sources s on s.id = r.source_id
@@ -381,7 +381,28 @@ export async function runParse(): Promise<ParseResult> {
     // mid-number (truncateContacts, shared with ads/input.ts). The SAME value feeds the
     // block-check hash below AND the insert so the prospective content_hash matches what is
     // stored (and matches contact_normalized, which keys on the FIRST contact — see 0014).
-    const contactRaw = it.contact_raw ? truncateContacts(it.contact_raw, 300) : null;
+    let contactRaw = it.contact_raw ? truncateContacts(it.contact_raw, 300) : null;
+    let contactKind = it.contact_kind ?? null;
+
+    // SENDER-USERNAME FALLBACK (owner rule 2026-07-19). Many real postings say only
+    // "подробности в ЛС" with no contact in the TEXT — but the collector stores the poster's
+    // @username (raw_messages.sender_username, written by ingest/handler.ts). A LIVE user who
+    // posted publicly IS reachable at that handle, so surface it as the telegram contact instead
+    // of leaving the card contact-less ("Открыть в канале"). Fires ONLY when the AI extracted no
+    // contact — it never overrides a real one the model found in the text.
+    // Guards: (a) skip bot authors (handle ends with 'bot', case-insensitive) — a channel's bot
+    // does not answer DMs, so those keep the channel fallback; (b) this SAME value feeds the
+    // block-check hash AND the insert below (one value → prospective content_hash == stored,
+    // invariant held); (c) description is untouched (scrub stays as-is). Dedup: the fallback
+    // fires ONLY on no-contact rows, which is EXACTLY where the AI fills dedup_extra — so two
+    // different offers from one author stay distinct on dedup_extra, and it also REMOVES the old
+    // cross-author 'nocontact' collision (different authors used to share the 'nocontact' bucket).
+    const senderUsername = ((row.sender_username as string | null) ?? '').trim().replace(/^@+/, '');
+    const hasAiContact = contactRaw != null && contactRaw.trim() !== '';
+    if (!hasAiContact && senderUsername !== '' && !senderUsername.toLowerCase().endsWith('bot')) {
+      contactRaw = '@' + senderUsername;
+      contactKind = 'telegram';
+    }
     // Owner rule (2026-07-15): description = the FULL original message text minus contacts
     // (the AI no longer summarizes it, and no longer interprets salary — salary now lives
     // inside this text). scrubContacts strips phones/@handles/t.me·wa.me·kakao links.
@@ -431,7 +452,7 @@ export async function runParse(): Promise<ParseResult> {
         ) values (
           ${cityId}::uuid, ${regionSlug}, ${it.work_type}::work_type, ${it.gender}::gender, ${it.lang ?? null},
           ${title}, ${description}, ${it.employer ?? null},
-          ${contactRaw}, ${it.contact_kind ?? null}::contact_kind,
+          ${contactRaw}, ${contactKind}::contact_kind,
           ${visaTypes}::visa_type[], ${placementFee}::placement_fee, ${hasHousing}, ${hasMeals},
           ${row.source_id}::uuid, ${rawId}::uuid, ${row.posted_at ?? null}, ${it.dedup_extra ?? null}
         )
