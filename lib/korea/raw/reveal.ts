@@ -52,7 +52,9 @@ export async function rawReveal(req: ReqLike, res: ResLike): Promise<void> {
     const cap = await getConfigNumber('contact_reveal_daily_cap', 50);
 
     // Whitelist EXACTLY like GET /api/raw: pending ∪ skipped+low_confidence, not yet a
-    // vacancy, inside the freshness window. Source columns are NEVER selected (007).
+    // vacancy, inside the freshness window, and NOT a copy of an already-published vacancy
+    // (the same already-published guard as the list — else a delisted row would stay
+    // revealable by a remembered id; Оля, gate 19.07). Source columns NEVER selected (007).
     const rows = (await sql`
       select id, text
       from raw_messages
@@ -60,6 +62,10 @@ export async function rawReveal(req: ReqLike, res: ResLike): Promise<void> {
         and vacancy_id is null
         and (status = 'pending' or (status = 'skipped' and reject_reason = 'low_confidence'))
         and fetched_at > now() - make_interval(days => ${maxAge})
+        and (text_hash is null or not exists (
+          select 1 from raw_messages p
+          where p.text_hash = raw_messages.text_hash
+            and p.status = 'parsed' and p.vacancy_id is not null))
       limit 1`) as unknown as { id: string; text: string | null }[];
     const row = rows[0];
     // Not in the UNVERIFIED whitelist (foreign / already a vacancy / junk / aged out) -> 404.

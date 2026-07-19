@@ -20,6 +20,7 @@ import { scrubContacts } from '../core/scrub.js';
 import { getConfigNumber, getConfigString } from '../config.js';
 import { textHash } from './texthash.js';
 import { extractJson } from './extract-json.js';
+import { looksLikeSpam } from './spamfilter.js';
 import {
   buildSystemPrompt,
   VISA_TYPES,
@@ -46,54 +47,9 @@ function cleanTriState(v: unknown): boolean | null {
 }
 
 // Cheap, high-precision spam pre-filter — obvious non-jobs (crypto exchange, money-mule,
-// leaflet gigs) are the bulk of the raw stream. CONSERVATIVE by design (precision >>
-// recall): only near-certain spam matches; anything borderline still goes to the model.
-// Rows are marked reject_reason='spam_prefilter' so the pattern set is tunable from data.
-const SPAM_PATTERNS: RegExp[] = [
-  /\busdt\b|\busdc\b|bitcoin|биткоин/i,
-  /крипт[оаыу]?\b|криптовалют|криптоактив|криптообмен/i,
-  /обмен\s+(валют|usdt|usd|крипт|наличк|денег)/i,
-  /перестановк\w*\s+средств/i,
-  /inside\s*exchange|exchange\s*express|otc[- ]?сервис/i,
-  /доплат\w*\s+за\s+(usdt|крипт)/i,
-  /вон[ыа]?\s*(на|→|->)\s*рубл|рубл\w*\s*(на|→|->)\s*вон/i,
-  /обнал\w+|\bдроп(ы|ов|ами)?\b|аренд\w*\s+карт/i,
-  /листовк/i,
-  /\bbybit\b|трейдинг/i,
-  // --- extended 2026-07-18, data-driven from the reject corpus (Roma). Each pattern was
-  // validated against 392 CONFIRMED real vacancies with ZERO false positives; they only
-  // fire on obvious non-jobs. NOTE: JS \w and \b are ASCII-only, so around Cyrillic we use
-  // explicit [а-яё] classes / plain substrings instead (a \b before Cyrillic never matches).
-  // USDT written in Cyrillic or mixed alphabets slips past the Latin \busdt\b above:
-  // "ЮСДТ", "ЮСД(Т)", "ЮСД[Т]", "USДТ", "USDТ" — only ever crypto exchange, never a job.
-  /юсдт|юсд\s*[([]\s*т|усдт|us[dд]т/i,
-  // Loan-shark "financial help" spam. First-person "помогу" (the lender's voice) anchored to
-  // money nouns — a real vacancy that offers help "с жильём / с оформлением / с визой" (noun
-  // NOT in this set) and the employer voice "поможем" are deliberately left untouched.
-  /помогу\s+с\s+(деньг|финанс|кредит|долг)/i,
-  /закро[а-яё]*\s+(вам\s+)?долг|дам\s+в\s+долг|деньги\s+в\s+долг/i,
-  // Airline-ticket agency ads (Seoul<->Tashkent seat sales). Matches the ticket-selling
-  // service word only; bare "авиабилет" is left alone (a job may pay for a flight).
-  /aviakassa|авиакасс/i,
-  // Crypto-trading recruiting ("набор в Binance", "работа в бинанс").
-  /\bbinance\b|бинанс/i,
-  // Paid micro-task / listing-app promo ("листать вакансии ... задания в каждом городе").
-  /листать\s+вакансии/i,
-  // Money-for-nothing bait links.
-  /(хочешь\s+денег|ищешь\s+деньги)\s*[?!]|залетай\s+сюда/i,
-  // Recruiter self-promo with no concrete offer ("Работа нужна? Пиши на @…").
-  /работа\s+нужна\s*\?\s*пиш/i,
-  // Channel-join captcha system messages ("…подтвердить, что ты не бот…").
-  /что\s+ты\s+не\s+бот|что\s+вы\s+не\s+робот/i,
-  // SMM follower-selling service ("Instagram obunachi xizmati", "накрутка подписчиков").
-  /\bobunachi\b|накрутк[а-яё]*\s+(подписчик|лайк)/i,
-  // Cross-border money-transfer service (Uzbek "pul chiqarish", "ichki o'tkazma").
-  /pul\s+chiqar|ichki\s+o'?tkazm/i,
-];
-function looksLikeSpam(text: string): boolean {
-  const t = text.toLowerCase();
-  return SPAM_PATTERNS.some((re) => re.test(t));
-}
+// leaflet gigs, emoji carpets) are the bulk of the raw stream. Rules + thresholds live in
+// parser/spamfilter.ts (extracted so they are unit-testable); rows that match are marked
+// reject_reason='spam_prefilter' so the pattern set stays tunable from data.
 
 // Choose the in-batch canonical among byte-identical reposts: the EARLIEST posting wins (a
 // missing posted_at sorts LAST so a row with a real timestamp is preferred), id breaks ties so

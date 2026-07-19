@@ -14,6 +14,13 @@
 // CONSTRUCTION — the WHERE is a whitelist (pending ∪ skipped+low_confidence), not a
 // blacklist, so a new reject reason can never leak into this stream.
 //
+// ALREADY-PUBLISHED GUARD (owner 2026-07-19): a repost whose text_hash already belongs to a
+// PARSED row (status='parsed', vacancy_id is not null) is the SAME vacancy the user already sees
+// in the feed — hide it here so "Не проверено" never shows a copy of an already-verified job. A
+// null text_hash (short text, or a pending row the parser hasn't hashed yet) can't be deduped, so
+// those still show. The probe rides the partial index idx_raw_text_hash (where text_hash is not
+// null), so it is cheap.
+//
 // SECURITY (007 — no NEW field is exposed vs the feed, but mind the caveat below):
 //   * text is run through scrubContacts() — a best-effort regex scrub (e-mails, @handles,
 //     "<messenger> <id>", phones, t.me·wa.me·kakao links). It is HEURISTIC, not a proof:
@@ -116,6 +123,10 @@ export async function rawFeed(req: ReqLike, res: ResLike): Promise<void> {
        from raw_messages
        where vacancy_id is null
          and (status = 'pending' or (status = 'skipped' and reject_reason = 'low_confidence'))
+         and (text_hash is null or not exists (
+           select 1 from raw_messages p
+           where p.text_hash = raw_messages.text_hash
+             and p.status = 'parsed' and p.vacancy_id is not null))
          and fetched_at > now() - make_interval(days => ${maxAgePh})
          ${cursorClause}
        order by fetched_at desc, id desc
