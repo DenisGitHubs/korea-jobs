@@ -76,6 +76,12 @@ const files = [
   // + this). Depends on users + raw_messages (0001). MUST be applied before the reveal code
   // goes live: reveals24h() is also used by GET /api/vacancies/:id/contact.
   'draft_0008_raw_reveal.sql',
+
+  // Pre-AI exact-duplicate dedup (0009) — ADDITIVE. Adds raw_messages.text_hash + a partial
+  // index. The parser fills text_hash lazily and dedups reposts BEFORE the model call; run
+  // db/backfill_raw_text_hash.mts AFTER this to hash existing rows. Depends on raw_messages
+  // (draft_0001_init.sql); reject_reason is already free text (draft_0003_moderation.sql).
+  'draft_0009_raw_text_hash.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

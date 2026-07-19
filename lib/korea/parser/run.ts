@@ -18,6 +18,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getSql } from '../core/db.js';
 import { scrubContacts } from '../core/scrub.js';
 import { getConfigNumber, getConfigString } from '../config.js';
+import { textHash } from './texthash.js';
 import {
   buildSystemPrompt,
   VISA_TYPES,
@@ -111,6 +112,24 @@ function looksLikeSpam(text: string): boolean {
   return SPAM_PATTERNS.some((re) => re.test(t));
 }
 
+// Choose the in-batch canonical among byte-identical reposts: the EARLIEST posting wins (a
+// missing posted_at sorts LAST so a row with a real timestamp is preferred), id breaks ties so
+// the choice is deterministic. Neon returns timestamptz as Date|string; normalize to epoch ms.
+function postedMs(r: Record<string, unknown>): number {
+  const p = r.posted_at;
+  if (p == null) return Number.POSITIVE_INFINITY;
+  const t = new Date(p as string | Date).getTime();
+  return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t;
+}
+function cmpEarliest(a: Record<string, unknown>, b: Record<string, unknown>): number {
+  const pa = postedMs(a);
+  const pb = postedMs(b);
+  if (pa !== pb) return pa < pb ? -1 : 1;
+  const ia = a.id as string;
+  const ib = b.id as string;
+  return ia < ib ? -1 : ia > ib ? 1 : 0;
+}
+
 const MODEL_ALIASES: Record<string, string> = {
   haiku: 'claude-haiku-4-5',
   sonnet: 'claude-sonnet-5',
@@ -156,7 +175,7 @@ export async function runParse(): Promise<ParseResult> {
   // Drop obvious spam BEFORE the AI call — no tokens spent on crypto/exchange/leaflet junk
   // (~2/3 of the raw stream). Conservative matcher; borderline text still reaches the model.
   const spamIds: string[] = [];
-  const pending = pendingAll.filter((r) => {
+  let pending = pendingAll.filter((r) => {
     if (looksLikeSpam((r.text as string | null) ?? '')) {
       spamIds.push(r.id as string);
       return false;
@@ -170,6 +189,95 @@ export async function runParse(): Promise<ParseResult> {
     console.log(`[parser] spam pre-filtered (no AI): ${spamIds.length}`);
   }
   if (pending.length === 0) return { processed: spamIds.length, vacancies: 0 };
+
+  // 1b) PRE-AI EXACT-DUPLICATE dedup (owner rule 2026-07-19). The same posting is often reposted
+  // BYTE-FOR-BYTE across several channels; collapse those copies BEFORE the model call so no
+  // tokens are burned parsing the same text twice. Dedup is CROSS-SOURCE (by normalized text
+  // hash GLOBALLY, not per source_id) — that is the whole point. text_hash is computed lazily
+  // here (the reader never writes it); short texts hash to null and are never deduped (so e.g.
+  // "Вопросы в ЛС" cannot collapse two different vacancies). See parser/texthash.ts.
+  const textHashById = new Map<string, string | null>();
+  for (const r of pending) textHashById.set(r.id as string, textHash((r.text as string | null) ?? null));
+
+  // (a) CROSS-TIME: a pending row whose hash already belongs to a PARSED vacancy is a repost of
+  // an already-published vacancy → skip it (reject_reason='duplicate', vacancy_id = the same
+  // canonical), and bump that vacancy's repost_count / last_seen_at ("posted N times").
+  const distinctHashes = [
+    ...new Set(pending.map((r) => textHashById.get(r.id as string)).filter((h): h is string => h != null)),
+  ];
+  const priorVacancyByHash = new Map<string, string>();
+  if (distinctHashes.length > 0) {
+    const prior = await sql`
+      select distinct on (text_hash) text_hash, vacancy_id
+      from raw_messages
+      where status = 'parsed' and vacancy_id is not null
+        and text_hash = any(${distinctHashes}::text[])
+      order by text_hash, processed_at asc`;
+    for (const r of prior) priorVacancyByHash.set(r.text_hash as string, r.vacancy_id as string);
+  }
+
+  const crossSkips: { rawId: string; hash: string; vacancyId: string }[] = [];
+  pending = pending.filter((r) => {
+    const h = textHashById.get(r.id as string);
+    if (h != null && priorVacancyByHash.has(h)) {
+      crossSkips.push({ rawId: r.id as string, hash: h, vacancyId: priorVacancyByHash.get(h) as string });
+      return false;
+    }
+    return true;
+  });
+  for (const s of crossSkips) {
+    await sql`
+      update raw_messages
+      set status='skipped', processed_at=now(), reject_reason='duplicate',
+          vacancy_id=${s.vacancyId}::uuid, text_hash=${s.hash}
+      where id=${s.rawId}::uuid`;
+  }
+  if (crossSkips.length > 0) {
+    // Aggregate so a vacancy reposted N times in one batch is bumped once by N.
+    const bump = new Map<string, number>();
+    for (const s of crossSkips) bump.set(s.vacancyId, (bump.get(s.vacancyId) ?? 0) + 1);
+    for (const [vacancyId, n] of bump) {
+      await sql`update vacancies set repost_count = repost_count + ${n}, last_seen_at = now() where id=${vacancyId}::uuid`;
+    }
+    // eslint-disable-next-line no-console
+    console.log(`[parser] cross-time duplicates (no AI): ${crossSkips.length}`);
+  }
+
+  // (b) IN-BATCH: among the survivors, group by hash and keep ONE canonical (earliest posted_at);
+  // mark the rest skipped 'duplicate'. Short-text (null hash) rows are never grouped.
+  const groups = new Map<string, Record<string, unknown>[]>();
+  for (const r of pending) {
+    const h = textHashById.get(r.id as string);
+    if (h == null) continue;
+    const g = groups.get(h);
+    if (g) g.push(r);
+    else groups.set(h, [r]);
+  }
+  const dropInBatch = new Map<string, string>(); // rawId -> hash
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const sorted = [...group].sort(cmpEarliest);
+    for (let i = 1; i < sorted.length; i++) {
+      const dupId = sorted[i]!.id as string;
+      dropInBatch.set(dupId, textHashById.get(dupId) as string);
+    }
+  }
+  if (dropInBatch.size > 0) {
+    for (const [rawId, h] of dropInBatch) {
+      await sql`
+        update raw_messages
+        set status='skipped', processed_at=now(), reject_reason='duplicate', text_hash=${h}
+        where id=${rawId}::uuid`;
+    }
+    pending = pending.filter((r) => !dropInBatch.has(r.id as string));
+    // eslint-disable-next-line no-console
+    console.log(`[parser] in-batch duplicates (no AI): ${dropInBatch.size}`);
+  }
+
+  // Total skipped before the model = spam + cross-time dups + in-batch dups. Only UNIQUE
+  // (or too-short) messages reach the AI below.
+  const preAiSkipped = spamIds.length + crossSkips.length + dropInBatch.size;
+  if (pending.length === 0) return { processed: preAiSkipped, vacancies: 0 };
 
   // 2) Active cities → closed enum + prompt context; slug→id + slug→city map.
   const cityRows = await sql`
@@ -239,9 +347,12 @@ export async function runParse(): Promise<ParseResult> {
   for (const row of pending) {
     const rawId = row.id as string;
     const it = byId.get(rawId);
+    // Persist the text hash on every row we touch so future ticks can dedup against it
+    // (esp. the 'parsed' canonical); null for short texts is a harmless no-op write.
+    const hash = textHashById.get(rawId) ?? null;
 
     if (!it) {
-      await sql`update raw_messages set status='error', processed_at=now(), error='no_parser_output' where id=${rawId}::uuid`;
+      await sql`update raw_messages set status='error', processed_at=now(), error='no_parser_output', text_hash=${hash} where id=${rawId}::uuid`;
       continue;
     }
 
@@ -251,7 +362,7 @@ export async function runParse(): Promise<ParseResult> {
         update raw_messages
         set status='skipped', processed_at=now(),
             reject_reason=${it.reject_reason ?? (it.is_vacancy ? 'low_confidence' : 'not_vacancy')},
-            confidence=${it.confidence ?? null}
+            confidence=${it.confidence ?? null}, text_hash=${hash}
         where id=${rawId}::uuid`;
       continue;
     }
@@ -280,7 +391,7 @@ export async function runParse(): Promise<ParseResult> {
       limit 1`;
     if (blocked.length > 0) {
       await sql`
-        update raw_messages set status='skipped', processed_at=now(), reject_reason='takedown'
+        update raw_messages set status='skipped', processed_at=now(), reject_reason='takedown', text_hash=${hash}
         where id=${rawId}::uuid`;
       continue;
     }
@@ -321,7 +432,7 @@ export async function runParse(): Promise<ParseResult> {
       // Bad row (e.g. invalid enum from the model) — don't loop on it.
       // eslint-disable-next-line no-console
       console.error('[parser] vacancy insert failed');
-      await sql`update raw_messages set status='error', processed_at=now(), error='vacancy_insert_failed' where id=${rawId}::uuid`;
+      await sql`update raw_messages set status='error', processed_at=now(), error='vacancy_insert_failed', text_hash=${hash} where id=${rawId}::uuid`;
       continue;
     }
 
@@ -329,8 +440,8 @@ export async function runParse(): Promise<ParseResult> {
     const isNew = upserted[0]?.inserted === true;
     if (isNew) vacancies += 1;
 
-    await sql`update raw_messages set status='parsed', processed_at=now(), vacancy_id=${vacancyId ?? null}::uuid where id=${rawId}::uuid`;
+    await sql`update raw_messages set status='parsed', processed_at=now(), vacancy_id=${vacancyId ?? null}::uuid, text_hash=${hash} where id=${rawId}::uuid`;
   }
 
-  return { processed: pending.length + spamIds.length, vacancies };
+  return { processed: pending.length + preAiSkipped, vacancies };
 }
