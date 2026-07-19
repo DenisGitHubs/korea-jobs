@@ -40,9 +40,14 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
   // a confident-but-stale figure.
   const [counting, setCounting] = useState(false);
 
-  // Seed the draft from the applied filter each time the sheet opens.
+  // Seed the draft from the applied filter each time the sheet opens. Clear the
+  // stale count in the SAME tick so the first frame never flashes a leftover
+  // number without a spinner — the live-count effect below re-fetches it.
   useEffect(() => {
-    if (open) setDraft(useFilterStore.getState().value);
+    if (open) {
+      setDraft(useFilterStore.getState().value);
+      setCount(null);
+    }
   }, [open]);
 
   // Live "Show N" counter: debounced fetch on every draft change while open.

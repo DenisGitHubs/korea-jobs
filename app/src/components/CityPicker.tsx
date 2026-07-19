@@ -10,10 +10,12 @@ interface CityPickerProps {
   onChange: (next: string[]) => void;
   /** Radio-style single selection (used by the ad wizard). */
   single?: boolean;
+  /** Tighter vertical rhythm for embedding inside the ad wizard. */
+  compact?: boolean;
 }
 
 /** Region-grouped city checklist, shared by Settings, the filter sheet and the wizard. */
-export function CityPicker({ value, onChange, single = false }: CityPickerProps) {
+export function CityPicker({ value, onChange, single = false, compact = false }: CityPickerProps) {
   const { t } = useTranslation();
   const lang = useSettingsStore((s) => s.lang);
   const { grouped, loading } = useCities();
@@ -29,7 +31,7 @@ export function CityPicker({ value, onChange, single = false }: CityPickerProps)
   if (loading) return <Loading text={t('common.loading')} />;
 
   return (
-    <>
+    <div className={`citypicker ${compact ? 'citypicker--compact' : ''}`}>
       {grouped.map((g) => (
         <div className="region" key={g.region}>
           <div className="region__title">{t(regionKey(g.region))}</div>
@@ -48,6 +50,6 @@ export function CityPicker({ value, onChange, single = false }: CityPickerProps)
           </div>
         </div>
       ))}
-    </>
+    </div>
   );
 }

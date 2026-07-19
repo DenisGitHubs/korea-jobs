@@ -82,29 +82,59 @@ function parseUpdate(body: unknown): ParsedUpdate | null {
 }
 
 const CB_RE = /^ad:(approve|reject):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const REPORT_CB_RE = /^rep:(hide|keep):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
-/** Handle an ad-moderation inline button. Admin-gated by ADMIN_TELEGRAM_IDS. */
+/** Handle an inline button (ad moderation / report action). Admin-gated by ADMIN_TELEGRAM_IDS. */
 async function dispatchCallback(u: ParsedUpdate): Promise<void> {
   const cb = u.callback;
   if (!cb) return;
-  // Only configured admins may moderate; others get a soft toast.
+  // Only configured admins may act; others get a soft toast.
   if (u.fromId === null || !isAdminTelegramId(u.fromId)) {
     if (cb.id) await answerCallbackQuery(cb.id, 'Недоступно');
     return;
   }
-  const m = CB_RE.exec(cb.data ?? '');
-  if (!m) {
-    if (cb.id) await answerCallbackQuery(cb.id);
+  const data = cb.data ?? '';
+
+  // (1) Ad moderation: ad:approve / ad:reject.
+  const adM = CB_RE.exec(data);
+  if (adM) {
+    const action = adM[1]!.toLowerCase() as 'approve' | 'reject';
+    const adId = adM[2]!;
+    const { found } = await moderateAd(adId, action, action === 'reject' ? 'admin_button' : null);
+    const label = action === 'approve' ? 'одобрено' : 'отклонено';
+    if (cb.id) await answerCallbackQuery(cb.id, found ? `Решение: ${label}` : 'Не найдено');
+    if (found && u.chatId !== null && cb.messageId !== null) {
+      await editMessageText(u.chatId, cb.messageId, `Решение: ${label}.`);
+    }
     return;
   }
-  const action = m[1]!.toLowerCase() as 'approve' | 'reject';
-  const adId = m[2]!;
-  const { found } = await moderateAd(adId, action, action === 'reject' ? 'admin_button' : null);
-  const label = action === 'approve' ? 'одобрено' : 'отклонено';
-  if (cb.id) await answerCallbackQuery(cb.id, found ? `Решение: ${label}` : 'Не найдено');
-  if (found && u.chatId !== null && cb.messageId !== null) {
-    await editMessageText(u.chatId, cb.messageId, `Решение: ${label}.`);
+
+  // (2) Report action: rep:hide / rep:keep. Owner rule — reports only NOTIFY; the admin decides.
+  // hide is REVERSIBLE (is_active=false), never a delete. The uuid is validated by REPORT_CB_RE.
+  const repM = REPORT_CB_RE.exec(data);
+  if (repM) {
+    const action = repM[1]!.toLowerCase() as 'hide' | 'keep';
+    const vacId = repM[2]!;
+    if (action === 'hide') {
+      const sql = getSql();
+      const rows = await sql`
+        update vacancies set is_active = false where id = ${vacId}::uuid and is_active returning id`;
+      const done = rows.length > 0;
+      if (cb.id) await answerCallbackQuery(cb.id, done ? 'Скрыто' : 'Уже скрыто');
+      if (u.chatId !== null && cb.messageId !== null) {
+        await editMessageText(u.chatId, cb.messageId, done ? 'Жалоба: вакансия скрыта.' : 'Жалоба: уже скрыта.');
+      }
+    } else {
+      if (cb.id) await answerCallbackQuery(cb.id, 'Оставлено');
+      if (u.chatId !== null && cb.messageId !== null) {
+        await editMessageText(u.chatId, cb.messageId, 'Жалоба: вакансия оставлена.');
+      }
+    }
+    return;
   }
+
+  // Unknown callback → just stop the client spinner.
+  if (cb.id) await answerCallbackQuery(cb.id);
 }
 
 /** Handle a parsed update. /start (message) or ad moderation (callback_query). */

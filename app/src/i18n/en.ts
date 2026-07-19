@@ -200,6 +200,7 @@ export const en: typeof ru = {
     s2: { title: 'Pay' },
     salaryLabel: 'Salary',
     salaryPlaceholder: 'e.g. 12,000₩/hr or 2,800,000₩/mo',
+    salaryDigitsHint: 'Enter the amount in figures — e.g. 2,800,000 won',
     feeLabel: 'Placement fee',
     feeTermsLabel: 'Fee terms',
     feeTermsPlaceholder: 'How much the fee is and what it covers',
@@ -207,6 +208,9 @@ export const en: typeof ru = {
     s3: { title: 'Visa' },
     visaHint: 'Tick the visas that fit. If unsure, leave it empty.',
     cityLabel: 'City',
+    cityOtherOption: 'Other city',
+    cityOtherLabel: 'Enter the city',
+    cityOtherPlaceholder: 'e.g. Gyeongju',
     scheduleLabel: 'Schedule',
     schedulePlaceholder: 'e.g. 5/2, from 9:00, overtime possible',
     s5: { title: 'Housing and meals' },
@@ -218,6 +222,25 @@ export const en: typeof ru = {
     contactPlaceholder: '@username, phone or link',
     contactHint: 'How to reach you. Shown only to those who open the vacancy.',
     contactKindLabel: 'Contact method',
+    contactPickHint: 'Pick one or more — each has its own field.',
+    contactTgAutofill: 'We’ll use your Telegram @username',
+    contactTgNoNick: 'You have no public Telegram username — choose another method.',
+    contactPhoneLabel: 'Phone',
+    contactPhonePlaceholder: 'e.g. +82 10 1234 5678',
+    contactKakaoLabel: 'KakaoTalk ID',
+    contactKakaoPlaceholder: 'Your KakaoTalk ID',
+    contactWhatsappLabel: 'WhatsApp',
+    contactWhatsappPlaceholder: 'WhatsApp number',
+    contactOtherLabel: 'Other',
+    contactOtherPlaceholder: 'Link, handle or how to reach you',
+    contactLenHint: 'Contacts: {{n}}/200',
+    contactTag: {
+      phone: 'Tel.',
+      telegram: 'TG',
+      kakao: 'Kakao',
+      whatsapp: 'WhatsApp',
+      other: 'Other',
+    },
     summaryTitle: 'Review your listing',
     consent: 'I confirm the information is correct and accept the posting terms. I am responsible for the content of this listing.',
     approvedTitle: 'Published',
@@ -319,7 +342,7 @@ export const en: typeof ru = {
     telegram: 'Telegram',
     kakao: 'KakaoTalk',
     whatsapp: 'WhatsApp',
-    other: 'Contact',
+    other: 'Other',
   },
   contact: {
     writeTelegram: 'Message on Telegram',
@@ -350,12 +373,12 @@ export const en: typeof ru = {
       'This is general information, not legal or immigration advice. It may be outdated and does not reflect your personal situation. Verify your rights on hikorea.go.kr or by calling 1345. You act at your own discretion; we are not liable for consequences.',
     trustCard: {
       title: 'Check before you apply',
-      body: 'Never pay upfront — not for a visa, not for a spot. Never hand over your passport, ARC or card. Ask for a contract. Not sure — call 1345 (free, in Russian).',
+      body: "A job fee taken out of your salary once you've started work is common. Paying upfront — for a visa, a spot, or paperwork — is a red flag. Never hand over your passport, ARC, or bank card. Ask for a contract. Not sure — call 1345 (free, in Russian).",
     },
     flags: {
       prepay: {
         title: 'Asking for money upfront',
-        body: 'Asked to pay in advance for a "visa," a "spot," or "paperwork"? That\'s a scam. Real jobs don\'t work that way — the employer pays, not you.',
+        body: 'Asked to pay in advance — before you\'ve even started the job — for a "visa," a "spot," or "paperwork"? That\'s how scammers operate. If the fee is deducted from your salary after you\'ve already started working, that\'s common. Just get the terms in writing.',
       },
       tooGoodSalary: {
         title: 'Salary too good for simple work',
@@ -380,8 +403,8 @@ export const en: typeof ru = {
     },
     rules: {
       employerPays: {
-        title: 'The employer pays, not you',
-        body: "You don't pay to get hired — you get paid to work. Any request to pay upfront is a reason to be careful.",
+        title: 'Fee comes from your paycheck, not upfront',
+        body: "It's common to pay a job fee, and it comes out of your salary once you've started working. Being asked to pay before you start is what should worry you.",
       },
       keepDocuments: {
         title: 'Keep your documents with you',
@@ -392,8 +415,8 @@ export const en: typeof ru = {
         body: 'Ask for a paper contract, read it, and keep it along with your messages and receipts.',
       },
       checkBeforePay: {
-        title: 'Check before you pay or sign',
-        body: 'Not sure about an employer? Call 1345 (free, Russian-speaking) before you pay or sign anything.',
+        title: 'Check before you sign or pay upfront',
+        body: 'Not sure about an employer? Call 1345 (free, Russian-speaking) before you sign a contract or pay anything in advance. Also get the salary-deducted fee terms in writing.',
       },
       dontAcceptMoney: {
         title: "Never accept other people's money",

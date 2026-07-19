@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { useEffect, useLayoutEffect } from 'react';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { api, USE_MOCK } from './shared/api/client';
 import { useSubscriptionStore } from './store/subscriptionStore';
 import { Splash } from './components/Splash';
@@ -15,6 +15,25 @@ import ReferralScreen from './screens/ReferralScreen';
 import SafetyScreen from './screens/SafetyScreen';
 import PrivacyScreen from './screens/PrivacyScreen';
 import RulesScreen from './screens/RulesScreen';
+
+/**
+ * Reset scroll to the top on every route change. The shell scrolls the document
+ * (`.app` is min-height:100dvh with no inner overflow), but we also zero any
+ * scrollable `.screen`/`.app-root` container defensively so sub-screens
+ * (safety, privacy, rules, referral, feed/:id) always open from the top.
+ */
+function ScrollToTop() {
+  const { pathname } = useLocation();
+  useLayoutEffect(() => {
+    window.scrollTo(0, 0);
+    const doc = document.scrollingElement;
+    if (doc) doc.scrollTop = 0;
+    document.querySelectorAll<HTMLElement>('.screen, .app-root').forEach((el) => {
+      el.scrollTop = 0;
+    });
+  }, [pathname]);
+  return null;
+}
 
 export default function App() {
   const loaded = useSubscriptionStore((s) => s.loaded);
@@ -59,6 +78,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <ScrollToTop />
       {/* Order matters: consent must be granted before onboarding collects any
           preferences; onboarding (guarded by !termsRequired) then runs before the app. */}
       <ConsentGate />

@@ -21,7 +21,8 @@ import { getConfigNumber } from '../config.js';
 import { sendMessage } from '../bot/telegram.js';
 import { adminTelegramIds } from '../admin/auth.js';
 import { classifyAdText, recordModerationExample } from './moderation.js';
-import { WORK_TYPES, VISA_TYPES, PLACEMENT_FEES, CONTACT_KINDS } from '../parser/prompt.js';
+import { looksLikeAdSpam } from './adspam.js';
+import { WORK_TYPES, VISA_TYPES, PLACEMENT_FEES, CONTACT_KINDS, type ParsedVacancy } from '../parser/prompt.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const WORK_TYPE_SET = new Set<string>(WORK_TYPES);
@@ -33,6 +34,7 @@ type AdStatus = 'approved' | 'pending' | 'rejected';
 
 interface AdBody {
   city_slug?: unknown;
+  city_text?: unknown;
   region_slug?: unknown;
   work_type?: unknown;
   visa_types?: unknown;
@@ -109,32 +111,50 @@ export async function adsCreate(req: ReqLike, res: ResLike): Promise<void> {
   const schedule = s(body?.schedule, 500);
   const reqRegion = s(body?.region_slug, 60);
   const reqCitySlug = s(body?.city_slug, 60);
+  const reqCityText = s(body?.city_text, 60);
 
-  // AI moderation over the user's text (title + description + extras).
+  // Moderation text (title + description + extras). This is DATA, never an instruction.
   const modText = [title, description, salaryText, schedule, housingTerms, mealsInfo].filter(Boolean).join('\n');
-  const { item, cityIdBySlug } = await classifyAdText(modText);
 
-  // Decision (thresholds in config; permissive default → human review, not silent drop).
-  const autoApproveMin = await getConfigNumber('ads_auto_approve_min', 0.8);
-  const conf = item?.confidence ?? 0;
   let status: AdStatus;
   let rejectReason: string | null = null;
-  if (!item) {
-    status = 'pending'; // model/transport failed → route to a human
-  } else if (item.reject_reason === 'spam' || (!item.is_vacancy && conf >= 0.8)) {
-    status = 'rejected';
-    rejectReason = item.reject_reason ?? 'not_vacancy';
-  } else if (item.is_vacancy && conf >= autoApproveMin && !item.reject_reason) {
-    status = 'approved';
-  } else {
-    status = 'pending';
-    rejectReason = item.reject_reason ?? null;
-  }
-  const aiConfidence = item?.confidence ?? null;
+  let item: ParsedVacancy | null = null;
+  let cityIdBySlug = new Map<string, string>();
+  let aiConfidence: number | null = null;
 
-  // Resolve city: user's pick wins; else the AI-picked slug.
+  if (looksLikeAdSpam(modText)) {
+    // Deterministic anti-ad backstop BEFORE the model (owner: never let ads through; 007 rec:
+    // user ads had no deterministic guard). Store as rejected, spend no tokens, and feed the
+    // decision to the classifier's learning set as a rejected example (below).
+    status = 'rejected';
+    rejectReason = 'ads';
+  } else {
+    const cls = await classifyAdText(modText);
+    item = cls.item;
+    cityIdBySlug = cls.cityIdBySlug;
+    aiConfidence = item?.confidence ?? null;
+
+    // Decision (thresholds in config; permissive default → human review, not silent drop).
+    const autoApproveMin = await getConfigNumber('ads_auto_approve_min', 0.8);
+    const conf = item?.confidence ?? 0;
+    if (!item) {
+      status = 'pending'; // model/transport failed → route to a human
+    } else if (item.reject_reason === 'spam' || (!item.is_vacancy && conf >= 0.8)) {
+      status = 'rejected';
+      rejectReason = item.reject_reason ?? 'not_vacancy';
+    } else if (item.is_vacancy && conf >= autoApproveMin && !item.reject_reason) {
+      status = 'approved';
+    } else {
+      status = 'pending';
+      rejectReason = item.reject_reason ?? null;
+    }
+  }
+
+  // Resolve city: user's directory pick wins; else the AI-picked slug. city_text (the free
+  // "Другое" city) is kept ONLY when nothing resolved a city_id — the two are exclusive.
   const citySlug = (reqCitySlug && cityIdBySlug.has(reqCitySlug) ? reqCitySlug : null) ?? item?.city_slug ?? null;
   const cityId = citySlug ? cityIdBySlug.get(citySlug) ?? null : null;
+  const cityText = cityId ? null : reqCityText;
   const regionSlug = reqRegion ?? item?.region_slug ?? null;
 
   const ttl = await getConfigNumber('user_ad_ttl_days', 14);
@@ -143,18 +163,20 @@ export async function adsCreate(req: ReqLike, res: ResLike): Promise<void> {
     const sql = getSql();
     const rows = (await sql`
       insert into user_ads (
-        author_user_id, city_id, region_slug, work_type, visa_types, placement_fee,
+        author_user_id, city_id, city_text, region_slug, work_type, visa_types, placement_fee,
         has_housing, has_meals, salary_text, title, description, contact_raw, contact_kind,
-        housing_terms, meals_info, schedule, status, moderated_at, reject_reason, ai_confidence, expires_at
+        housing_terms, meals_info, schedule, status, moderated_at, reject_reason, ai_confidence,
+        expires_at, notify_pending
       ) values (
-        ${auth.user.id}::uuid, ${cityId}::uuid, ${regionSlug}, ${workType}::work_type,
+        ${auth.user.id}::uuid, ${cityId}::uuid, ${cityText}, ${regionSlug}, ${workType}::work_type,
         ${visaTypes}::visa_type[], ${placementFee}::placement_fee,
         ${hasHousing}, ${hasMeals}, ${salaryText}, ${title}, ${description}, ${contactRaw}, ${contactKind}::contact_kind,
         ${housingTerms}, ${mealsInfo}, ${schedule},
         ${status}::user_ad_status,
         case when ${status} = 'pending' then null else now() end,
         ${rejectReason}, ${aiConfidence},
-        case when ${status} = 'approved' then now() + make_interval(days => ${ttl}) else null end
+        case when ${status} = 'approved' then now() + make_interval(days => ${ttl}) else null end,
+        case when ${status} = 'approved' then true else false end
       )
       returning id`) as unknown as { id: string }[];
     const id = rows[0]?.id;
@@ -165,7 +187,7 @@ export async function adsCreate(req: ReqLike, res: ResLike): Promise<void> {
     }
     // Pending → push to admins for a manual call.
     if (id && status === 'pending') {
-      const summary = [citySlug ?? regionSlug ?? '—', workType, title].filter(Boolean).join(' · ');
+      const summary = [citySlug ?? cityText ?? regionSlug ?? '—', workType, title].filter(Boolean).join(' · ');
       await notifyAdminsPending(id, summary);
     }
 
@@ -268,7 +290,8 @@ export async function moderateAd(
     set status = ${status}::user_ad_status,
         moderated_at = now(),
         reject_reason = ${action === 'reject' ? (reason ?? 'rejected') : null},
-        expires_at = case when ${status} = 'approved' then now() + make_interval(days => ${ttl}) else expires_at end
+        expires_at = case when ${status} = 'approved' then now() + make_interval(days => ${ttl}) else expires_at end,
+        notify_pending = case when ${status} = 'approved' then true else notify_pending end
     where id = ${adId}::uuid and status = 'pending'
     returning title, description, salary_text, schedule, housing_terms, meals_info`) as unknown as {
     title: string | null;

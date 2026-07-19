@@ -82,6 +82,13 @@ const files = [
   // db/backfill_raw_text_hash.mts AFTER this to hash existing rows. Depends on raw_messages
   // (draft_0001_init.sql); reject_reason is already free text (draft_0003_moderation.sql).
   'draft_0009_raw_text_hash.sql',
+
+  // Ad push + free-text city (0010) — ADDITIVE. Adds user_ads.city_text + user_ads.notify_pending
+  // and extends notifications_sent with ad_id (guarded "one of vacancy_id/ad_id" CHECK + a partial
+  // UNIQUE (user_id, ad_id)); uq_notif_user_vac is untouched. Lets the notify cron DM subscribers
+  // about APPROVED user ads exactly like vacancies. Depends on user_ads (draft_0003_user_ads.sql)
+  // and notifications_sent (draft_0001_init.sql).
+  'draft_0010_ads_notify.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

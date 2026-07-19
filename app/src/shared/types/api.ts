@@ -224,6 +224,8 @@ export interface TermsAcceptResult {
 /** Body for POST /api/ads. Only title, description, contact_raw are required. */
 export interface AdInput {
   city_slug?: string | null;
+  /** Free-text city when it is not in the seed list ("Other"); server trims to <=60. */
+  city_text?: string | null;
   region_slug?: string | null;
   work_type?: WorkType;
   visa_types?: VisaType[];

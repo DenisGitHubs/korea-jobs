@@ -6,7 +6,6 @@ import { api } from '../shared/api/client';
 import type { AdInput, ContactKind, PlacementFee, VisaType, WorkType } from '../shared/types/api';
 import {
   CONTACT_KINDS,
-  PLACEMENT_FEES,
   VISA_TYPES,
   WORK_TYPES,
   WORK_TYPE_EMOJI,
@@ -28,6 +27,19 @@ const CONSENT_KEY = 'kj:ads-consent';
 const STEP_COUNT = 7;
 const LAST = STEP_COUNT - 1;
 const MIN_DESC = 15;
+const CONTACT_RAW_MAX = 200;
+
+/** Fees offered in the wizard — deliberately no 'unknown' (owner decision). */
+const WIZARD_FEES: readonly PlacementFee[] = ['free', 'paid'];
+
+/** Short i18n tags used when several contact methods are joined into contact_raw. */
+const CONTACT_TAG_KEY: Record<ContactKind, string> = {
+  phone: 'post.contactTag.phone',
+  telegram: 'post.contactTag.telegram',
+  kakao: 'post.contactTag.kakao',
+  whatsapp: 'post.contactTag.whatsapp',
+  other: 'post.contactTag.other',
+};
 
 type TriState = 'yes' | 'no' | 'unknown';
 
@@ -36,20 +48,60 @@ interface Draft {
   workType: WorkType | null;
   description: string;
   salaryText: string;
-  placementFee: PlacementFee;
+  placementFee: PlacementFee | null;
   feeTerms: string;
   visa: VisaType[];
   city: string | null;
+  cityOther: boolean;
+  cityText: string;
   schedule: string;
   housing: TriState;
   housingTerms: string;
   meals: TriState;
   mealsInfo: string;
-  contactRaw: string;
-  contactKind: ContactKind;
+  contactSel: ContactKind[];
+  phoneVal: string;
+  kakaoVal: string;
+  whatsappVal: string;
+  otherVal: string;
 }
 
 const triToBool = (v: TriState): boolean | null => (v === 'yes' ? true : v === 'no' ? false : null);
+
+/** Trimmed value entered for a given contact method (Telegram uses the @username). */
+function contactValue(d: Draft, k: ContactKind, username: string): string {
+  if (k === 'telegram') return username ? `@${username}` : '';
+  if (k === 'phone') return d.phoneVal.trim();
+  if (k === 'kakao') return d.kakaoVal.trim();
+  if (k === 'whatsapp') return d.whatsappVal.trim();
+  return d.otherVal.trim(); // 'other'
+}
+
+/** Join the selected methods into one labelled string, e.g. "Тел.: X · TG: @nick". */
+function buildContactRaw(d: Draft, username: string, t: TFunction): string {
+  const parts: string[] = [];
+  for (const k of CONTACT_KINDS) {
+    if (!d.contactSel.includes(k)) continue;
+    const v = contactValue(d, k, username);
+    if (!v) continue;
+    parts.push(`${t(CONTACT_TAG_KEY[k])}: ${v}`);
+  }
+  return parts.join(' · ');
+}
+
+/** Contact step is valid with >=1 method, each (bar Telegram) filled, within 200 chars. */
+function contactStepValid(d: Draft, username: string, t: TFunction): boolean {
+  if (d.contactSel.length === 0) return false;
+  for (const k of d.contactSel) {
+    if (k === 'telegram') {
+      if (!username) return false;
+      continue;
+    }
+    if (!contactValue(d, k, username)) return false;
+  }
+  const raw = buildContactRaw(d, username, t);
+  return raw.length > 0 && raw.length <= CONTACT_RAW_MAX;
+}
 
 function loadConsent(): boolean {
   try {
@@ -76,26 +128,43 @@ export default function PostScreen() {
     workType: null,
     description: '',
     salaryText: '',
-    placementFee: 'unknown',
+    placementFee: null,
     feeTerms: '',
     visa: [],
     city: null,
+    cityOther: false,
+    cityText: '',
     schedule: '',
     housing: 'unknown',
     housingTerms: '',
     meals: 'unknown',
     mealsInfo: '',
-    contactRaw: username ? `@${username}` : '',
-    contactKind: username ? 'telegram' : 'phone',
+    // Telegram is the default when the user has a public @username.
+    contactSel: username ? ['telegram'] : [],
+    phoneVal: '',
+    kakaoVal: '',
+    whatsappVal: '',
+    otherVal: '',
   });
   const patch = useCallback((p: Partial<Draft>) => setD((prev) => ({ ...prev, ...p })), []);
+
+  // Live join of the selected contact methods — drives the summary + counter.
+  const contactJoined = buildContactRaw(d, username, t);
+
+  const salaryHasDigit = /\d/.test(d.salaryText);
 
   const stepValid = (s: number): boolean => {
     switch (s) {
       case 0:
         return d.title.trim().length > 0 && d.description.trim().length >= MIN_DESC;
+      case 1:
+        // At least one digit in the salary, and a fee choice (free/paid) is made.
+        return salaryHasDigit && d.placementFee !== null;
+      case 3:
+        // City is optional, but "Other" requires a typed city name.
+        return d.cityOther ? d.cityText.trim().length > 0 : true;
       case 5:
-        return d.contactRaw.trim().length > 0;
+        return contactStepValid(d, username, t);
       case 6:
         return consent;
       default:
@@ -104,24 +173,28 @@ export default function PostScreen() {
   };
 
   const buildInput = (): AdInput => {
-    const salary = [d.salaryText.trim(), d.placementFee === 'paid' && d.feeTerms.trim() ? `${t('post.feeTermsShort')}: ${d.feeTerms.trim()}` : '']
+    const salary = [
+      d.salaryText.trim(),
+      d.placementFee === 'paid' && d.feeTerms.trim() ? `${t('post.feeTermsShort')}: ${d.feeTerms.trim()}` : '',
+    ]
       .filter(Boolean)
       .join(' · ');
     return {
       title: d.title.trim(),
       description: d.description.trim(),
-      contact_raw: d.contactRaw.trim(),
-      contact_kind: d.contactKind,
+      contact_raw: buildContactRaw(d, username, t),
+      contact_kind: d.contactSel[0] ?? 'other',
       work_type: d.workType ?? undefined,
       visa_types: d.visa.length ? d.visa : undefined,
-      placement_fee: d.placementFee,
+      placement_fee: d.placementFee ?? undefined,
       has_housing: triToBool(d.housing),
       has_meals: triToBool(d.meals),
       salary_text: salary || null,
       housing_terms: d.housing === 'yes' && d.housingTerms.trim() ? d.housingTerms.trim() : null,
       meals_info: d.meals === 'yes' && d.mealsInfo.trim() ? d.mealsInfo.trim() : null,
       schedule: d.schedule.trim() || null,
-      city_slug: d.city,
+      city_slug: d.cityOther ? null : d.city,
+      city_text: d.cityOther && d.cityText.trim() ? d.cityText.trim() : null,
       region_slug: null,
     };
   };
@@ -148,7 +221,7 @@ export default function PostScreen() {
       })
       .finally(() => setSubmitting(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [submitting, d, consent, t]);
+  }, [submitting, d, consent, t, username]);
 
   const next = useCallback(() => {
     if (!stepValid(step)) return;
@@ -168,18 +241,38 @@ export default function PostScreen() {
 
   useBackButton(true, back);
 
+  const toggleContact = useCallback((k: ContactKind) => {
+    setD((prev) => ({
+      ...prev,
+      contactSel: prev.contactSel.includes(k)
+        ? prev.contactSel.filter((x) => x !== k)
+        : [...prev.contactSel, k],
+    }));
+  }, []);
+
   const workOptions = useMemo<ChipOption<WorkType>[]>(
     () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), emoji: WORK_TYPE_EMOJI[w] })),
     [t],
   );
+  // 'any' ("Неважно") is intentionally added here only — hidden elsewhere.
   const visaOptions = useMemo<ChipOption<VisaType>[]>(
-    () => VISA_TYPES.map((v) => ({ value: v, label: t(visaKey(v)) })),
+    () => [
+      { value: 'any' as VisaType, label: t('visa.any') },
+      ...VISA_TYPES.map((v) => ({ value: v, label: t(visaKey(v)) })),
+    ],
     [t],
   );
-  const contactOptions = useMemo<ChipOption<ContactKind>[]>(
-    () => CONTACT_KINDS.map((k) => ({ value: k, label: t(contactKindKey(k)) })),
-    [t],
-  );
+  // Selecting 'any' clears the rest; selecting a concrete visa clears 'any'.
+  const onVisaChange = (nextVisa: VisaType[]): void => {
+    const added = nextVisa.find((x) => !d.visa.includes(x));
+    if (added === 'any') {
+      patch({ visa: ['any'] });
+    } else if (added) {
+      patch({ visa: nextVisa.filter((x) => x !== 'any') });
+    } else {
+      patch({ visa: nextVisa });
+    }
+  };
   const triOptions = useMemo(
     () => [
       { value: 'yes' as TriState, label: t('common.yes') },
@@ -250,10 +343,16 @@ export default function PostScreen() {
         ) : step === 1 ? (
           <div className="stack stack--wizard">
             <div className="wizard__headline">{t('post.s2.title')}</div>
-            <Field label={t('post.salaryLabel')} value={d.salaryText} onChange={(v) => patch({ salaryText: v })} placeholder={t('post.salaryPlaceholder')} />
+            <Field
+              label={t('post.salaryLabel')}
+              value={d.salaryText}
+              onChange={(v) => patch({ salaryText: v })}
+              placeholder={t('post.salaryPlaceholder')}
+              hint={salaryHasDigit ? undefined : t('post.salaryDigitsHint')}
+            />
             <div>
               <div className="region__title">{t('post.feeLabel')}</div>
-              <ChipSelect single options={PLACEMENT_FEES.map((f) => ({ value: f, label: t(feeKey(f)) }))} value={[d.placementFee]} onChange={(n) => patch({ placementFee: (n[0] as PlacementFee) ?? 'unknown' })} />
+              <ChipSelect single options={WIZARD_FEES.map((f) => ({ value: f, label: t(feeKey(f)) }))} value={d.placementFee ? [d.placementFee] : []} onChange={(n) => patch({ placementFee: (n[0] as PlacementFee) ?? null })} />
             </div>
             {d.placementFee === 'paid' ? (
               <Field label={t('post.feeTermsLabel')} value={d.feeTerms} onChange={(v) => patch({ feeTerms: v })} placeholder={t('post.feeTermsPlaceholder')} multiline rows={3} />
@@ -262,13 +361,29 @@ export default function PostScreen() {
         ) : step === 2 ? (
           <div className="stack stack--wizard">
             <div className="wizard__headline">{t('post.s3.title')}</div>
-            <ChipSelect options={visaOptions} value={d.visa} onChange={(v) => patch({ visa: v })} />
+            <ChipSelect options={visaOptions} value={d.visa} onChange={onVisaChange} />
             <div className="hint">{t('post.visaHint')}</div>
           </div>
         ) : step === 3 ? (
           <div className="stack stack--wizard">
             <div className="wizard__headline">{t('post.cityLabel')}</div>
-            <CityPicker single value={d.city ? [d.city] : []} onChange={(n) => patch({ city: n[0] ?? null })} />
+            <CityPicker compact single value={d.city ? [d.city] : []} onChange={(n) => patch({ city: n[0] ?? null, cityOther: false })} />
+            <div className="section">
+              <button
+                type="button"
+                className="row"
+                onClick={() => patch({ cityOther: true, city: null })}
+                aria-pressed={d.cityOther}
+              >
+                <span className="row__label">{t('post.cityOtherOption')}</span>
+                <span className={`check check--radio ${d.cityOther ? 'check--on' : ''}`} aria-hidden>
+                  ✓
+                </span>
+              </button>
+            </div>
+            {d.cityOther ? (
+              <Field label={t('post.cityOtherLabel')} value={d.cityText} onChange={(v) => patch({ cityText: v })} placeholder={t('post.cityOtherPlaceholder')} maxLength={60} />
+            ) : null}
             <Field label={t('post.scheduleLabel')} value={d.schedule} onChange={(v) => patch({ schedule: v })} placeholder={t('post.schedulePlaceholder')} />
           </div>
         ) : step === 4 ? (
@@ -296,11 +411,58 @@ export default function PostScreen() {
         ) : step === 5 ? (
           <div className="stack stack--wizard">
             <div className="wizard__headline">{t('post.contactLabel')}</div>
-            <Field value={d.contactRaw} onChange={(v) => patch({ contactRaw: v })} placeholder={t('post.contactPlaceholder')} hint={t('post.contactHint')} />
             <div>
               <div className="region__title">{t('post.contactKindLabel')}</div>
-              <ChipSelect single options={contactOptions} value={[d.contactKind]} onChange={(n) => patch({ contactKind: (n[0] as ContactKind) ?? 'other' })} />
+              <div className="chips">
+                {CONTACT_KINDS.map((k) => {
+                  const on = d.contactSel.includes(k);
+                  const tgDisabled = k === 'telegram' && !username;
+                  return (
+                    <button
+                      key={k}
+                      type="button"
+                      className={`chip ${on ? 'chip--on' : ''}`}
+                      onClick={() => toggleContact(k)}
+                      aria-pressed={on}
+                      disabled={tgDisabled}
+                    >
+                      {t(contactKindKey(k))}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="hint">{username ? t('post.contactPickHint') : t('post.contactTgNoNick')}</div>
             </div>
+
+            {d.contactSel.includes('phone') ? (
+              <Field label={t('post.contactPhoneLabel')} value={d.phoneVal} onChange={(v) => patch({ phoneVal: v })} placeholder={t('post.contactPhonePlaceholder')} type="tel" inputMode="tel" maxLength={60} />
+            ) : null}
+
+            {d.contactSel.includes('telegram') && username ? (
+              <label className="field">
+                <span className="field__label">{t('contactKind.telegram')}</span>
+                <div className="field__input field__input--readonly">@{username}</div>
+                <span className="field__hint">{t('post.contactTgAutofill')}</span>
+              </label>
+            ) : null}
+
+            {d.contactSel.includes('kakao') ? (
+              <Field label={t('post.contactKakaoLabel')} value={d.kakaoVal} onChange={(v) => patch({ kakaoVal: v })} placeholder={t('post.contactKakaoPlaceholder')} maxLength={60} />
+            ) : null}
+
+            {d.contactSel.includes('whatsapp') ? (
+              <Field label={t('post.contactWhatsappLabel')} value={d.whatsappVal} onChange={(v) => patch({ whatsappVal: v })} placeholder={t('post.contactWhatsappPlaceholder')} type="tel" inputMode="tel" maxLength={60} />
+            ) : null}
+
+            {d.contactSel.includes('other') ? (
+              <Field label={t('post.contactOtherLabel')} value={d.otherVal} onChange={(v) => patch({ otherVal: v })} placeholder={t('post.contactOtherPlaceholder')} maxLength={80} />
+            ) : null}
+
+            {d.contactSel.length ? (
+              <div className={`hint ${contactJoined.length > CONTACT_RAW_MAX ? 'hint--warn' : ''}`}>
+                {t('post.contactLenHint', { n: contactJoined.length })}
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="stack stack--wizard">
@@ -309,10 +471,10 @@ export default function PostScreen() {
               <SummaryRow k={t('post.titleLabel')} v={d.title || '—'} />
               <SummaryRow k={t('post.workTypeLabel')} v={d.workType ? t(workTypeKey(d.workType)) : '—'} />
               <SummaryRow k={t('post.salaryLabel')} v={d.salaryText || '—'} />
-              <SummaryRow k={t('post.feeLabel')} v={t(feeKey(d.placementFee))} />
+              <SummaryRow k={t('post.feeLabel')} v={d.placementFee ? t(feeKey(d.placementFee)) : '—'} />
               <SummaryRow k={t('post.s3.title')} v={d.visa.length ? d.visa.map((x) => t(visaKey(x))).join(', ') : '—'} />
-              <SummaryRow k={t('post.cityLabel')} v={d.city ?? '—'} />
-              <SummaryRow k={t('post.contactLabel')} v={d.contactRaw || '—'} />
+              <SummaryRow k={t('post.cityLabel')} v={d.cityOther ? d.cityText.trim() || '—' : d.city ?? '—'} />
+              <SummaryRow k={t('post.contactLabel')} v={contactJoined || '—'} />
             </div>
             <label className="consent">
               <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />

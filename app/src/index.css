@@ -382,6 +382,23 @@ a {
   margin-bottom: var(--kj-space-6);
 }
 
+/* Compact CityPicker — tighter row height + smaller gaps between regions when
+   embedded in the ad wizard (the `compact` prop). */
+.citypicker--compact .region {
+  margin-bottom: var(--kj-space-3);
+}
+.citypicker--compact .region:last-child {
+  margin-bottom: 0;
+}
+.citypicker--compact .region__title {
+  padding-bottom: 3px;
+}
+.citypicker--compact .row {
+  min-height: 40px;
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
 .region__title {
   color: var(--kj-section-header-text);
   font-size: 12px;
@@ -495,6 +512,15 @@ a {
   100% {
     transform: scale(1);
   }
+}
+
+/* Disabled chip (e.g. Telegram with no public @username in the ad wizard). */
+.chip:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.chip:disabled:active {
+  transform: none;
 }
 
 /* ── Vacancy card ──────────────────────────────────────────────────────── */
@@ -1031,6 +1057,12 @@ a {
   padding: 6px 4px 0;
 }
 
+/* Warning variant — e.g. the contact string exceeded the 200-char server cap. */
+.hint--warn {
+  color: var(--kj-destructive);
+  font-weight: 600;
+}
+
 .hero {
   padding: 8px 4px 14px;
 }
@@ -1234,6 +1266,12 @@ a {
   resize: vertical;
   min-height: 96px;
   line-height: 1.4;
+}
+
+/* Read-only value styled like an input (e.g. the auto-filled Telegram @username). */
+.field__input--readonly {
+  color: var(--kj-subtitle);
+  background: color-mix(in srgb, var(--kj-section-bg) 70%, transparent);
 }
 
 /* Helper text under a field (keyword filter, ad description, contact, …). */
