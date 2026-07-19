@@ -95,6 +95,13 @@ const files = [
   // parser's repost/revive logic keep an admin hide from being overridden by a later repost.
   // Depends on vacancies (draft_0001_init.sql).
   'draft_0011_admin_hidden.sql',
+
+  // "Мои объявления" (0012) — ADDITIVE. Adds the user_ad_status label 'archived' (ADD VALUE IF
+  // NOT EXISTS — unused in-file, so it commits before first use) + user_ads.bumped_at + two
+  // config tunables (bump/edit cooldowns). Lets an author bump/edit/archive/unarchive/delete
+  // their own ad; the feed re-floats a bumped ad via greatest(created_at, bumped_at). Depends on
+  // user_ads (draft_0003_user_ads.sql) and config (draft_0001_init.sql).
+  'draft_0012_my_ads.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

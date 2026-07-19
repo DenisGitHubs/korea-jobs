@@ -20,45 +20,11 @@ import { requireAdmin } from '../admin/auth.js';
 import { getConfigNumber } from '../config.js';
 import { sendMessage } from '../bot/telegram.js';
 import { adminTelegramIds } from '../admin/auth.js';
-import { classifyAdText, recordModerationExample } from './moderation.js';
-import { looksLikeAdSpam } from './adspam.js';
-import { WORK_TYPES, VISA_TYPES, PLACEMENT_FEES, CONTACT_KINDS, type ParsedVacancy } from '../parser/prompt.js';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const WORK_TYPE_SET = new Set<string>(WORK_TYPES);
-const VISA_TYPE_SET = new Set<string>(VISA_TYPES);
-const PLACEMENT_FEE_SET = new Set<string>(PLACEMENT_FEES);
-const CONTACT_KIND_SET = new Set<string>(CONTACT_KINDS);
-
-type AdStatus = 'approved' | 'pending' | 'rejected';
-
-interface AdBody {
-  city_slug?: unknown;
-  city_text?: unknown;
-  region_slug?: unknown;
-  work_type?: unknown;
-  visa_types?: unknown;
-  placement_fee?: unknown;
-  has_housing?: unknown;
-  has_meals?: unknown;
-  salary_text?: unknown;
-  title?: unknown;
-  description?: unknown;
-  contact_raw?: unknown;
-  contact_kind?: unknown;
-  housing_terms?: unknown;
-  meals_info?: unknown;
-  schedule?: unknown;
-}
-
-const s = (v: unknown, max = 2000): string | null =>
-  typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null;
-const tri = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
-const visaArr = (v: unknown): string[] =>
-  Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string' && VISA_TYPE_SET.has(x)))] : [];
+import { recordModerationExample, decideAdModeration } from './moderation.js';
+import { parseAdInput, adModText, UUID_RE, type AdBody } from './input.js';
 
 /** Notify configured admins about a pending ad with inline Approve/Reject buttons. */
-async function notifyAdminsPending(adId: string, summary: string): Promise<void> {
+export async function notifyAdminsPending(adId: string, summary: string): Promise<void> {
   const ids = [...adminTelegramIds()];
   if (ids.length === 0) return;
   const extra = {
@@ -87,75 +53,22 @@ export async function adsCreate(req: ReqLike, res: ResLike): Promise<void> {
   const auth = await authenticate(req);
   if (!auth.ok) return sendError(res, ApiErrorCode.Unauthorized);
 
-  const body = (await readJsonBody(req)) as AdBody | null;
-  const title = s(body?.title, 120);
-  const description = s(body?.description, 4000);
-  const contactRaw = s(body?.contact_raw, 200);
-  if (!title || !description || !contactRaw) {
-    return sendError(res, ApiErrorCode.BadRequest, 'title, description and contact_raw are required');
-  }
-
-  const workType = typeof body?.work_type === 'string' && WORK_TYPE_SET.has(body.work_type) ? body.work_type : 'other';
-  const visaTypes = visaArr(body?.visa_types);
-  const placementFee =
-    typeof body?.placement_fee === 'string' && PLACEMENT_FEE_SET.has(body.placement_fee)
-      ? body.placement_fee
-      : 'unknown';
-  const contactKind =
-    typeof body?.contact_kind === 'string' && CONTACT_KIND_SET.has(body.contact_kind) ? body.contact_kind : null;
-  const hasHousing = tri(body?.has_housing);
-  const hasMeals = tri(body?.has_meals);
-  const salaryText = s(body?.salary_text, 500);
-  const housingTerms = s(body?.housing_terms, 1000);
-  const mealsInfo = s(body?.meals_info, 1000);
-  const schedule = s(body?.schedule, 500);
-  const reqRegion = s(body?.region_slug, 60);
-  const reqCitySlug = s(body?.city_slug, 60);
-  const reqCityText = s(body?.city_text, 60);
+  const parsed = parseAdInput((await readJsonBody(req)) as AdBody | null);
+  if (!parsed.ok) return sendError(res, ApiErrorCode.BadRequest, parsed.error);
+  const f = parsed.fields;
 
   // Moderation text (title + description + extras). This is DATA, never an instruction.
-  const modText = [title, description, salaryText, schedule, housingTerms, mealsInfo].filter(Boolean).join('\n');
-
-  let status: AdStatus;
-  let rejectReason: string | null = null;
-  let item: ParsedVacancy | null = null;
-  let cityIdBySlug = new Map<string, string>();
-  let aiConfidence: number | null = null;
-
-  if (looksLikeAdSpam(modText)) {
-    // Deterministic anti-ad backstop BEFORE the model (owner: never let ads through; 007 rec:
-    // user ads had no deterministic guard). Store as rejected, spend no tokens, and feed the
-    // decision to the classifier's learning set as a rejected example (below).
-    status = 'rejected';
-    rejectReason = 'ads';
-  } else {
-    const cls = await classifyAdText(modText);
-    item = cls.item;
-    cityIdBySlug = cls.cityIdBySlug;
-    aiConfidence = item?.confidence ?? null;
-
-    // Decision (thresholds in config; permissive default → human review, not silent drop).
-    const autoApproveMin = await getConfigNumber('ads_auto_approve_min', 0.8);
-    const conf = item?.confidence ?? 0;
-    if (!item) {
-      status = 'pending'; // model/transport failed → route to a human
-    } else if (item.reject_reason === 'spam' || (!item.is_vacancy && conf >= 0.8)) {
-      status = 'rejected';
-      rejectReason = item.reject_reason ?? 'not_vacancy';
-    } else if (item.is_vacancy && conf >= autoApproveMin && !item.reject_reason) {
-      status = 'approved';
-    } else {
-      status = 'pending';
-      rejectReason = item.reject_reason ?? null;
-    }
-  }
+  const modText = adModText(f.title, f.description, f.salaryText, f.schedule, f.housingTerms, f.mealsInfo);
+  // Deterministic ad-spam backstop + AI classifier + config thresholds — the SINGLE decision,
+  // shared with edit/unarchive so all three routes agree on approve/pending/reject.
+  const { status, rejectReason, item, cityIdBySlug, aiConfidence } = await decideAdModeration(modText);
 
   // Resolve city: user's directory pick wins; else the AI-picked slug. city_text (the free
   // "Другое" city) is kept ONLY when nothing resolved a city_id — the two are exclusive.
-  const citySlug = (reqCitySlug && cityIdBySlug.has(reqCitySlug) ? reqCitySlug : null) ?? item?.city_slug ?? null;
+  const citySlug = (f.reqCitySlug && cityIdBySlug.has(f.reqCitySlug) ? f.reqCitySlug : null) ?? item?.city_slug ?? null;
   const cityId = citySlug ? cityIdBySlug.get(citySlug) ?? null : null;
-  const cityText = cityId ? null : reqCityText;
-  const regionSlug = reqRegion ?? item?.region_slug ?? null;
+  const cityText = cityId ? null : f.reqCityText;
+  const regionSlug = f.reqRegion ?? item?.region_slug ?? null;
 
   const ttl = await getConfigNumber('user_ad_ttl_days', 14);
 
@@ -168,10 +81,10 @@ export async function adsCreate(req: ReqLike, res: ResLike): Promise<void> {
         housing_terms, meals_info, schedule, status, moderated_at, reject_reason, ai_confidence,
         expires_at, notify_pending
       ) values (
-        ${auth.user.id}::uuid, ${cityId}::uuid, ${cityText}, ${regionSlug}, ${workType}::work_type,
-        ${visaTypes}::visa_type[], ${placementFee}::placement_fee,
-        ${hasHousing}, ${hasMeals}, ${salaryText}, ${title}, ${description}, ${contactRaw}, ${contactKind}::contact_kind,
-        ${housingTerms}, ${mealsInfo}, ${schedule},
+        ${auth.user.id}::uuid, ${cityId}::uuid, ${cityText}, ${regionSlug}, ${f.workType}::work_type,
+        ${f.visaTypes}::visa_type[], ${f.placementFee}::placement_fee,
+        ${f.hasHousing}, ${f.hasMeals}, ${f.salaryText}, ${f.title}, ${f.description}, ${f.contactRaw}, ${f.contactKind}::contact_kind,
+        ${f.housingTerms}, ${f.mealsInfo}, ${f.schedule},
         ${status}::user_ad_status,
         case when ${status} = 'pending' then null else now() end,
         ${rejectReason}, ${aiConfidence},
@@ -187,7 +100,7 @@ export async function adsCreate(req: ReqLike, res: ResLike): Promise<void> {
     }
     // Pending → push to admins for a manual call.
     if (id && status === 'pending') {
-      const summary = [citySlug ?? cityText ?? regionSlug ?? '—', workType, title].filter(Boolean).join(' · ');
+      const summary = [citySlug ?? cityText ?? regionSlug ?? '—', f.workType, f.title].filter(Boolean).join(' · ');
       await notifyAdminsPending(id, summary);
     }
 
@@ -201,6 +114,7 @@ interface AdRow {
   id: string;
   city_slug: string | null;
   city_name: unknown;
+  city_text: string | null;
   region_slug: string | null;
   work_type: string;
   visa_types: string[];
@@ -218,6 +132,7 @@ interface AdRow {
   status: string;
   reject_reason: string | null;
   created_at: string;
+  bumped_at: string | null;
   expires_at: string | null;
 }
 
@@ -230,11 +145,11 @@ export async function adsMine(req: ReqLike, res: ResLike): Promise<void> {
   try {
     const sql = getSql();
     const rows = (await sql`
-      select a.id, c.slug as city_slug, c.name as city_name, a.region_slug, a.work_type,
+      select a.id, c.slug as city_slug, c.name as city_name, a.city_text, a.region_slug, a.work_type,
              a.visa_types, a.placement_fee, a.has_housing, a.has_meals, a.salary_text,
              a.title, a.description, a.contact_raw, a.contact_kind,
              a.housing_terms, a.meals_info, a.schedule, a.status, a.reject_reason,
-             a.created_at, a.expires_at
+             a.created_at, a.bumped_at, a.expires_at
       from user_ads a
       left join cities c on c.id = a.city_id
       where a.author_user_id = ${auth.user.id}::uuid
@@ -244,6 +159,7 @@ export async function adsMine(req: ReqLike, res: ResLike): Promise<void> {
     const items = rows.map((r) => ({
       id: r.id,
       city: r.city_slug ? { slug: r.city_slug, name: r.city_name } : null,
+      city_text: r.city_text ?? null,
       region_slug: r.region_slug ?? null,
       work_type: r.work_type,
       visa_types: Array.isArray(r.visa_types) ? r.visa_types : [],
@@ -261,6 +177,7 @@ export async function adsMine(req: ReqLike, res: ResLike): Promise<void> {
       status: r.status,
       reject_reason: r.reject_reason ?? null,
       created_at: new Date(r.created_at).toISOString(),
+      bumped_at: r.bumped_at ? new Date(r.bumped_at).toISOString() : null,
       expires_at: r.expires_at ? new Date(r.expires_at).toISOString() : null,
     }));
     send(res, 200, { items });

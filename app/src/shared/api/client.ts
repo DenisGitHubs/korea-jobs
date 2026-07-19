@@ -5,8 +5,10 @@
  */
 import { authHeader } from '../auth/telegram';
 import type {
+  AdBumpResult,
   AdCreateResult,
   AdInput,
+  AdModerateResult,
   City,
   CooperationInput,
   Me,
@@ -171,8 +173,28 @@ export const api = {
   /** POST /ads — submit a user ad; may be approved / pending / rejected. */
   createAd: (input: AdInput) => request<AdCreateResult>('POST', '/ads', { body: input }),
 
-  /** GET /ads/mine — the current user's submitted ads. */
-  myAds: () => request<UserAd[]>('GET', '/ads/mine'),
+  /** GET /ads/mine — the current user's submitted ads (any status, incl. archived).
+   *  Server wraps the list as { items }; unwrap so callers get a bare array. */
+  adsMine: () => request<{ items: UserAd[] }>('GET', '/ads/mine').then((r) => r.items),
+
+  /** POST /ads/:id/bump — refresh freshness (author only, approved & non-archived; 429 within cooldown). */
+  adBump: (id: string) =>
+    request<AdBumpResult>('POST', `/ads/${encodeURIComponent(id)}/bump`, { body: {} }),
+
+  /** POST /ads/:id/archive — park the ad off the feed (author only). */
+  adArchive: (id: string) =>
+    request<{ ok: true }>('POST', `/ads/${encodeURIComponent(id)}/archive`, { body: {} }),
+
+  /** POST /ads/:id/unarchive — send an archived ad back through moderation. */
+  adUnarchive: (id: string) =>
+    request<AdModerateResult>('POST', `/ads/${encodeURIComponent(id)}/unarchive`, { body: {} }),
+
+  /** PATCH /ads/:id — edit an ad; re-runs moderation (author only). Body = full AdInput. */
+  adPatch: (id: string, input: AdInput) =>
+    request<AdModerateResult>('PATCH', `/ads/${encodeURIComponent(id)}`, { body: input }),
+
+  /** DELETE /ads/:id — permanently delete an ad (author only, hard delete). */
+  adDelete: (id: string) => request<{ ok: true }>('DELETE', `/ads/${encodeURIComponent(id)}`),
 
   /** POST /cooperation — a partnership / cooperation request (stub). */
   cooperation: (input: CooperationInput) => request<{ ok: true }>('POST', '/cooperation', { body: input }),

@@ -25,6 +25,7 @@ import {
   MOCK_SOURCES_COUNT,
   RAW_ITEMS,
   RAW_REVEALS,
+  buildMyAds,
   buildVacancies,
   type MockVacancy,
 } from './fixtures';
@@ -32,9 +33,18 @@ import {
 const PAGE_SIZE = 8;
 const ALL: MockVacancy[] = buildVacancies();
 
+/** User-ad lifetime used for expires_at on approve/bump (mirrors user_ad_ttl_days). */
+const AD_TTL_MS = 14 * 86400000;
+/** Bump cooldown (mirrors user_ad_bump_min_hours default). */
+const BUMP_COOLDOWN_MS = 12 * 3600000;
+/** Edit anti-hammer window (mirrors user_ad_edit_min_minutes default). */
+const EDIT_MIN_MS = 10 * 60000;
+
 // Mutable session state (resets on reload).
 let me: Me = structuredClone(DEFAULT_ME);
-const myAds: UserAd[] = [];
+let myAds: UserAd[] = buildMyAds();
+/** Last-edit timestamps (ms) per ad id — drives the PATCH anti-hammer 429. */
+const adUpdatedAt = new Map<string, number>();
 /** Bookmarked offer ids (source of truth for is_saved in every projection). */
 const savedIds = new Set<string>(INITIAL_SAVED_IDS);
 
@@ -134,6 +144,54 @@ function moderateAd(input: AdInput): { status: AdCreateResult['status']; reason:
   // Even-length descriptions go to manual review to exercise the "pending" UI.
   if (desc.length % 2 === 0) return { status: 'pending', reason: null };
   return { status: 'approved', reason: null };
+}
+
+/** Re-moderate an existing ad by its stored text (unarchive path). */
+function moderateStored(ad: UserAd): { status: AdCreateResult['status']; reason: string | null } {
+  return moderateAd({
+    title: ad.title,
+    description: ad.description,
+    contact_raw: ad.contact_raw ?? '',
+  });
+}
+
+/** Build the feed (VacancyView) projection of an approved user ad. */
+function feedItemFromAd(ad: UserAd, postedAt: string): MockVacancy {
+  return {
+    id: ad.id,
+    city: ad.city,
+    region_slug: ad.region_slug,
+    work_type: ad.work_type,
+    gender: 'any',
+    salary_text: ad.salary_text,
+    salary_min: null,
+    salary_max: null,
+    salary_period: null,
+    employer: null,
+    description: ad.description,
+    posted_at: postedAt,
+    has_contact: Boolean(ad.contact_raw),
+    visa_types: ad.visa_types,
+    placement_fee: ad.placement_fee,
+    has_housing: ad.has_housing,
+    has_meals: ad.has_meals,
+    source_kind: 'user',
+    repost: false,
+    is_saved: false,
+    contact: ad.contact_raw ? { kind: ad.contact_kind ?? 'other', value: ad.contact_raw } : undefined,
+  };
+}
+
+/** Drop an ad from the feed (used on archive / delete / before a re-approve). */
+function removeFromFeed(id: string): void {
+  const i = ALL.findIndex((v) => v.id === id);
+  if (i >= 0) ALL.splice(i, 1);
+}
+
+/** Re-insert (or refresh) an approved ad at the top of the feed. */
+function upsertFeed(ad: UserAd, postedAt: string): void {
+  removeFromFeed(ad.id);
+  ALL.unshift(feedItemFromAd(ad, postedAt));
 }
 
 export async function handleMock(method: string, path: string, body?: unknown): Promise<unknown> {
@@ -267,9 +325,10 @@ export async function handleMock(method: string, path: string, body?: unknown): 
   }
 
   if (seg[0] === 'ads') {
-    // GET /ads/mine — the current user's ads.
+    // GET /ads/mine — the current user's ads (any status, incl. archived).
+    // Wrapped as { items } to mirror the real backend (lib/korea/ads/rw.ts).
     if (method === 'GET' && seg.length === 2 && seg[1] === 'mine') {
-      return myAds;
+      return { items: myAds };
     }
     // POST /ads — submit an ad.
     if (method === 'POST' && seg.length === 1) {
@@ -282,6 +341,7 @@ export async function handleMock(method: string, path: string, body?: unknown): 
       const ad: UserAd = {
         id,
         city: c ? { slug: c.slug, name: c.name } : null,
+        city_text: input.city_text ?? null,
         region_slug: input.region_slug ?? c?.region_slug ?? null,
         work_type: input.work_type ?? 'other',
         visa_types: input.visa_types ?? [],
@@ -299,40 +359,116 @@ export async function handleMock(method: string, path: string, body?: unknown): 
         status: uaStatus,
         reject_reason: reason,
         created_at: now,
-        expires_at: null,
+        bumped_at: null,
+        expires_at: status === 'approved' ? new Date(Date.now() + AD_TTL_MS).toISOString() : null,
       };
       myAds.unshift(ad);
 
       // Approved ads immediately appear in the feed as a user-sourced item.
-      if (status === 'approved') {
-        ALL.unshift({
-          id,
-          city: ad.city,
-          region_slug: ad.region_slug,
-          work_type: ad.work_type,
-          gender: 'any',
-          salary_text: ad.salary_text,
-          salary_min: null,
-          salary_max: null,
-          salary_period: null,
-          employer: null,
-          description: ad.description,
-          posted_at: now,
-          has_contact: Boolean(ad.contact_raw),
-          visa_types: ad.visa_types,
-          placement_fee: ad.placement_fee,
-          has_housing: ad.has_housing,
-          has_meals: ad.has_meals,
-          source_kind: 'user',
-          repost: false,
-          is_saved: false,
-          contact: ad.contact_raw
-            ? { kind: ad.contact_kind ?? 'other', value: ad.contact_raw }
-            : undefined,
-        });
-      }
+      if (status === 'approved') upsertFeed(ad, now);
       const result: AdCreateResult = { id: status === 'rejected' ? null : id, status };
       return result;
+    }
+
+    // Actions on a single ad: /ads/:id and /ads/:id/<action>. Author is implicit
+    // in the mock (the session user owns every ad in `myAds`).
+    const id = seg[1];
+    const idx = id ? myAds.findIndex((a) => a.id === id) : -1;
+
+    // POST /ads/:id/bump — refresh freshness; 429 within the cooldown window.
+    if (method === 'POST' && seg.length === 3 && seg[2] === 'bump') {
+      if (idx < 0) return fail(404, 'not_found');
+      const ad = myAds[idx];
+      if (ad.status !== 'approved') return fail(400, 'bad_request');
+      const base = Math.max(
+        new Date(ad.created_at).getTime(),
+        ad.bumped_at ? new Date(ad.bumped_at).getTime() : 0,
+      );
+      if (Date.now() - base < BUMP_COOLDOWN_MS) return fail(429, 'rate_limited');
+      const nowMs = Date.now();
+      const bumpedAt = new Date(nowMs).toISOString();
+      const updated: UserAd = { ...ad, bumped_at: bumpedAt, expires_at: new Date(nowMs + AD_TTL_MS).toISOString() };
+      myAds[idx] = updated;
+      upsertFeed(updated, bumpedAt); // reflects greatest(created_at, bumped_at) in the feed
+      return { ok: true, bumped_at: bumpedAt };
+    }
+
+    // POST /ads/:id/archive — park the ad off the feed.
+    if (method === 'POST' && seg.length === 3 && seg[2] === 'archive') {
+      if (idx < 0) return fail(404, 'not_found');
+      const ad = myAds[idx];
+      if (!['approved', 'pending', 'expired', 'rejected'].includes(ad.status)) {
+        return fail(400, 'bad_request');
+      }
+      myAds[idx] = { ...ad, status: 'archived' };
+      removeFromFeed(ad.id);
+      return { ok: true };
+    }
+
+    // POST /ads/:id/unarchive — re-run moderation on the stored text.
+    if (method === 'POST' && seg.length === 3 && seg[2] === 'unarchive') {
+      if (idx < 0) return fail(404, 'not_found');
+      const ad = myAds[idx];
+      if (ad.status !== 'archived') return fail(400, 'bad_request');
+      const { status, reason } = moderateStored(ad);
+      const now = new Date().toISOString();
+      const updated: UserAd = {
+        ...ad,
+        status,
+        reject_reason: reason,
+        expires_at: status === 'approved' ? new Date(Date.now() + AD_TTL_MS).toISOString() : ad.expires_at,
+      };
+      myAds[idx] = updated;
+      if (status === 'approved') upsertFeed(updated, now);
+      return { ok: true, status };
+    }
+
+    // PATCH /ads/:id — edit + mandatory re-moderation; anti-hammer 429.
+    if (method === 'PATCH' && seg.length === 2) {
+      if (idx < 0) return fail(404, 'not_found');
+      const ad = myAds[idx];
+      if (ad.status === 'taken_down') return fail(400, 'bad_request');
+      const lastEdit = adUpdatedAt.get(ad.id) ?? new Date(ad.created_at).getTime();
+      if (Date.now() - lastEdit < EDIT_MIN_MS) return fail(429, 'rate_limited');
+      const input = (body ?? {}) as AdInput;
+      const { status, reason } = moderateAd(input);
+      const c = input.city_slug ? CITIES.find((x) => x.slug === input.city_slug) ?? null : null;
+      const now = new Date().toISOString();
+      const updated: UserAd = {
+        ...ad,
+        title: input.title,
+        description: input.description,
+        contact_raw: input.contact_raw,
+        contact_kind: input.contact_kind ?? ad.contact_kind,
+        work_type: input.work_type ?? ad.work_type,
+        visa_types: input.visa_types ?? [],
+        placement_fee: input.placement_fee ?? 'unknown',
+        has_housing: input.has_housing ?? null,
+        has_meals: input.has_meals ?? null,
+        salary_text: input.salary_text ?? null,
+        housing_terms: input.housing_terms ?? null,
+        meals_info: input.meals_info ?? null,
+        schedule: input.schedule ?? null,
+        city: c ? { slug: c.slug, name: c.name } : input.city_slug === null ? null : ad.city,
+        city_text: input.city_text ?? null,
+        region_slug: input.region_slug ?? c?.region_slug ?? ad.region_slug,
+        status,
+        reject_reason: reason,
+        expires_at: status === 'approved' ? new Date(Date.now() + AD_TTL_MS).toISOString() : ad.expires_at,
+      };
+      myAds[idx] = updated;
+      adUpdatedAt.set(ad.id, Date.now());
+      removeFromFeed(ad.id);
+      if (status === 'approved') upsertFeed(updated, now);
+      return { ok: true, status };
+    }
+
+    // DELETE /ads/:id — permanent hard delete.
+    if (method === 'DELETE' && seg.length === 2) {
+      if (idx < 0) return fail(404, 'not_found');
+      myAds = myAds.filter((a) => a.id !== id);
+      removeFromFeed(id);
+      return { ok: true };
     }
   }
 

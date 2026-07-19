@@ -15,6 +15,7 @@ import type {
   ReferralView,
   SalaryPeriod,
   SourceKind,
+  UserAd,
   VacancyContact,
   VacancyView,
   VisaType,
@@ -273,6 +274,123 @@ export const DEFAULT_ME: Me = {
     require_meals: null,
   },
 };
+
+/**
+ * Seed for GET /ads/mine (mock mode) — the current user's own ads across the
+ * status spectrum so the "My ads" tab can be reviewed by eye and exercised:
+ *   1) approved & fresh (< 12 h)  → "Свежее" chip, "Поднять" available
+ *   2) approved & aged  (~30 h)   → "30 ч" chip, "Поднять" available
+ *   3) archived                   → "Архив" chip, "Вернуть из архива"
+ *   4) pending                    → "На модерации" chip
+ * Rebuilt on every session start so timestamps stay relative to "now".
+ */
+export function buildMyAds(): UserAd[] {
+  const now = Date.now();
+  const iso = (minsAgo: number): string => new Date(now - minsAgo * 60000).toISOString();
+  const cityOf = (slug: string): UserAd['city'] => {
+    const c = cityBySlug.get(slug);
+    return c ? { slug: c.slug, name: c.name } : null;
+  };
+  return [
+    {
+      id: 'ua-seed-1',
+      city: cityOf('ansan'),
+      city_text: null,
+      region_slug: 'gyeonggi',
+      work_type: 'factory',
+      visa_types: ['e9', 'h2'],
+      placement_fee: 'free',
+      has_housing: true,
+      has_meals: null,
+      salary_text: '12,000₩/час',
+      title: 'Сборщик на завод, Ансан',
+      description: 'Сборка автозапчастей, график 5/2, обучение на месте. Общежитие рядом с заводом.',
+      contact_raw: 'Тел.: 010-1234-5678',
+      contact_kind: 'phone',
+      housing_terms: 'Общежитие в 5 минутах',
+      meals_info: null,
+      schedule: '5/2, с 9:00',
+      status: 'approved',
+      reject_reason: null,
+      created_at: iso(120), // 2 h ago → "Свежее"
+      bumped_at: null,
+      expires_at: iso(-60 * 24 * 13),
+    },
+    {
+      id: 'ua-seed-2',
+      // "Other" city: not in the seed list, carried as free text (city_text).
+      city: null,
+      city_text: 'Кёнджу',
+      region_slug: 'gyeongbuk',
+      work_type: 'restaurant',
+      visa_types: ['h2', 'f_series'],
+      placement_fee: 'free',
+      has_housing: null,
+      has_meals: true,
+      salary_text: '시급 12,500₩',
+      title: 'Кухня и зал, ресторан в Кёнджу',
+      description: 'Работа на кухне и в зале, сменный график, питание бесплатно. Можно без языка.',
+      contact_raw: 'TG: @gyeongju_rest',
+      contact_kind: 'telegram',
+      housing_terms: null,
+      meals_info: 'Обеды за счёт заведения',
+      schedule: 'Сменный',
+      status: 'approved',
+      reject_reason: null,
+      created_at: iso(1800), // 30 h ago → "30 ч"
+      bumped_at: null,
+      expires_at: iso(-60 * 24 * 12),
+    },
+    {
+      id: 'ua-seed-3',
+      city: cityOf('incheon'),
+      city_text: null,
+      region_slug: 'incheon',
+      work_type: 'logistics',
+      visa_types: ['h2'],
+      placement_fee: 'unknown',
+      has_housing: null,
+      has_meals: null,
+      salary_text: '시급 11,500₩',
+      title: 'Склад маркетплейса, Инчхон',
+      description: 'Сортировка и упаковка посылок, дневные и ночные смены. Автобус от метро.',
+      contact_raw: 'Kakao: incheon_logi',
+      contact_kind: 'kakao',
+      housing_terms: null,
+      meals_info: null,
+      schedule: 'Смены 8 ч',
+      status: 'archived',
+      reject_reason: null,
+      created_at: iso(60 * 24 * 5), // 5 days ago
+      bumped_at: null,
+      expires_at: null,
+    },
+    {
+      id: 'ua-seed-4',
+      city: cityOf('daegu'),
+      city_text: null,
+      region_slug: 'daegu',
+      work_type: 'food',
+      visa_types: ['e9'],
+      placement_fee: 'free',
+      has_housing: null,
+      has_meals: null,
+      salary_text: '월 2,600,000₩',
+      title: 'Пищевое производство, Тэгу',
+      description: 'Цех с кондиционером, спецодежда, оформление по визе. Стабильная зарплата.',
+      contact_raw: 'Тел.: 010-2222-3333',
+      contact_kind: 'phone',
+      housing_terms: null,
+      meals_info: null,
+      schedule: '5/2',
+      status: 'pending',
+      reject_reason: null,
+      created_at: iso(20), // 20 min ago → "На модерации"
+      bumped_at: null,
+      expires_at: null,
+    },
+  ];
+}
 
 /** GET /referral demo payload (mock mode). Mirrors the agreed backend contract. */
 export const DEFAULT_REFERRAL: ReferralView = {

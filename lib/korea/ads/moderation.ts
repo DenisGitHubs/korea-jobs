@@ -15,6 +15,7 @@ import { getSql } from '../core/db.js';
 import { getConfigBool, getConfigNumber, getConfigString } from '../config.js';
 import { buildSystemPrompt, type CityRef, type ParsedVacancy } from '../parser/prompt.js';
 import { extractJson } from '../parser/extract-json.js';
+import { looksLikeAdSpam } from './adspam.js';
 
 const MODEL_ALIASES: Record<string, string> = {
   haiku: 'claude-haiku-4-5',
@@ -138,6 +139,52 @@ export async function classifyAdText(text: string): Promise<AdClassification> {
     console.error('[ads] classification call failed:', err instanceof Error ? err.message : String(err));
   }
   return { item: null, cityIdBySlug };
+}
+
+/** The full moderation verdict for a user ad's text. cityIdBySlug/item let the caller
+ *  resolve an AI-picked city (empty/null on the deterministic-reject path). */
+export interface AdDecision {
+  status: 'approved' | 'pending' | 'rejected';
+  rejectReason: string | null;
+  item: ParsedVacancy | null;
+  cityIdBySlug: Map<string, string>;
+  aiConfidence: number | null;
+}
+
+/**
+ * Decide approve / pending / reject for a user ad's moderation text. This is the SINGLE
+ * source of the decision, shared BYTE-FOR-BYTE by create, edit and unarchive so a re-moderated
+ * ad can never take a different route than a freshly created one with the same text:
+ *   1. Deterministic ad-spam backstop FIRST (owner: never let promo through; spend no tokens).
+ *   2. Else the AI classifier + the config confidence thresholds (permissive default → human
+ *      review, never a silent drop).
+ * Never throws (classifyAdText is contractually soft-failing → item:null → pending).
+ */
+export async function decideAdModeration(modText: string): Promise<AdDecision> {
+  if (looksLikeAdSpam(modText)) {
+    return { status: 'rejected', rejectReason: 'ads', item: null, cityIdBySlug: new Map(), aiConfidence: null };
+  }
+  const cls = await classifyAdText(modText);
+  const item = cls.item;
+  const cityIdBySlug = cls.cityIdBySlug;
+  const aiConfidence = item?.confidence ?? null;
+
+  const autoApproveMin = await getConfigNumber('ads_auto_approve_min', 0.8);
+  const conf = item?.confidence ?? 0;
+  let status: AdDecision['status'];
+  let rejectReason: string | null = null;
+  if (!item) {
+    status = 'pending'; // model/transport failed → route to a human
+  } else if (item.reject_reason === 'spam' || (!item.is_vacancy && conf >= 0.8)) {
+    status = 'rejected';
+    rejectReason = item.reject_reason ?? 'not_vacancy';
+  } else if (item.is_vacancy && conf >= autoApproveMin && !item.reject_reason) {
+    status = 'approved';
+  } else {
+    status = 'pending';
+    rejectReason = item.reject_reason ?? null;
+  }
+  return { status, rejectReason, item, cityIdBySlug, aiConfidence };
 }
 
 /** Record a decision into the learning set (best-effort; caller ignores failure). */

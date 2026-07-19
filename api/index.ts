@@ -42,6 +42,7 @@ import { onboardedPost } from '../lib/korea/users/onboarded.js';
 import { subscriptionPost } from '../lib/korea/subscriptions/rw.js';
 import { termsAccept } from '../lib/korea/terms/rw.js';
 import { adsCreate, adsMine, adsModerate } from '../lib/korea/ads/rw.js';
+import { adBump, adArchive, adUnarchive, adItem } from '../lib/korea/ads/manage.js';
 import { cooperationPost } from '../lib/korea/cooperation/rw.js';
 import { referralGet } from '../lib/korea/referral/read.js';
 
@@ -89,10 +90,17 @@ const ROUTES: Route[] = [
   // One-time onboarding flag (POST; stamps users.onboarded_at, first call wins).
   { segments: ['onboarded'], handler: onboardedPost },
   { segments: ['terms', 'accept'], handler: termsAccept },
-  // User ads ("Разместить")
+  // User ads ("Разместить") + "Мои объявления". Literal 'mine' MUST precede the parametric
+  // ['ads', ':id'] (edit/delete), else /ads/mine would match ':id' with id="mine" and 404 in
+  // the UUID check. The length-3 sub-routes (bump/archive/unarchive/moderate) can never
+  // collide with the length-2 ':id' route (matchRoute requires an equal segment count).
   { segments: ['ads'], handler: adsCreate },
   { segments: ['ads', 'mine'], handler: adsMine },
+  { segments: ['ads', ':id'], handler: adItem }, // PATCH edit / DELETE remove
   { segments: ['ads', ':id', 'moderate'], handler: adsModerate },
+  { segments: ['ads', ':id', 'bump'], handler: adBump },
+  { segments: ['ads', ':id', 'archive'], handler: adArchive },
+  { segments: ['ads', ':id', 'unarchive'], handler: adUnarchive },
   { segments: ['cooperation'], handler: cooperationPost },
   // Referral / loyalty (Authorization: tma <initData>)
   { segments: ['referral'], handler: referralGet },

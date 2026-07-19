@@ -2921,4 +2921,177 @@ a {
   }
   /* kj-pop / kj-card-in / kj-numin / kj-onb-in are one-shot — the global rule above
      already collapses them to instant; the count-up hook also skips ticking. */
+  .kj-toast {
+    animation: none !important;
+  }
+}
+
+/* ── My ads (Post screen tab) ──────────────────────────────────────────── */
+/* Full-width top tabs reusing the Segmented look. */
+.segmented--tabs {
+  display: flex;
+  width: 100%;
+  margin-bottom: var(--kj-space-4);
+}
+
+.segmented--tabs .segmented__opt {
+  flex: 1;
+  text-align: center;
+}
+
+/* Owner-facing ad card (not tappable — actions live in the row below). */
+.ad-card {
+  background: var(--kj-section-bg);
+  border-radius: var(--kj-radius);
+  padding: 14px;
+  box-shadow: var(--kj-card-shadow);
+}
+
+[data-theme='dark'] .ad-card {
+  box-shadow: var(--kj-card-highlight);
+  border: 1px solid var(--kj-card-border);
+}
+
+.ad-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.ad-card__title {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.3;
+  min-width: 0;
+}
+
+.ad-card__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  color: var(--kj-hint);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ad-card__dot {
+  opacity: 0.6;
+}
+
+.ad-card__reason {
+  margin-top: 8px;
+  color: var(--kj-destructive);
+  background: color-mix(in srgb, var(--kj-destructive) 12%, transparent);
+  border-radius: var(--kj-radius-sm);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  padding: 8px 10px;
+}
+
+/* Status chip — colour tracks the status kind. */
+.ad-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  background: var(--kj-secondary-bg);
+  color: var(--kj-hint);
+}
+
+.ad-status--fresh {
+  background: var(--kj-money-tint);
+  color: var(--kj-money-strong);
+}
+
+.ad-status--aged {
+  background: var(--kj-secondary-bg);
+  color: var(--kj-subtitle);
+}
+
+.ad-status--pending {
+  background: var(--kj-brand-tint);
+  color: var(--kj-brand-strong);
+}
+
+.ad-status--rejected,
+.ad-status--takendown {
+  background: color-mix(in srgb, var(--kj-destructive) 14%, transparent);
+  color: var(--kj-destructive);
+}
+
+.ad-status--archived,
+.ad-status--expired {
+  background: var(--kj-secondary-bg);
+  color: var(--kj-hint);
+}
+
+.ad-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* The delete control sits apart from the constructive actions. */
+.ad-actions__del {
+  margin-left: auto;
+  color: var(--kj-destructive);
+}
+
+/* Compact button size used inside ad cards. */
+.btn--sm {
+  padding: 8px 14px;
+  font-size: 13.5px;
+  min-height: 38px;
+  border-radius: var(--kj-radius-sm);
+}
+
+/* Destructive solid button (permanent delete). Flat — no brand sheen. */
+.btn--danger {
+  color: #fff;
+  background: var(--kj-destructive);
+}
+
+.btn--danger:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.btn--danger:disabled {
+  opacity: 0.4;
+}
+
+.modal__text + .modal__text {
+  margin-top: 8px;
+}
+
+.modal__text--warn {
+  color: var(--kj-destructive);
+  font-weight: 600;
+}
+
+/* Transient action feedback (bump / archive / delete). */
+.kj-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(90px + max(env(safe-area-inset-bottom, 0px), var(--tg-viewport-safe-area-inset-bottom, 0px)));
+  transform: translateX(-50%);
+  z-index: 40;
+  max-width: calc(var(--kj-maxw) - 48px);
+  padding: 11px 18px;
+  border-radius: 999px;
+  background: var(--kj-text);
+  color: var(--kj-bg);
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: center;
+  box-shadow: var(--lg-shadow, 0 12px 34px -14px rgba(24, 28, 48, 0.4));
+  animation: kj-fade-in 0.18s ease;
 }

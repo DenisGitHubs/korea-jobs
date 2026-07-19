@@ -12,7 +12,7 @@
 //
 // The feed is the UNION of scraped vacancies and APPROVED, unexpired user_ads, paged
 // by a single cursor over (posted_at, id). Each row carries source_kind so the client
-// can tell them apart; a user ad's posted_at is its created_at.
+// can tell them apart; a user ad's posted_at is greatest(created_at, bumped_at).
 //
 // SECURITY (007): explicit column projection — NEVER expose source_id /
 // raw_message_id / content_hash / internal ids. The feed and detail carry
@@ -159,7 +159,7 @@ function parseFeedFilters(req: ReqLike): FeedFilters {
 }
 
 // The feed's row set: scraped vacancies ∪ APPROVED, unexpired user ads (a user ad's
-// posted_at is its created_at). `search_tsv` is carried for the keyword filter. This is
+// posted_at is greatest(created_at, bumped_at)). `search_tsv` is carried for the keyword filter. This is
 // the SINGLE source of the union — the feed and the counter both wrap it, so they can
 // never diverge on which rows exist.
 //
@@ -193,7 +193,8 @@ function feedUnionSql(savedUserPh: string | null): string {
   select a.id, c.slug as city_slug, c.name as city_name, a.region_slug,
          a.work_type::text as work_type, 'any'::text as gender,
          a.salary_text, null::int as salary_min, null::int as salary_max, null::text as salary_period,
-         null::text as employer, a.description, a.created_at as posted_at,
+         null::text as employer, a.description,
+         greatest(a.created_at, coalesce(a.bumped_at, a.created_at)) as posted_at,
          (a.contact_raw is not null) as has_contact,
          a.visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
          'user'::text as source_kind, false as repost, ${saSel} as is_saved, a.search_tsv
@@ -227,7 +228,8 @@ function savedUnionSql(userPh: string): string {
   select a.id, c.slug as city_slug, c.name as city_name, a.region_slug,
          a.work_type::text as work_type, 'any'::text as gender,
          a.salary_text, null::int as salary_min, null::int as salary_max, null::text as salary_period,
-         null::text as employer, a.description, a.created_at as posted_at,
+         null::text as employer, a.description,
+         greatest(a.created_at, coalesce(a.bumped_at, a.created_at)) as posted_at,
          (a.contact_raw is not null) as has_contact,
          a.visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
          'user'::text as source_kind, false as repost, true as is_saved,
@@ -397,7 +399,8 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
       select a.id, c.slug as city_slug, c.name as city_name, a.region_slug,
              a.work_type::text as work_type, 'any'::text as gender,
              a.salary_text, null::int as salary_min, null::int as salary_max, null::text as salary_period,
-             null::text as employer, a.description, a.created_at as posted_at,
+             null::text as employer, a.description,
+             greatest(a.created_at, coalesce(a.bumped_at, a.created_at)) as posted_at,
              (a.contact_raw is not null) as has_contact,
              a.visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
              'user'::text as source_kind, false as repost,

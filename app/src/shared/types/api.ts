@@ -50,8 +50,18 @@ export type PlacementFee = 'free' | 'paid' | 'unknown';
 /** Where a feed item comes from. */
 export type SourceKind = 'scraped' | 'user';
 
-/** Lifecycle of a user-submitted ad. */
-export type UserAdStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'taken_down' | 'expired';
+/**
+ * Lifecycle of a user-submitted ad. 'archived' is a user-triggered state (the
+ * author parks an ad off the feed; it can later be sent back through moderation).
+ */
+export type UserAdStatus =
+  | 'draft'
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'taken_down'
+  | 'expired'
+  | 'archived';
 
 /** Localized display text as stored in the DB (jsonb { ru, ko, en }). */
 export interface Localized {
@@ -252,6 +262,8 @@ export interface AdCreateResult {
 export interface UserAd {
   id: string;
   city: { slug: string; name: Localized } | null;
+  /** Free-text city ("Other") when `city` is null; null when a seed city was chosen. */
+  city_text: string | null;
   region_slug: string | null;
   work_type: WorkType;
   visa_types: VisaType[];
@@ -269,7 +281,27 @@ export interface UserAd {
   status: UserAdStatus;
   reject_reason: string | null;
   created_at: string;
+  /** Last "bump" (freshness refresh); null if never bumped. Freshness base = max(created_at, bumped_at). */
+  bumped_at: string | null;
   expires_at: string | null;
+}
+
+/** Alias for the GET /api/ads/mine item shape (owner-facing "My ads" list). */
+export type AdMine = UserAd;
+
+/** POST /api/ads/:id/bump response. */
+export interface AdBumpResult {
+  ok: true;
+  bumped_at: string;
+}
+
+/**
+ * Response of the endpoints that re-run moderation on an existing ad:
+ * POST /api/ads/:id/unarchive and PATCH /api/ads/:id.
+ */
+export interface AdModerateResult {
+  ok: true;
+  status: 'approved' | 'pending' | 'rejected';
 }
 
 /** Body for POST /api/cooperation (stub: at least one of the two). */
