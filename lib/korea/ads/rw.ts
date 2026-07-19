@@ -146,7 +146,7 @@ export async function adsMine(req: ReqLike, res: ResLike): Promise<void> {
     const sql = getSql();
     const rows = (await sql`
       select a.id, c.slug as city_slug, c.name as city_name, a.city_text, a.region_slug, a.work_type,
-             a.visa_types, a.placement_fee, a.has_housing, a.has_meals, a.salary_text,
+             a.visa_types::text[] as visa_types, a.placement_fee, a.has_housing, a.has_meals, a.salary_text,
              a.title, a.description, a.contact_raw, a.contact_kind,
              a.housing_terms, a.meals_info, a.schedule, a.status, a.reject_reason,
              a.created_at, a.bumped_at, a.expires_at

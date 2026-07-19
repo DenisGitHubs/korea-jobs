@@ -17,8 +17,15 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
 
   try {
     const sql = getSql();
+    // @neondatabase/serverless parses arrays only for built-in element OIDs. CUSTOM ENUM
+    // arrays (work_type[]/visa_type[]) have per-DB dynamic OIDs the driver does not know, so
+    // they arrive as the RAW literal "{...}" string, which the Array.isArray guards below
+    // collapse to [] (the owner's "no saved filters" bug). Cast them to text[] (OID 1009 is
+    // parsed) so the driver returns real JS arrays. city_ids is uuid[] — a BUILT-IN array OID
+    // the driver already parses to an array (verified live), so it needs no cast.
     const subRows = (await sql`
-      select city_ids, work_types, notify, visa_types, placement_fee, require_housing, require_meals
+      select city_ids, work_types::text[] as work_types, notify,
+             visa_types::text[] as visa_types, placement_fee, require_housing, require_meals
       from subscriptions where user_id = ${user.id}::uuid limit 1`) as unknown as {
       city_ids: string[] | null;
       work_types: string[] | null;

@@ -300,10 +300,15 @@ export async function vacanciesFeed(req: ReqLike, res: ResLike): Promise<void> {
     const noCursor = cur === null;
     const cursorClause =
       `and (${ph(noCursor)} or (f.posted_at, f.id) < (${ph(cur?.p ?? null)}::timestamptz, ${ph(cur?.i ?? null)}::uuid))`;
+    // visa_types is cast to text[] HERE (the JS projection), NOT inside feedUnionSql: the
+    // enum-array column f.visa_types is consumed by buildFilterWhere's `&&`/`= any` against
+    // visa_type[] (${where}), so it must stay visa_type[] in the union. Casting to text[]
+    // only in the outer SELECT lets the neon driver parse it (enum arrays otherwise arrive as
+    // a raw "{...}" string that toView's Array.isArray guard collapses to []).
     const text =
       `select f.id, f.city_slug, f.city_name, f.region_slug, f.work_type, f.gender,
              f.salary_text, f.salary_min, f.salary_max, f.salary_period, f.employer,
-             f.description, f.posted_at, f.has_contact, f.visa_types, f.placement_fee,
+             f.description, f.posted_at, f.has_contact, f.visa_types::text[] as visa_types, f.placement_fee,
              f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved
       from (${feedUnionSql(savedUserPh)}) f
       ${where}
@@ -372,7 +377,7 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
              v.salary_text, v.salary_min, v.salary_max, v.salary_period::text as salary_period,
              v.employer, v.description, v.posted_at,
              (v.contact_normalized is not null) as has_contact,
-             v.visa_types, v.placement_fee::text as placement_fee, v.has_housing, v.has_meals,
+             v.visa_types::text[] as visa_types, v.placement_fee::text as placement_fee, v.has_housing, v.has_meals,
              'scraped'::text as source_kind, (v.repost_count > 0) as repost,
              (exists (select 1 from saved_vacancies s
                       where s.user_id = ${auth.user.id}::uuid and s.vacancy_id = v.id)) as is_saved,
@@ -402,7 +407,7 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
              null::text as employer, a.description,
              greatest(a.created_at, coalesce(a.bumped_at, a.created_at)) as posted_at,
              (a.contact_raw is not null) as has_contact,
-             a.visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
+             a.visa_types::text[] as visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
              'user'::text as source_kind, false as repost,
              (exists (select 1 from saved_ads s
                       where s.user_id = ${auth.user.id}::uuid and s.ad_id = a.id)) as is_saved
@@ -540,10 +545,13 @@ export async function savedFeed(req: ReqLike, res: ResLike): Promise<void> {
     const noCursor = cur === null;
     const cursorClause =
       `and (${ph(noCursor)} or (f.saved_at, f.id) < (${ph(cur?.p ?? null)}::timestamptz, ${ph(cur?.i ?? null)}::uuid))`;
+    // visa_types -> text[] in the JS projection so the neon driver parses the enum array
+    // (see vacanciesFeed). savedUnionSql itself is left as visa_type[]; the saved feed applies
+    // no visa filter, but keeping the cast at the projection boundary mirrors the main feed.
     const text =
       `select f.id, f.city_slug, f.city_name, f.region_slug, f.work_type, f.gender,
              f.salary_text, f.salary_min, f.salary_max, f.salary_period, f.employer,
-             f.description, f.posted_at, f.has_contact, f.visa_types, f.placement_fee,
+             f.description, f.posted_at, f.has_contact, f.visa_types::text[] as visa_types, f.placement_fee,
              f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.saved_at
       from (${savedUnionSql(userPh)}) f
       where true
