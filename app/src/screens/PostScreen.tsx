@@ -498,7 +498,7 @@ export default function PostScreen() {
             ) : step === 2 ? (
               <div className="stack stack--wizard">
                 <div className="wizard__headline">{t('post.s3.title')}</div>
-                <ChipSelect options={visaOptions} value={d.visa} onChange={onVisaChange} />
+                <ChipSelect grid={2} options={visaOptions} value={d.visa} onChange={onVisaChange} />
                 <div className="hint">{t('post.visaHint')}</div>
               </div>
             ) : step === 3 ? (

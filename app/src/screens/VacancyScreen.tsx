@@ -16,7 +16,7 @@ import { EmptyState } from '../components/EmptyState';
 import { WorkTypeBadge } from '../components/WorkTypeBadge';
 import { HeartIcon } from '../components/VacancyCard';
 import { ContactLines } from '../components/ContactLines';
-import { findTelegramUsername, splitContacts } from '../lib/contacts';
+import { findPhone, findTelegramUsername, splitContacts } from '../lib/contacts';
 
 function ShieldIcon() {
   return (
@@ -326,41 +326,41 @@ export default function VacancyScreen() {
                 // Several contacts packed into one field → one row each.
                 <ContactLines value={contact.contact.value} onTelegram={writeTelegramUsername} />
               ) : (
-                <div className="contact">
-                  <div>
-                    <div className="contact__kind">{t(`contactKind.${contact.contact.kind}`)}</div>
-                    <div className="contact__value">{contact.contact.value}</div>
-                  </div>
-                  {isTelegramContact(contact.contact) ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <button
-                        className="btn btn--tg btn--block"
-                        onClick={() => writeTelegram(contact.contact!)}
-                      >
-                        {t('contact.writeTelegram')}
-                      </button>
-                      <button className="btn btn--secondary" onClick={() => copy(contact.contact!.value)}>
-                        {copied ? t('vacancy.copied') : t('vacancy.copy')}
-                      </button>
+                (() => {
+                  const c = contact.contact!;
+                  const isTg = isTelegramContact(c);
+                  // Dial-able phone for the primary "call" action: kind=phone or any
+                  // phone-like value. Telegram/WhatsApp are excluded so their own
+                  // action (write / open app) stays the primary one.
+                  const phone = isTg || c.kind === 'whatsapp' ? null : findPhone(c.value);
+                  const openHref = contactHref(c); // wa.me / t.me / null (phone handled above)
+                  return (
+                    <div className="contact">
+                      <div className="contact__kind">{t(`contactKind.${c.kind}`)}</div>
+                      <div className={`contact__value${phone ? ' contact__value--nowrap' : ''}`}>
+                        {c.value}
+                      </div>
+                      <div className="contact__actions">
+                        {isTg ? (
+                          <button className="btn btn--tg" onClick={() => writeTelegram(c)}>
+                            {t('contact.writeTelegram')}
+                          </button>
+                        ) : phone ? (
+                          <a className="btn btn--tg" href={`tel:${phone}`}>
+                            {t('contact.call')}
+                          </a>
+                        ) : openHref ? (
+                          <a className="btn btn--tg" href={openHref} target="_blank" rel="noreferrer">
+                            {t('vacancy.open')}
+                          </a>
+                        ) : null}
+                        <button className="btn btn--secondary" onClick={() => copy(c.value)}>
+                          {copied ? t('vacancy.copied') : t('vacancy.copy')}
+                        </button>
+                      </div>
                     </div>
-                  ) : (
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button className="btn btn--secondary" onClick={() => copy(contact.contact!.value)}>
-                        {copied ? t('vacancy.copied') : t('vacancy.copy')}
-                      </button>
-                      {contactHref(contact.contact) ? (
-                        <a
-                          className="btn btn--tg"
-                          href={contactHref(contact.contact) ?? undefined}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {t('vacancy.open')}
-                        </a>
-                      ) : null}
-                    </div>
-                  )}
-                </div>
+                  );
+                })()
               )
             ) : (
               <div className="muted" style={{ padding: '4px 4px' }}>

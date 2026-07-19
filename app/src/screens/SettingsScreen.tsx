@@ -119,7 +119,7 @@ export default function SettingsScreen() {
 
         <div className="region">
           <div className="region__title">{t('filter.visa')}</div>
-          <ChipSelect options={visaOptions} value={visa} onChange={setVisa} />
+          <ChipSelect grid={2} options={visaOptions} value={visa} onChange={setVisa} />
         </div>
 
         <div className="region">

@@ -152,7 +152,7 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
 
         <section className="filter__block">
           <div className="region__title">{t('filter.visa')}</div>
-          <ChipSelect options={visaOptions} value={draft.visa} onChange={(v) => patch({ visa: v })} />
+          <ChipSelect grid={2} options={visaOptions} value={draft.visa} onChange={(v) => patch({ visa: v })} />
           <p className="field__hint">{t('visa.disclaimer')}</p>
         </section>
 

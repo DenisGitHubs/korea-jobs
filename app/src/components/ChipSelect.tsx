@@ -12,10 +12,12 @@ interface ChipSelectProps<T extends string> {
   single?: boolean;
   /** Extra class on the container (e.g. `chips--onb` for larger onboarding chips). */
   className?: string;
-  /** Lay chips out on an even 3-col grid (2 on narrow) instead of flowing pills.
-   *  Used for the "work type" sets so rows line up; leave off for short flow sets
-   *  like visa / fee / freshness. */
-  grid?: boolean;
+  /** Lay chips out on an even grid instead of flowing pills, so rows line up.
+   *  `true`/`3` → 3 equal columns (2 on narrow) — the "work type" sets.
+   *  `2` → 2 equal columns (1 on very narrow) — the visa sets, whose labels
+   *  vary a lot in length ("F-4 (соотечественник)" vs "E-9").
+   *  Leave off for short flow sets like fee / freshness. */
+  grid?: boolean | 2 | 3;
 }
 
 /** Multi- (or single-) select pill group, themed via `.chip`. */
@@ -34,8 +36,9 @@ export function ChipSelect<T extends string>({
     }
     onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);
   };
+  const gridClass = grid === 2 ? 'chips--grid2' : grid ? 'chips--grid' : '';
   return (
-    <div className={`chips ${grid ? 'chips--grid' : ''} ${className ?? ''}`}>
+    <div className={`chips ${gridClass} ${className ?? ''}`}>
       {options.map((o) => {
         const on = value.includes(o.value);
         return (

@@ -187,7 +187,7 @@ export function Onboarding() {
             <>
               <h2 className="onb__q">{t('onb.visaTitle')}</h2>
               <p className="onb__hint">{t('onb.visaHint')}</p>
-              <ChipSelect className="chips--onb" options={visaOptions} value={visa} onChange={setVisa} />
+              <ChipSelect grid={2} className="chips--onb" options={visaOptions} value={visa} onChange={setVisa} />
             </>
           ) : null}
 
