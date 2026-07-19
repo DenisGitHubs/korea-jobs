@@ -112,6 +112,15 @@ function cmpEarliest(a: Record<string, unknown>, b: Record<string, unknown>): nu
   const ib = b.id as string;
   return ia < ib ? -1 : ia > ib ? 1 : 0;
 }
+// Finite epoch ms of a raw row's posted_at, or null when missing/invalid. Used to pick the
+// FRESHEST repost date to lift a canonical to — nulls are IGNORED (never treated as "now"), so a
+// repost with no timestamp bumps the counter but never touches posted_at.
+function postedMsFinite(r: Record<string, unknown>): number | null {
+  const p = r.posted_at;
+  if (p == null) return null;
+  const t = new Date(p as string | Date).getTime();
+  return Number.isNaN(t) ? null : t;
+}
 
 const MODEL_ALIASES: Record<string, string> = {
   haiku: 'claude-haiku-4-5',
@@ -133,6 +142,12 @@ export async function runParse(): Promise<ParseResult> {
   const model = MODEL_ALIASES[modelAlias] ?? modelAlias;
 
   const maxAgeDays = await getConfigNumber('parser_max_age_days', 7);
+
+  // Repost "bump" cooldown (owner rule 2026-07-19): a repost lifts the canonical's posted_at
+  // (the feed sorts posted_at desc) and REVIVES an expired card — but the lift only happens when
+  // the fresh copy is newer than the canonical by MORE than this many hours, so a text reposted
+  // dozens of times can't glue itself to the top. Read with a default; the key is NOT seeded here.
+  const bumpMinHours = await getConfigNumber('repost_bump_min_hours', 12);
 
   // Owner rule: the AI never parses messages older than the freshness window
   // (default 1 week) — stale postings, and no tokens spent on them. Sweep any
@@ -199,11 +214,16 @@ export async function runParse(): Promise<ParseResult> {
     for (const r of prior) priorVacancyByHash.set(r.text_hash as string, r.vacancy_id as string);
   }
 
-  const crossSkips: { rawId: string; hash: string; vacancyId: string }[] = [];
+  const crossSkips: { rawId: string; hash: string; vacancyId: string; postedMs: number | null }[] = [];
   pending = pending.filter((r) => {
     const h = textHashById.get(r.id as string);
     if (h != null && priorVacancyByHash.has(h)) {
-      crossSkips.push({ rawId: r.id as string, hash: h, vacancyId: priorVacancyByHash.get(h) as string });
+      crossSkips.push({
+        rawId: r.id as string,
+        hash: h,
+        vacancyId: priorVacancyByHash.get(h) as string,
+        postedMs: postedMsFinite(r),
+      });
       return false;
     }
     return true;
@@ -216,11 +236,49 @@ export async function runParse(): Promise<ParseResult> {
       where id=${s.rawId}::uuid`;
   }
   if (crossSkips.length > 0) {
-    // Aggregate so a vacancy reposted N times in one batch is bumped once by N.
-    const bump = new Map<string, number>();
-    for (const s of crossSkips) bump.set(s.vacancyId, (bump.get(s.vacancyId) ?? 0) + 1);
-    for (const [vacancyId, n] of bump) {
-      await sql`update vacancies set repost_count = repost_count + ${n}, last_seen_at = now() where id=${vacancyId}::uuid`;
+    // Aggregate per canonical: how many reposts (N) and the FRESHEST repost date in this batch
+    // (null-posted rows ignored → freshestMs stays null). One UPDATE per vacancy.
+    const bump = new Map<string, { n: number; freshestMs: number | null }>();
+    for (const s of crossSkips) {
+      const cur = bump.get(s.vacancyId) ?? { n: 0, freshestMs: null };
+      cur.n += 1;
+      if (s.postedMs != null && (cur.freshestMs == null || s.postedMs > cur.freshestMs)) {
+        cur.freshestMs = s.postedMs;
+      }
+      bump.set(s.vacancyId, cur);
+    }
+    for (const [vacancyId, { n, freshestMs }] of bump) {
+      // Owner rule 2026-07-19: a repost ALWAYS bumps the counter, refreshes last_seen_at and
+      // REVIVES the card (is_active=true) — even one that had gone dark past its TTL. It only
+      // LIFTS posted_at to the freshest repost date past the cooldown (freshest newer than the
+      // canonical by > bumpMinHours), so a text reposted many times can't stick to the top.
+      // A null freshest (all reposts un-timestamped) leaves posted_at alone; date/lift is the
+      // ONLY thing the cooldown gates — counter/last_seen/is_active update unconditionally.
+      const freshestIso = freshestMs != null ? new Date(freshestMs).toISOString() : null;
+      // A vacancy the admin hid via rep:hide (admin_hidden) or one on the takedown list must NOT
+      // be revived or lifted by a repost — that would override a human/ToS decision. The counter
+      // and last_seen_at still advance (they don't distort the truth: the text WAS seen again).
+      await sql`
+        update vacancies set
+          repost_count = repost_count + ${n},
+          last_seen_at = now(),
+          is_active = case
+            when not vacancies.admin_hidden
+              and not exists (select 1 from takedowns t where t.content_hash = vacancies.content_hash)
+              then true
+            else vacancies.is_active
+          end,
+          posted_at = case
+            when vacancies.admin_hidden
+              or exists (select 1 from takedowns t where t.content_hash = vacancies.content_hash)
+              then vacancies.posted_at
+            when ${freshestIso}::timestamptz is null then vacancies.posted_at
+            when vacancies.posted_at is null then ${freshestIso}::timestamptz
+            when ${freshestIso}::timestamptz > vacancies.posted_at + make_interval(hours => ${bumpMinHours})
+              then ${freshestIso}::timestamptz
+            else vacancies.posted_at
+          end
+        where id=${vacancyId}::uuid`;
     }
     // eslint-disable-next-line no-console
     console.log(`[parser] cross-time duplicates (no AI): ${crossSkips.length}`);
@@ -365,19 +423,29 @@ export async function runParse(): Promise<ParseResult> {
     // inside this text). scrubContacts strips phones/@handles/t.me·wa.me·kakao links.
     const description = scrubContacts((row.text as string | null) ?? null);
 
-    // Takedown gate (007 CRIT): never resurrect content taken down for a ToS 5.2(i)
-    // contact violation. The prospective content_hash is computed via kj_content_hash
-    // (an exact mirror of the generated column) since the real hash only exists after
-    // insert. If the hash is on the takedown list, skip without inserting.
+    // Takedown / admin-hidden gate (007 CRIT + owner-hide guard). Never resurrect content taken
+    // down for a ToS 5.2(i) contact violation, NOR content the admin manually hid via rep:hide.
+    // The prospective content_hash is computed via kj_content_hash (an exact mirror of the
+    // generated column) since the real hash only exists after insert. A byte-identical repost of a
+    // hidden vacancy is already caught upstream by the text_hash cross-time path; THIS also blocks
+    // a *reworded* repost whose content_hash matches an admin_hidden canonical — that canonical is
+    // is_active=false, so it is NOT in the partial-unique index and an insert would otherwise
+    // create a NEW live copy, silently overriding the owner's hide. One round-trip, hash computed
+    // once in the CTE; takedown wins the reason when both match (union order + limit 1).
     const blocked = await sql`
-      select 1 from takedowns
-      where content_hash = kj_content_hash(
-        ${it.contact_raw ?? null}, ${cityId}::uuid, ${it.work_type}::work_type,
-        ${it.gender}::gender, ${it.dedup_extra ?? null})
+      with h as (
+        select kj_content_hash(
+          ${it.contact_raw ?? null}, ${cityId}::uuid, ${it.work_type}::work_type,
+          ${it.gender}::gender, ${it.dedup_extra ?? null}) as content_hash)
+      select 'takedown' as reason from takedowns, h where takedowns.content_hash = h.content_hash
+      union all
+      select 'admin_hidden' from vacancies, h
+        where vacancies.content_hash = h.content_hash and vacancies.admin_hidden
       limit 1`;
     if (blocked.length > 0) {
+      const reason = blocked[0]!.reason as string;
       await sql`
-        update raw_messages set status='skipped', processed_at=now(), reject_reason='takedown', text_hash=${hash}
+        update raw_messages set status='skipped', processed_at=now(), reject_reason=${reason}, text_hash=${hash}
         where id=${rawId}::uuid`;
       continue;
     }
@@ -407,6 +475,12 @@ export async function runParse(): Promise<ParseResult> {
         do update set
           repost_count = vacancies.repost_count + 1,
           last_seen_at = now(),
+          -- Owner rule 2026-07-19: lift posted_at to this fresh sighting (the feed sorts posted_at
+          -- desc) past the same cooldown. No is_active here: this partial index only matches a live
+          -- canonical (where is_active), so a conflict is never with a dark card.
+          posted_at = case
+            when excluded.posted_at > vacancies.posted_at + make_interval(hours => ${bumpMinHours})
+              then excluded.posted_at else vacancies.posted_at end,
           -- Enrich the canonical on repost: fill attributes the first sighting missed,
           -- keep an already-known value (on-conflict-do-update, additive).
           visa_types    = case when cardinality(vacancies.visa_types) = 0 then excluded.visa_types else vacancies.visa_types end,

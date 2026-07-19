@@ -21,6 +21,7 @@ import {
 import { ApiErrorCode } from '../core/errors.js';
 import { sendMessage, answerCallbackQuery, editMessageText, maskToken } from './telegram.js';
 import { isAdminTelegramId } from '../admin/auth.js';
+import { gatherStats, renderStats } from '../admin/stats.js';
 import { moderateAd } from '../ads/rw.js';
 import { normalizeRefCode } from '../core/context.js';
 import { getConfigNumber } from '../config.js';
@@ -117,8 +118,11 @@ async function dispatchCallback(u: ParsedUpdate): Promise<void> {
     const vacId = repM[2]!;
     if (action === 'hide') {
       const sql = getSql();
+      // Set admin_hidden alongside is_active=false: this is a HUMAN hide, so the parser must not
+      // revive it (or insert a fresh copy) when the same posting is reposted later.
       const rows = await sql`
-        update vacancies set is_active = false where id = ${vacId}::uuid and is_active returning id`;
+        update vacancies set is_active = false, admin_hidden = true
+        where id = ${vacId}::uuid and is_active returning id`;
       const done = rows.length > 0;
       if (cb.id) await answerCallbackQuery(cb.id, done ? 'Скрыто' : 'Уже скрыто');
       if (u.chatId !== null && cb.messageId !== null) {
@@ -145,6 +149,25 @@ async function dispatch(u: ParsedUpdate): Promise<void> {
   // wrong) if the bot is ever added to a group/supergroup/channel.
   if (u.chatType !== 'private') return;
   const text = (u.text ?? '').trim();
+
+  // Admin-only /stats. First word, tolerant of the /stats@BotName form (compare up to the
+  // first space and strip the @suffix). Private-only by design (owner: "видна только тебе")
+  // — the chatType gate above already applies, so it never posts aggregates into a group.
+  const command = (text.split(/\s+/, 1)[0] ?? '').split('@', 1)[0]?.toLowerCase() ?? '';
+  if (command === '/stats') {
+    // Non-admins get NOTHING — do not reveal the command exists (same as an unknown message).
+    if (!isAdminTelegramId(u.fromId)) return;
+    try {
+      await sendMessage(u.chatId, renderStats(await gatherStats()));
+    } catch (err) {
+      // Aggregates only; log the masked message (no payload) and tell the admin briefly.
+      // eslint-disable-next-line no-console
+      console.error('[bot] /stats collect error:', maskToken(String(err)));
+      await sendMessage(u.chatId, 'Не удалось собрать статистику');
+    }
+    return;
+  }
+
   if (!text.startsWith('/start')) return;
 
   // Starting the bot makes the user PM-writable → mark it so notifications can reach

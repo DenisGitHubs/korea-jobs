@@ -89,6 +89,12 @@ const files = [
   // about APPROVED user ads exactly like vacancies. Depends on user_ads (draft_0003_user_ads.sql)
   // and notifications_sent (draft_0001_init.sql).
   'draft_0010_ads_notify.sql',
+
+  // Admin-hide guard (0011) — ADDITIVE. Adds vacancies.admin_hidden (boolean default false), set
+  // alongside is_active=false when the admin hides a reported vacancy (bot rep:hide). Lets the
+  // parser's repost/revive logic keep an admin hide from being overridden by a later repost.
+  // Depends on vacancies (draft_0001_init.sql).
+  'draft_0011_admin_hidden.sql',
 ];
 
 const pool = new Pool({ connectionString: url });
