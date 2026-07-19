@@ -15,7 +15,7 @@ import { ApiErrorCode } from '../core/errors.js';
 import { authenticate } from '../core/context.js';
 import { getConfigNumber } from '../config.js';
 import { sendMessage } from '../bot/telegram.js';
-import { adminTelegramIds } from '../admin/auth.js';
+import { adminRecipients } from '../admin/auth.js';
 import { scrubContacts } from '../core/scrub.js';
 import { workTypeLabelRu } from '../core/labels.js';
 
@@ -39,12 +39,13 @@ interface VacInfo {
  * any send failure is swallowed (the POST must still succeed).
  */
 async function notifyAdminsReport(
+  sql: ReturnType<typeof getSql>,
   vacancyId: string,
   vac: VacInfo,
   reason: string | null,
   count: number,
 ): Promise<void> {
-  const ids = [...adminTelegramIds()];
+  const ids = await adminRecipients(sql);
   if (ids.length === 0) return;
 
   const city = vac.city_name?.ru ?? '—';
@@ -120,7 +121,7 @@ export async function vacancyReport(req: ReqLike, res: ResLike): Promise<void> {
           select count(*)::int as c from vacancy_reports where vacancy_id = ${id}::uuid`) as unknown as {
           c: number;
         }[];
-        await notifyAdminsReport(id, vac, reason, totalRows[0]?.c ?? 1);
+        await notifyAdminsReport(sql, id, vac, reason, totalRows[0]?.c ?? 1);
       }
     }
 

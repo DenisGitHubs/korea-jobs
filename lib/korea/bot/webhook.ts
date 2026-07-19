@@ -20,7 +20,7 @@ import {
 } from '../core/http.js';
 import { ApiErrorCode } from '../core/errors.js';
 import { sendMessage, answerCallbackQuery, editMessageText, maskToken } from './telegram.js';
-import { isAdminTelegramId } from '../admin/auth.js';
+import { isAdminTelegram } from '../admin/auth.js';
 import { gatherStats, renderStats } from '../admin/stats.js';
 import { moderateAd } from '../ads/rw.js';
 import { normalizeRefCode } from '../core/context.js';
@@ -89,8 +89,10 @@ const REPORT_CB_RE = /^rep:(hide|keep):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 async function dispatchCallback(u: ParsedUpdate): Promise<void> {
   const cb = u.callback;
   if (!cb) return;
-  // Only configured admins may act; others get a soft toast.
-  if (u.fromId === null || !isAdminTelegramId(u.fromId)) {
+  const sql = getSql();
+  // Only admins may act (env-id OR users.role='admin'); others get a soft toast.
+  // Fail-closed: a role-lookup error resolves to "not admin" (see isAdminTelegram).
+  if (u.fromId === null || !(await isAdminTelegram(sql, u.fromId))) {
     if (cb.id) await answerCallbackQuery(cb.id, 'Недоступно');
     return;
   }
@@ -117,7 +119,6 @@ async function dispatchCallback(u: ParsedUpdate): Promise<void> {
     const action = repM[1]!.toLowerCase() as 'hide' | 'keep';
     const vacId = repM[2]!;
     if (action === 'hide') {
-      const sql = getSql();
       // Set admin_hidden alongside is_active=false: this is a HUMAN hide, so the parser must not
       // revive it (or insert a fresh copy) when the same posting is reposted later.
       const rows = await sql`
@@ -156,7 +157,8 @@ async function dispatch(u: ParsedUpdate): Promise<void> {
   const command = (text.split(/\s+/, 1)[0] ?? '').split('@', 1)[0]?.toLowerCase() ?? '';
   if (command === '/stats') {
     // Non-admins get NOTHING — do not reveal the command exists (same as an unknown message).
-    if (!isAdminTelegramId(u.fromId)) return;
+    // Admin = env-id OR users.role='admin'; fail-closed on a role-lookup error.
+    if (!(await isAdminTelegram(getSql(), u.fromId))) return;
     try {
       await sendMessage(u.chatId, renderStats(await gatherStats()));
     } catch (err) {

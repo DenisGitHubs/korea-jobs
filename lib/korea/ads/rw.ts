@@ -19,13 +19,18 @@ import { authenticate } from '../core/context.js';
 import { requireAdmin } from '../admin/auth.js';
 import { getConfigNumber } from '../config.js';
 import { sendMessage } from '../bot/telegram.js';
-import { adminTelegramIds } from '../admin/auth.js';
+import { adminRecipients } from '../admin/auth.js';
 import { recordModerationExample, decideAdModeration } from './moderation.js';
 import { parseAdInput, adModText, UUID_RE, type AdBody } from './input.js';
 
-/** Notify configured admins about a pending ad with inline Approve/Reject buttons. */
-export async function notifyAdminsPending(adId: string, summary: string): Promise<void> {
-  const ids = [...adminTelegramIds()];
+/** Notify admins about a pending ad with inline Approve/Reject buttons. Recipients =
+ *  env ADMIN_TELEGRAM_IDS ∪ users.role='admin'. Empty list → silent (unchanged). */
+export async function notifyAdminsPending(
+  sql: ReturnType<typeof getSql>,
+  adId: string,
+  summary: string,
+): Promise<void> {
+  const ids = await adminRecipients(sql);
   if (ids.length === 0) return;
   const extra = {
     reply_markup: {
@@ -101,7 +106,7 @@ export async function adsCreate(req: ReqLike, res: ResLike): Promise<void> {
     // Pending → push to admins for a manual call.
     if (id && status === 'pending') {
       const summary = [citySlug ?? cityText ?? regionSlug ?? '—', f.workType, f.title].filter(Boolean).join(' · ');
-      await notifyAdminsPending(id, summary);
+      await notifyAdminsPending(sql, id, summary);
     }
 
     send(res, 200, { id: id ?? null, status });

@@ -191,7 +191,7 @@ export async function adUnarchive(req: ReqLike, res: ResLike): Promise<void> {
     if (rows.length === 0) return sendError(res, ApiErrorCode.NotFound);
 
     if (status === 'pending') {
-      await notifyAdminsPending(ad.id, pendingSummary(ad.city_slug ?? ad.city_text ?? ad.region_slug, ad.work_type, ad.title));
+      await notifyAdminsPending(sql, ad.id, pendingSummary(ad.city_slug ?? ad.city_text ?? ad.region_slug, ad.work_type, ad.title));
     }
     send(res, 200, { ok: true, status });
   } catch {
@@ -265,7 +265,7 @@ async function adPatch(req: ReqLike, res: ResLike): Promise<void> {
     if (rows.length === 0) return sendError(res, ApiErrorCode.NotFound);
 
     if (status === 'pending') {
-      await notifyAdminsPending(ad.id, pendingSummary(citySlug ?? cityText ?? regionSlug, f.workType, f.title));
+      await notifyAdminsPending(sql, ad.id, pendingSummary(citySlug ?? cityText ?? regionSlug, f.workType, f.title));
     }
     send(res, 200, { ok: true, status });
   } catch {
