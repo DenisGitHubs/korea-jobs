@@ -841,6 +841,18 @@ a {
   animation: kj-spin 0.7s linear infinite;
 }
 
+/* Inline "recomputing count" spinner for the in-app Apply button (mock/browser).
+   Inherits the button's ink colour so it reads on the terracotta gradient. */
+.btn__spinner {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 32%, transparent);
+  border-top-color: currentColor;
+  animation: kj-spin 0.7s linear infinite;
+}
+
 .center {
   display: flex;
   align-items: center;

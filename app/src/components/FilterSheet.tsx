@@ -35,6 +35,10 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
   const [draft, setDraft] = useState<FilterValue>(EMPTY_FILTER);
   // Live match count for the current draft; null = unknown (soft-degrade to plain label).
   const [count, setCount] = useState<number | null>(null);
+  // True while a fresh count is being (re)computed for the current draft. We keep
+  // the previous number visible but flag it as loading, so the button never shows
+  // a confident-but-stale figure.
+  const [counting, setCounting] = useState(false);
 
   // Seed the draft from the applied filter each time the sheet opens.
   useEffect(() => {
@@ -42,10 +46,12 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
   }, [open]);
 
   // Live "Show N" counter: debounced fetch on every draft change while open.
-  // The previous count is kept while a new one loads (never blocks Apply).
+  // The previous count is kept while a new one loads (never blocks Apply), but
+  // `counting` marks it as loading the instant the draft changes.
   useEffect(() => {
     if (!open) return;
     let alive = true;
+    setCounting(true);
     const timer = window.setTimeout(() => {
       api
         .vacanciesCount(filterToQuery(draft))
@@ -54,8 +60,11 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
         })
         .catch(() => {
           /* keep the previous count on error */
+        })
+        .finally(() => {
+          if (alive) setCounting(false);
         });
-    }, 300);
+    }, 200);
     return () => {
       alive = false;
       window.clearTimeout(timer);
@@ -78,7 +87,7 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
   // Soft-degrade to plain "Apply" until the first count arrives.
   const applyLabel = count === null ? t('filter.apply') : t('filter.showCount', { count });
 
-  useMainButton({ text: applyLabel, visible: open, enabled: true, onClick: doApply });
+  useMainButton({ text: applyLabel, visible: open, enabled: true, loading: counting, onClick: doApply });
 
   const workOptions = useMemo<ChipOption<WorkType>[]>(
     () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), emoji: WORK_TYPE_EMOJI[w] })),
@@ -169,7 +178,8 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
         </section>
 
         {!isReal ? (
-          <button className="btn btn--primary btn--block" onClick={doApply}>
+          <button className="btn btn--primary btn--block" onClick={doApply} aria-busy={counting || undefined}>
+            {counting ? <span className="btn__spinner" aria-hidden="true" /> : null}
             {applyLabel}
           </button>
         ) : null}

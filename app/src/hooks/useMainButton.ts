@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { mainButton } from '@telegram-apps/sdk-react';
 
 interface MainButtonOptions {
@@ -27,8 +27,20 @@ function brandColor(name: string): `#${string}` | undefined {
  * Drive the native Telegram MainButton. No-op in the browser mock; screens also
  * render an in-app primary button so the flow works in a plain browser.
  * The button is painted with our brand accent so it never shows Telegram blue.
+ *
+ * The click handler is kept in a ref so a changing `onClick` identity (e.g. the
+ * filter draft mutating on every tap) only updates the ref — it never tears the
+ * button down and re-shows it. That split keeps the button from flickering:
+ * label/loader changes are cheap `setParams` calls, while the native click
+ * subscription lives for the button's whole visible lifetime.
  */
 export function useMainButton({ text, visible, enabled = true, loading = false, onClick }: MainButtonOptions): void {
+  const onClickRef = useRef(onClick);
+  onClickRef.current = onClick;
+
+  // Params effect: push label / visibility / state to the native button. Cheap,
+  // may run on every render (text or loader change) without touching the click
+  // subscription, so the button just re-labels instead of hiding and re-showing.
   useEffect(() => {
     try {
       if (mainButton.setParams.isAvailable()) {
@@ -46,18 +58,23 @@ export function useMainButton({ text, visible, enabled = true, loading = false, 
     } catch {
       /* ignore */
     }
+  }, [text, visible, enabled, loading]);
 
+  // Click effect: a single stable handler for as long as the button is visible.
+  // It calls the latest `onClick` via the ref, so a new callback identity does
+  // not resubscribe (and does not trigger the hide-on-cleanup below).
+  useEffect(() => {
     if (!visible) return;
-
+    const handler = () => onClickRef.current();
     try {
-      mainButton.onClick(onClick);
+      mainButton.onClick(handler);
     } catch {
       /* ignore */
     }
 
     return () => {
       try {
-        mainButton.offClick(onClick);
+        mainButton.offClick(handler);
       } catch {
         /* ignore */
       }
@@ -67,5 +84,5 @@ export function useMainButton({ text, visible, enabled = true, loading = false, 
         /* ignore */
       }
     };
-  }, [text, visible, enabled, loading, onClick]);
+  }, [visible]);
 }
