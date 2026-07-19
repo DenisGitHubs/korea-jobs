@@ -86,7 +86,10 @@ insert into config (key, value) values
   ('parser_model',        '"haiku"'), -- alias; exact model id via the claude-api skill at code time
   ('notify_enabled',      'true'),    -- global push kill-switch
   ('reader_min_text_len', '20')       -- skip ultra-short messages before AI (cost guard)
-on conflict (key) do update set value = excluded.value;
+-- DO NOTHING, not DO UPDATE: these are FRESH-DB defaults only. apply.mjs re-runs the whole
+-- migration list on every apply, and DO UPDATE silently reverted owner-tuned config values
+-- (bit us 2026-07-19: vacancy_ttl_days=1 rolled back to 14 by an unrelated migration run).
+on conflict (key) do nothing;
 
 commit;
 
