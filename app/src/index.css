@@ -491,6 +491,30 @@ a {
   transform: scale(0.94);
 }
 
+/* Even grid layout for the "work type" chip sets so rows line up (12 items).
+   3 equal columns, dropping to 2 on narrow phones. Chips stretch to a uniform
+   height per row and centre their content so the emoji doesn't skew alignment. */
+.chips--grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+@media (max-width: 360px) {
+  .chips--grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.chips--grid .chip {
+  justify-content: center;
+  text-align: center;
+  min-width: 0;
+  padding-left: 8px;
+  padding-right: 8px;
+  line-height: 1.2;
+}
+
 .chip--on {
   border-color: transparent;
   color: var(--kj-brand-ink);
@@ -2658,6 +2682,70 @@ a {
 .safe-row__tel {
   color: var(--kj-brand-strong);
   font-variant-numeric: tabular-nums;
+}
+
+/* ── Collapsible flag/rule row ─────────────────────────────────────────────
+   Header shows only the title + chevron; body expands via grid-rows 0fr→1fr.
+   The global reduced-motion rule collapses the transition to instant. */
+.safe-row--fold {
+  display: block;
+  padding: 0;
+}
+
+.safe-row__head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  padding: 13px 14px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.safe-row__head .safe-row__t {
+  flex: 1 1 auto;
+  margin-bottom: 0;
+}
+
+.safe-row__chev {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  color: var(--kj-hint);
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.safe-row__chev svg {
+  width: 18px;
+  height: 18px;
+}
+
+.safe-row--fold.is-open .safe-row__chev {
+  transform: rotate(90deg);
+}
+
+.safe-row__fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.safe-row--fold.is-open .safe-row__fold {
+  grid-template-rows: 1fr;
+}
+
+.safe-row__fold-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Body indented under the title: head padding (14) + icon (32) + gap (12). */
+.safe-row--fold .safe-row__fold-inner .safe-row__s {
+  padding: 0 14px 13px 58px;
 }
 
 /* Dashed brand CTA linking to the safety guide (from a vacancy). */

@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useBackButton } from '../hooks/useBackButton';
@@ -50,6 +50,42 @@ function ShieldIcon() {
   );
 }
 
+function ChevronIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}
+
+/** A flag/rule item collapsed to its title; the body expands on tap (grid-rows). */
+function FoldRow({ variant, title, body }: { variant: 'bad' | 'good'; title: string; body: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={`safe-row safe-row--fold ${open ? 'is-open' : ''}`}>
+      <button
+        type="button"
+        className="safe-row__head"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className={`safe-row__ico safe-row__ico--${variant}`}>
+          {variant === 'bad' ? <BadIcon /> : <GoodIcon />}
+        </span>
+        <span className="safe-row__t">{title}</span>
+        <span className="safe-row__chev" aria-hidden>
+          <ChevronIcon />
+        </span>
+      </button>
+      <div className="safe-row__fold">
+        <div className="safe-row__fold-inner">
+          <div className="safe-row__s">{body}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SafetyScreen() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -78,15 +114,12 @@ export default function SafetyScreen() {
           <div className="region__title">{t('safety.flagsTitle')}</div>
           <div className="section">
             {FLAGS.map((k) => (
-              <div className="safe-row" key={k}>
-                <span className="safe-row__ico safe-row__ico--bad">
-                  <BadIcon />
-                </span>
-                <div>
-                  <div className="safe-row__t">{t(`safety.flags.${k}.title`)}</div>
-                  <div className="safe-row__s">{t(`safety.flags.${k}.body`)}</div>
-                </div>
-              </div>
+              <FoldRow
+                key={k}
+                variant="bad"
+                title={t(`safety.flags.${k}.title`)}
+                body={t(`safety.flags.${k}.body`)}
+              />
             ))}
           </div>
         </div>
@@ -95,15 +128,12 @@ export default function SafetyScreen() {
           <div className="region__title">{t('safety.rulesTitle')}</div>
           <div className="section">
             {RULES.map((k) => (
-              <div className="safe-row" key={k}>
-                <span className="safe-row__ico safe-row__ico--good">
-                  <GoodIcon />
-                </span>
-                <div>
-                  <div className="safe-row__t">{t(`safety.rules.${k}.title`)}</div>
-                  <div className="safe-row__s">{t(`safety.rules.${k}.body`)}</div>
-                </div>
-              </div>
+              <FoldRow
+                key={k}
+                variant="good"
+                title={t(`safety.rules.${k}.title`)}
+                body={t(`safety.rules.${k}.body`)}
+              />
             ))}
           </div>
         </div>

@@ -179,7 +179,7 @@ export function Onboarding() {
             <>
               <h2 className="onb__q">{t('onb.workTitle')}</h2>
               <p className="onb__hint">{t('onb.workHint')}</p>
-              <ChipSelect className="chips--onb" options={workOptions} value={workTypes} onChange={setWorkTypes} />
+              <ChipSelect grid className="chips--onb" options={workOptions} value={workTypes} onChange={setWorkTypes} />
             </>
           ) : null}
 

@@ -114,7 +114,7 @@ export default function SettingsScreen() {
 
         <div className="region">
           <div className="region__title">{t('filter.workTypesSection')}</div>
-          <ChipSelect options={workOptions} value={work} onChange={setWork} />
+          <ChipSelect grid options={workOptions} value={work} onChange={setWork} />
         </div>
 
         <div className="region">

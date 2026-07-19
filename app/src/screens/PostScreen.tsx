@@ -473,7 +473,7 @@ export default function PostScreen() {
                 <Field label={t('post.titleLabel')} value={d.title} onChange={(v) => patch({ title: v })} placeholder={t('post.titlePlaceholder')} maxLength={80} />
                 <div>
                   <div className="region__title">{t('post.workTypeLabel')}</div>
-                  <ChipSelect single options={workOptions} value={d.workType ? [d.workType] : []} onChange={(n) => patch({ workType: n[0] ?? null })} />
+                  <ChipSelect grid single options={workOptions} value={d.workType ? [d.workType] : []} onChange={(n) => patch({ workType: n[0] ?? null })} />
                 </div>
                 <Field label={t('post.descLabel')} value={d.description} onChange={(v) => patch({ description: v })} placeholder={t('post.descPlaceholder')} multiline rows={5} maxLength={2000} hint={t('post.descHint')} />
               </div>

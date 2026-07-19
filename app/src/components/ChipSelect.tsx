@@ -12,6 +12,10 @@ interface ChipSelectProps<T extends string> {
   single?: boolean;
   /** Extra class on the container (e.g. `chips--onb` for larger onboarding chips). */
   className?: string;
+  /** Lay chips out on an even 3-col grid (2 on narrow) instead of flowing pills.
+   *  Used for the "work type" sets so rows line up; leave off for short flow sets
+   *  like visa / fee / freshness. */
+  grid?: boolean;
 }
 
 /** Multi- (or single-) select pill group, themed via `.chip`. */
@@ -21,6 +25,7 @@ export function ChipSelect<T extends string>({
   onChange,
   single = false,
   className,
+  grid = false,
 }: ChipSelectProps<T>) {
   const toggle = (v: T): void => {
     if (single) {
@@ -30,7 +35,7 @@ export function ChipSelect<T extends string>({
     onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);
   };
   return (
-    <div className={`chips ${className ?? ''}`}>
+    <div className={`chips ${grid ? 'chips--grid' : ''} ${className ?? ''}`}>
       {options.map((o) => {
         const on = value.includes(o.value);
         return (

@@ -147,7 +147,7 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
 
         <section className="filter__block">
           <div className="region__title">{t('filter.workTypesSection')}</div>
-          <ChipSelect options={workOptions} value={draft.workTypes} onChange={(v) => patch({ workTypes: v })} />
+          <ChipSelect grid options={workOptions} value={draft.workTypes} onChange={(v) => patch({ workTypes: v })} />
         </section>
 
         <section className="filter__block">
