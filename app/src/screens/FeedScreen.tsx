@@ -107,16 +107,15 @@ function FeedAggBar() {
   }, []);
 
   const [vac, vacPop] = useCountUp(stats?.vacancies_count ?? 0);
-  const [src, srcPop] = useCountUp(stats?.sources_count ?? 0);
 
+  // Owner rule (2026-07-19): show only the vacancy count — the "из N чатов" source
+  // count is intentionally NOT displayed (sources_count stays in the API response).
   if (!stats) return null;
   return (
     <div className="aggbar" role="status">
       <span className="aggbar__dot" aria-hidden />
       <span>
-        <b className={vacPop}>{vac}</b> {t('feed.aggVacancies', { count: stats.vacancies_count })}{' '}
-        {t('feed.aggFrom')} <b className={srcPop}>{src}</b>{' '}
-        {t('feed.aggSources', { count: stats.sources_count })}
+        <b className={vacPop}>{vac}</b> {t('feed.aggVacancies', { count: stats.vacancies_count })}
       </span>
     </div>
   );
