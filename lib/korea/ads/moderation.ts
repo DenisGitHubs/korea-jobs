@@ -13,7 +13,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getSql } from '../core/db.js';
 import { getConfigBool, getConfigNumber, getConfigString } from '../config.js';
-import { buildSystemPrompt, buildBatchSchema, type CityRef, type ParsedVacancy } from '../parser/prompt.js';
+import { buildSystemPrompt, type CityRef, type ParsedVacancy } from '../parser/prompt.js';
+import { extractJson } from '../parser/extract-json.js';
 
 const MODEL_ALIASES: Record<string, string> = {
   haiku: 'claude-haiku-4-5',
@@ -58,48 +59,83 @@ async function buildFewShot(
 
 /** Classify one user ad text (single-item batch). Never throws. */
 export async function classifyAdText(text: string): Promise<AdClassification> {
-  const sql = getSql();
-  const cityRows = await sql`
-    select id, slug, name, region_slug from cities where is_active = true order by sort_order`;
-  const cities: CityRef[] = cityRows.map((r) => ({
-    slug: r.slug as string,
-    name: r.name as { ru: string; ko: string; en: string },
-    region_slug: (r.region_slug as string | null) ?? null,
-  }));
-  const citySlugs = cities.map((c) => c.slug);
-  const regionSlugs = [...new Set(cityRows.map((r) => r.region_slug).filter(Boolean))] as string[];
-  const cityIdBySlug = new Map<string, string>(cityRows.map((r) => [r.slug as string, r.id as string]));
+  // cityIdBySlug is returned on EVERY path (callers use it to resolve an AI-picked city).
+  // It starts as an empty Map so that even a FAILED cities read still yields a valid Map —
+  // the AI city just won't resolve (acceptable), and the ad still routes to review.
+  let cityIdBySlug = new Map<string, string>();
+  let system: string;
+  let model: string;
+  try {
+    // PREAMBLE (client handle + cities read + config + few-shot + prompt build) is wrapped so
+    // that ANY DB/build fault here degrades EXACTLY like a model fault below: item:null -> the
+    // caller routes the ad to 'pending' human review, and classifyAdText NEVER throws (contract).
+    // getSql() is INSIDE the try too: a missing/malformed DATABASE_URL makes it throw, and that
+    // must degrade like everything else. Before this, a cities/moderation_examples DB blip
+    // escaped -> adsCreate -> 500 and the ad was lost instead of being queued for review.
+    const sql = getSql();
+    const cityRows = await sql`
+      select id, slug, name, region_slug from cities where is_active = true order by sort_order, slug`;
+    const cities: CityRef[] = cityRows.map((r) => ({
+      slug: r.slug as string,
+      name: r.name as { ru: string; ko: string; en: string },
+      region_slug: (r.region_slug as string | null) ?? null,
+    }));
+    const regionSlugs = [...new Set(cityRows.map((r) => r.region_slug).filter(Boolean))] as string[];
+    cityIdBySlug = new Map<string, string>(cityRows.map((r) => [r.slug as string, r.id as string]));
 
-  let system = buildSystemPrompt(cities, regionSlugs);
-  if (await getConfigBool('ads_fewshot_enabled', true)) {
-    const size = await getConfigNumber('ads_fewshot_size', 10);
-    const preface = await buildFewShot(sql, size);
-    if (preface) system = `${preface}\n\n${system}`;
+    system = buildSystemPrompt(cities, regionSlugs);
+    if (await getConfigBool('ads_fewshot_enabled', true)) {
+      const size = await getConfigNumber('ads_fewshot_size', 10);
+      // Few-shot is a best-effort enhancement: if its own DB reads fail, fall back to an
+      // empty preface (base prompt only) instead of sinking the whole classification.
+      let preface = '';
+      try {
+        preface = await buildFewShot(sql, size);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[ads] few-shot build failed, using base prompt:', err instanceof Error ? err.message : String(err));
+      }
+      if (preface) system = `${preface}\n\n${system}`;
+    }
+
+    const modelAlias = await getConfigString('parser_model', 'haiku');
+    model = MODEL_ALIASES[modelAlias] ?? modelAlias;
+  } catch (err) {
+    // Preamble fault (cities read / config / prompt build): degrade like a model fault —
+    // item:null so the caller queues the ad to 'pending'. Never throw (contract).
+    // eslint-disable-next-line no-console
+    console.error('[ads] classification preamble failed:', err instanceof Error ? err.message : String(err));
+    return { item: null, cityIdBySlug };
   }
 
-  const schema = buildBatchSchema(citySlugs, regionSlugs);
-  const modelAlias = await getConfigString('parser_model', 'haiku');
-  const model = MODEL_ALIASES[modelAlias] ?? modelAlias;
-
-  const client = new Anthropic();
   try {
+    // Mirror parser/run.ts EXACTLY: NO output_config. strict structured outputs can't
+    // compile our schema (the batch object was rejected 400 "Schema is too complex"),
+    // so the required JSON shape lives in the system prompt and we parse the reply with
+    // the SHARED extractJson helper. The user's ad is a single-item batch {id:'ad', text}.
+    // new Anthropic() is INSIDE the try so a missing/broken ANTHROPIC_API_KEY (the
+    // constructor throws when it can't resolve a key) degrades softly — item:null → the
+    // ad routes to 'pending' human review — instead of throwing out of classifyAdText.
+    const client = new Anthropic(); // reads ANTHROPIC_API_KEY from env
     const resp = await client.messages.create({
       model,
       max_tokens: 2000,
-      system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
-      output_config: { format: { type: 'json_schema', schema } },
+      system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } }],
       messages: [{ role: 'user', content: JSON.stringify({ messages: [{ id: 'ad', text }] }) }],
     } as Anthropic.MessageCreateParamsNonStreaming);
 
     const textBlock = resp.content.find((b) => b.type === 'text');
     if (textBlock && 'text' in textBlock) {
-      const parsed = JSON.parse(textBlock.text) as { items?: ParsedVacancy[] };
+      const parsed = extractJson(textBlock.text) as { items?: ParsedVacancy[] };
       const item = Array.isArray(parsed.items) && parsed.items[0] ? parsed.items[0] : null;
       return { item, cityIdBySlug };
     }
-  } catch {
+  } catch (err) {
+    // Model/transport/key fault: never throw (contract) — the caller then routes the ad
+    // to 'pending'. Log the error MESSAGE (not the ad text) so a bad request is
+    // diagnosable in prod instead of being silently swallowed.
     // eslint-disable-next-line no-console
-    console.error('[ads] classification call failed');
+    console.error('[ads] classification call failed:', err instanceof Error ? err.message : String(err));
   }
   return { item: null, cityIdBySlug };
 }

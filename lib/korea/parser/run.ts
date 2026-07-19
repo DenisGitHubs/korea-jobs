@@ -19,6 +19,7 @@ import { getSql } from '../core/db.js';
 import { scrubContacts } from '../core/scrub.js';
 import { getConfigNumber, getConfigString } from '../config.js';
 import { textHash } from './texthash.js';
+import { extractJson } from './extract-json.js';
 import {
   buildSystemPrompt,
   VISA_TYPES,
@@ -31,24 +32,6 @@ import {
 
 const VISA_TYPE_SET = new Set<string>(VISA_TYPES);
 const PLACEMENT_FEE_SET = new Set<string>(PLACEMENT_FEES);
-
-/**
- * Extract the JSON object from a model reply. strict structured outputs cannot compile
- * our schema (big object × batch array — rejected as "too complex"/grammar timeout), so
- * we ask for JSON in the prompt and parse defensively: drop any ```json fences and any
- * prose around the object by slicing from the first '{' to the last '}'. Throws on bad
- * JSON — the caller's try/catch then leaves the batch 'pending' for a retry.
- */
-function extractJson(text: string): unknown {
-  let s = text.trim();
-  const fenced = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const inner = fenced?.[1];
-  if (inner) s = inner.trim();
-  const first = s.indexOf('{');
-  const last = s.lastIndexOf('}');
-  if (first !== -1 && last > first) s = s.slice(first, last + 1);
-  return JSON.parse(s);
-}
 
 /** Keep only known enum values the model may have returned (defense in depth). */
 function cleanVisaTypes(v: unknown): VisaType[] {
@@ -311,9 +294,12 @@ export async function runParse(): Promise<ParseResult> {
   // 4) One call for the whole batch. The required JSON shape is specified in the system
   // prompt (no output_config: strict structured outputs can't compile our schema); we
   // extract + parse the JSON object from the reply and re-validate everything server-side.
-  const client = new Anthropic(); // reads ANTHROPIC_API_KEY from env
   let items: ParsedVacancy[] = [];
   try {
+    // new Anthropic() is INSIDE the try so a missing/broken ANTHROPIC_API_KEY (the
+    // constructor throws when it can't resolve a key) degrades softly — the batch is
+    // left 'pending' for the next tick — instead of throwing out of runParse.
+    const client = new Anthropic(); // reads ANTHROPIC_API_KEY from env
     const resp = await client.messages.create({
       model,
       max_tokens: 16000,
