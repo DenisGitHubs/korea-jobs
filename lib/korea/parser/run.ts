@@ -22,18 +22,25 @@ import { getConfigNumber, getConfigString } from '../config.js';
 import { textHash } from './texthash.js';
 import { extractJson } from './extract-json.js';
 import { looksLikeSpam } from './spamfilter.js';
+import { recordAiUsage } from '../ai-usage.js';
 import {
   buildSystemPrompt,
   VISA_TYPES,
   PLACEMENT_FEES,
+  WORK_TYPES,
+  GENDERS,
   type CityRef,
   type ParsedVacancy,
   type VisaType,
   type PlacementFee,
+  type WorkType,
 } from './prompt.js';
 
 const VISA_TYPE_SET = new Set<string>(VISA_TYPES);
 const PLACEMENT_FEE_SET = new Set<string>(PLACEMENT_FEES);
+const WORK_TYPE_SET = new Set<string>(WORK_TYPES);
+const GENDER_SET = new Set<string>(GENDERS);
+type Gender = (typeof GENDERS)[number];
 
 /** Keep only known enum values the model may have returned (defense in depth). */
 function cleanVisaTypes(v: unknown): VisaType[] {
@@ -45,6 +52,17 @@ function cleanPlacementFee(v: unknown): PlacementFee {
 }
 function cleanTriState(v: unknown): boolean | null {
   return typeof v === 'boolean' ? v : null;
+}
+// work_type / gender are the only model fields cast straight into SQL enums (::work_type,
+// ::gender). Re-close them on the server so a MISSING key (the slim output omits null/empty
+// fields — parser/prompt.ts) or a bad value can never (a) insert undefined, nor (b) throw out of
+// the kj_content_hash CTE below. The prompt keeps both REQUIRED for a vacancy, so on the happy
+// path these return the model's value unchanged — this is pure defense in depth.
+function cleanWorkType(v: unknown): WorkType {
+  return typeof v === 'string' && WORK_TYPE_SET.has(v) ? (v as WorkType) : 'other';
+}
+function cleanGender(v: unknown): Gender {
+  return typeof v === 'string' && GENDER_SET.has(v) ? (v as Gender) : 'any';
 }
 
 // Cheap, high-precision spam pre-filter — obvious non-jobs (crypto exchange, money-mule,
@@ -294,12 +312,17 @@ export async function runParse(): Promise<ParseResult> {
   // 3) Prompt + input. strict structured outputs can't compile our schema, so the required
   // JSON shape + enums live in the system prompt; every field is re-validated server-side.
   const system = buildSystemPrompt(cities, regionSlugs);
-  const inputItems = pending.map((r) => {
+  // Batch-local SHORT ids ('0'..'N-1') instead of the 36-char raw uuid. The id is pure echo
+  // routing — the model copies it back verbatim and we map replies to rows by it — so a 1-char
+  // token carries the SAME meaning as a uuid while saving ~10 input tokens per message. The
+  // `pending` array IS the server-side idx->rawId map (pending[idx].id === rawId); dedup and the
+  // error/skip paths key on rawId (row.id), NOT this id, so they are unaffected.
+  const inputItems = pending.map((r, i) => {
     const title = ((r.source_title as string | null) ?? '').trim();
     const notes = ((r.source_notes as string | null) ?? '').trim();
     const sourceHint = [title, notes].filter(Boolean).join(' — ');
     const item: { id: string; text: string; source_hint?: string } = {
-      id: r.id as string,
+      id: String(i),
       text: (r.text as string | null) ?? '',
     };
     if (sourceHint) item.source_hint = sourceHint;
@@ -327,6 +350,11 @@ export async function runParse(): Promise<ParseResult> {
       messages: [{ role: 'user', content: JSON.stringify({ messages: inputItems }) }],
     } as Anthropic.MessageCreateParamsNonStreaming);
 
+    // Weigh the tokens (best-effort, never throws). batch_size = messages actually sent to the
+    // model this call. Field names verified against the SDK Usage type (cache_creation_input_tokens
+    // / cache_read_input_tokens). See lib/korea/ai-usage.ts + draft_0015_ai_usage.sql.
+    await recordAiUsage('parser', model, resp.usage, inputItems.length);
+
     const textBlock = resp.content.find((b) => b.type === 'text');
     if (textBlock && 'text' in textBlock) {
       const parsed = extractJson(textBlock.text) as { items?: ParsedVacancy[] };
@@ -341,13 +369,17 @@ export async function runParse(): Promise<ParseResult> {
     return { processed: 0, vacancies: 0 };
   }
 
-  const byId = new Map<string, ParsedVacancy>(items.map((it) => [it.id, it]));
+  // Map replies by their echoed id. String(it.id) guards a model that returns the index as a
+  // JSON number (0) instead of the string ("0") we sent.
+  const byId = new Map<string, ParsedVacancy>(items.map((it) => [String(it.id), it]));
   let vacancies = 0;
 
-  // 5) Apply each result; move every raw row out of 'pending'.
-  for (const row of pending) {
+  // 5) Apply each result; move every raw row out of 'pending'. The reply for pending[idx] is
+  // byId.get(String(idx)) — the short id we sent in inputItems; all persistence keys on rawId.
+  for (let idx = 0; idx < pending.length; idx++) {
+    const row = pending[idx]!;
     const rawId = row.id as string;
-    const it = byId.get(rawId);
+    const it = byId.get(String(idx));
     // Persist the text hash on every row we touch so future ticks can dedup against it
     // (esp. the 'parsed' canonical); null for short texts is a harmless no-op write.
     const hash = textHashById.get(rawId) ?? null;
@@ -370,6 +402,8 @@ export async function runParse(): Promise<ParseResult> {
 
     const cityId = it.city_slug ? cityIdBySlug.get(it.city_slug) ?? null : null;
     const regionSlug = it.region_slug && regionSlugSet.has(it.region_slug) ? it.region_slug : null;
+    const workType = cleanWorkType(it.work_type);
+    const gender = cleanGender(it.gender);
     const visaTypes = cleanVisaTypes(it.visa_types);
     const placementFee = cleanPlacementFee(it.placement_fee);
     const hasHousing = cleanTriState(it.has_housing);
@@ -420,8 +454,8 @@ export async function runParse(): Promise<ParseResult> {
     const blocked = await sql`
       with h as (
         select kj_content_hash(
-          ${contactRaw}, ${cityId}::uuid, ${it.work_type}::work_type,
-          ${it.gender}::gender, ${it.dedup_extra ?? null}) as content_hash)
+          ${contactRaw}, ${cityId}::uuid, ${workType}::work_type,
+          ${gender}::gender, ${it.dedup_extra ?? null}) as content_hash)
       select 'takedown' as reason from takedowns, h where takedowns.content_hash = h.content_hash
       union all
       select 'admin_hidden' from vacancies, h
@@ -450,7 +484,7 @@ export async function runParse(): Promise<ParseResult> {
           visa_types, placement_fee, has_housing, has_meals,
           source_id, raw_message_id, posted_at, dedup_extra
         ) values (
-          ${cityId}::uuid, ${regionSlug}, ${it.work_type}::work_type, ${it.gender}::gender, ${it.lang ?? null},
+          ${cityId}::uuid, ${regionSlug}, ${workType}::work_type, ${gender}::gender, ${it.lang ?? null},
           ${title}, ${description}, ${it.employer ?? null},
           ${contactRaw}, ${contactKind}::contact_kind,
           ${visaTypes}::visa_type[], ${placementFee}::placement_fee, ${hasHousing}, ${hasMeals},

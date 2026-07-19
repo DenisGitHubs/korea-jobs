@@ -28,12 +28,31 @@ export interface Stats {
   unverified: number;
   /** Freshness window (days) applied to the "Непроверенные" bucket; echoed in the text. */
   unverifiedMaxAgeDays: number;
+  // AI token accounting (ai_usage ledger). 24h detail + a rolling $ estimate for 24h / 30d.
+  aiCalls24h: number;
+  aiInput24h: number;
+  aiOutput24h: number;
+  aiCacheRead24h: number;
+  /** Calls in 24h that had to (re)write the cache — cache_creation_tokens>0 ("остывания"). */
+  aiColds24h: number;
+  aiCost24h: number;
+  aiCost30d: number;
 }
 
 /** Coerce a driver count (int4 -> number, but guard string/NULL) to a safe integer. */
 function n(v: unknown): number {
   const x = Number(v);
   return Number.isFinite(x) ? x : 0;
+}
+
+/**
+ * Approximate USD cost of a token bundle at claude-haiku-4-5 rates (per 1e6 tokens):
+ *   input $1 · output $5 · cache-read $0.10 · cache-write $2 (1h ttl ≈ 2x base; the SDK's 5m
+ *   default would be 1.25x). input_tokens excludes cached tokens, so the four terms don't
+ *   double-count. Bump these constants if the model/tariff changes.
+ */
+function aiCostUsd(input: number, output: number, cacheRead: number, cacheWrite: number): number {
+  return (input * 1 + output * 5 + cacheRead * 0.1 + cacheWrite * 2) / 1_000_000;
 }
 
 /**
@@ -76,6 +95,38 @@ export async function gatherStats(): Promise<Stats> {
   `) as unknown as Record<string, unknown>[];
   const c = cRows[0] ?? {};
 
+  // (3) AI usage/cost from the ai_usage ledger. BEST-EFFORT: ai_usage is a later migration
+  // (draft_0015) — if it is not applied yet (deploy-before-migrate window) the read throws and we
+  // degrade to zeros so /stats never breaks. bigint sums arrive as strings; n() coerces them.
+  let aiCalls24h = 0, aiInput24h = 0, aiOutput24h = 0, aiCacheRead24h = 0, aiColds24h = 0;
+  let aiCost24h = 0, aiCost30d = 0;
+  try {
+    const aRows = (await sql`
+      select
+        count(*) filter (where called_at > now() - interval '24 hours')::int                        as calls_24h,
+        count(*) filter (where called_at > now() - interval '24 hours' and cache_creation_tokens > 0)::int as colds_24h,
+        coalesce(sum(input_tokens)          filter (where called_at > now() - interval '24 hours'), 0)::bigint as in_24h,
+        coalesce(sum(output_tokens)         filter (where called_at > now() - interval '24 hours'), 0)::bigint as out_24h,
+        coalesce(sum(cache_read_tokens)     filter (where called_at > now() - interval '24 hours'), 0)::bigint as cread_24h,
+        coalesce(sum(cache_creation_tokens) filter (where called_at > now() - interval '24 hours'), 0)::bigint as cwrite_24h,
+        coalesce(sum(input_tokens)          filter (where called_at > now() - interval '30 days'), 0)::bigint  as in_30d,
+        coalesce(sum(output_tokens)         filter (where called_at > now() - interval '30 days'), 0)::bigint  as out_30d,
+        coalesce(sum(cache_read_tokens)     filter (where called_at > now() - interval '30 days'), 0)::bigint  as cread_30d,
+        coalesce(sum(cache_creation_tokens) filter (where called_at > now() - interval '30 days'), 0)::bigint  as cwrite_30d
+      from ai_usage`) as unknown as Record<string, unknown>[];
+    const a = aRows[0] ?? {};
+    aiCalls24h = n(a.calls_24h);
+    aiColds24h = n(a.colds_24h);
+    aiInput24h = n(a.in_24h);
+    aiOutput24h = n(a.out_24h);
+    aiCacheRead24h = n(a.cread_24h);
+    aiCost24h = aiCostUsd(n(a.in_24h), n(a.out_24h), n(a.cread_24h), n(a.cwrite_24h));
+    aiCost30d = aiCostUsd(n(a.in_30d), n(a.out_30d), n(a.cread_30d), n(a.cwrite_30d));
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[stats] ai_usage read failed (table missing?):', err instanceof Error ? err.message : String(err));
+  }
+
   return {
     usersTotal: n(u.total),
     usersNew24h: n(u.new_24h),
@@ -90,6 +141,13 @@ export async function gatherStats(): Promise<Stats> {
     adsPending: n(c.ads_pending),
     unverified: n(c.unverified),
     unverifiedMaxAgeDays: maxAge,
+    aiCalls24h,
+    aiInput24h,
+    aiOutput24h,
+    aiCacheRead24h,
+    aiColds24h,
+    aiCost24h,
+    aiCost30d,
   };
 }
 
@@ -104,5 +162,8 @@ export function renderStats(s: Stats): string {
     `Вакансии в ленте: ${s.vacancies} (активные, без дублей)`,
     `Объявления людей: одобрено ${s.adsApproved} · на модерации ${s.adsPending}`,
     `Непроверенные: ${s.unverified} (pending ≤${s.unverifiedMaxAgeDays} дней)`,
+    `ИИ за 24ч: вызовов ${s.aiCalls24h} · вход ${s.aiInput24h} · выход ${s.aiOutput24h} · ` +
+      `кэш-чтение ${s.aiCacheRead24h} · остываний ${s.aiColds24h} · ≈$${s.aiCost24h.toFixed(2)}`,
+    `ИИ за 30 дней: ≈$${s.aiCost30d.toFixed(2)}`,
   ].join('\n');
 }

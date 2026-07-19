@@ -109,7 +109,7 @@ For EACH input message (an object {id, text, source_hint?}) return one item with
 
 CLASSIFICATION:
 - is_vacancy=true only for a real JOB OFFER (an employer looking for workers).
-- is_vacancy=false for: someone SEEKING work / posting a resume (resume_seeking_job), housing rent (housing), currency exchange (currency_exchange), chit-chat (chitchat), non-job ads/services (ad_non_job), recruiter/agency SELF-PROMOTION with no concrete vacancy — "звоните, поможем с работой", "агентство трудоустройства" (agency_promo), advertising of language/visa/driving COURSES or schools (course_ad), spam (spam), or unclear (unclear). Set reject_reason; other fields may be omitted/null.
+- is_vacancy=false for: someone SEEKING work / posting a resume (resume_seeking_job), housing rent (housing), currency exchange (currency_exchange), chit-chat (chitchat), non-job ads/services (ad_non_job), recruiter/agency SELF-PROMOTION with no concrete vacancy — "звоните, поможем с работой", "агентство трудоустройства" (agency_promo), advertising of language/visa/driving COURSES or schools (course_ad), spam (spam), or unclear (unclear). For a non-vacancy, output ONLY the four keys {id, is_vacancy, reject_reason, confidence} — see OUTPUT FORMAT.
 - Generally CUT advertising and noise that is not a concrete job opening.
 - confidence: 0..1 that this is a genuine vacancy.
 
@@ -141,7 +141,7 @@ EXTRA EDGE-CASES (apply after the city rules; keep them consistent with the FIEL
 - "муж+жена" / "семейная пара" / "оила" / "couple" -> gender=couple. "только девушки"/"аёл" -> female; "парни"/"эркак" -> male; otherwise any.
 - Transport is NOT housing: a shuttle / «출퇴근 버스» / «전세버스 제공» / «развозка» does NOT set has_housing.
 - «무료 숙식» / «숙식제공» -> has_housing=true AND has_meals=true. «숙소제공 / жильё есть» -> housing only. «식사제공 / 중식제공 / питание» -> meals only.
-- «수수료 없음» / «소개비 무료» / «без комиссии» -> placement_fee=free; «수수료 있음» / «소개비 OO만원» / «депозит агентству» -> paid; silence -> unknown.
+- «수수료 없음» / «소개비 무료» / «без комиссии» -> placement_fee=free; «수수료 있음» / «소개비 OO만원» / «депозит агентству» -> paid; silence -> OMIT the placement_fee key.
 - A forward/repost that still carries a real employer contact IS a vacancy — extract it normally; duplicate collapsing happens server-side, not here.
 
 FIELDS:
@@ -156,8 +156,8 @@ FIELDS:
 - SALARY: do NOT extract or interpret pay in any way. There are no salary fields. The pay figure stays inside the original message; never convert currency/units or output a number.
 - CURRENCY: these are jobs in South Korea, so the DEFAULT currency for ANY money figure is the Korean won (₩ / KRW). If a currency is ever attached to or rendered next to a number (e.g. when you write the title), treat a bare amount as won. Use rubles (₽) ONLY when the message text EXPLICITLY says rubles — a "₽" sign, or "руб" / "рубл" / "рублей". Never assume or invent any other currency. This does NOT re-enable salary extraction: still never convert currencies/units and keep the amount exactly as written.
 
-ATTRIBUTES — fill ONLY when the message EXPLICITLY states them; NEVER guess:
-- visa_types: array of accepted visas, ONLY those the offer EXPLICITLY names; [] when visas are not mentioned. Use 'any' only if the offer explicitly says any visa is fine. Recognize:
+ATTRIBUTES — fill ONLY when the message EXPLICITLY states them; NEVER guess. When an attribute is not stated, OMIT its key entirely (do NOT emit null / [] / "unknown") — see OUTPUT FORMAT:
+- visa_types: array of accepted visas, ONLY those the offer EXPLICITLY names; OMIT the key when visas are not mentioned. Use 'any' only if the offer explicitly says any visa is fine. Recognize:
     * f4  — F-4 overseas-Korean / «соотечественник» / этнический кореец / 동포 (e.g. "для F-4", "F-4 비자", "соотечественникам", "동포 채용").
     * f6  — F-6 marriage to a Korean citizen / «виза по браку» (e.g. "для F-6", "F-6 비자", "супругам граждан Кореи").
     * f_series — F-2 / F-5 residency / ПМЖ / 영주권 ONLY. Do NOT fold F-4 or F-6 in here — they have their own labels (f4, f6).
@@ -166,46 +166,48 @@ ATTRIBUTES — fill ONLY when the message EXPLICITLY states them; NEVER guess:
     * g1  — G-1 humanitarian / asylum / «убежище» / гуманитарный статус / 난민 (e.g. "G-1", "G-1-5", "убежище", "гуманитарка").
     * e9, e7, e8, h2 — EPS / skilled / seasonal / work-visit, as before.
     * tourist — visa-free / short-stay (B / C-3). other — a named status not covered above.
-- placement_fee: 'paid' if an agency/placement fee is charged to the worker, 'free' if it explicitly says no fee, else 'unknown'.
-- has_housing: true if housing/dormitory is provided, false if it explicitly says none, null if not mentioned.
-- has_meals: true if meals are provided, false if explicitly none, null if not mentioned.
+- placement_fee: 'paid' if an agency/placement fee is charged to the worker, 'free' if it explicitly says no fee; OMIT the key when not stated.
+- has_housing: true if housing/dormitory is provided, false if it explicitly says none; OMIT the key if not mentioned.
+- has_meals: true if meals are provided, false if explicitly none; OMIT the key if not mentioned.
 
 Contacts go ONLY in contact_raw — do NOT put phone numbers, @handles, Kakao/WhatsApp ids, or t.me/wa.me links in title or employer; strip them out of those fields.
 
 Do NOT translate. Do NOT add fields. Echo id exactly.
 
-OUTPUT FORMAT — CRITICAL:
-Return ONLY one valid JSON object — no markdown code fences, no backticks, no text before or after it. Exactly this shape, one item per input message (id echoed verbatim):
-{"items":[{"id":"...","is_vacancy":true,"confidence":0.0,"reject_reason":null,"lang":"ru","city_slug":null,"region_slug":null,"work_type":"factory","gender":"any","title":null,"employer":null,"contact_raw":null,"contact_kind":null,"dedup_extra":null,"visa_types":[],"placement_fee":"unknown","has_housing":null,"has_meals":null}]}
+OUTPUT FORMAT — CRITICAL (controls output size — read carefully):
+Return ONLY one valid JSON object of the form {"items":[ ... ]} — no markdown code fences, no backticks, no text before or after it — with one item per input message, id echoed verbatim. To keep the output SMALL, OMIT a key instead of writing an empty value. There are two shapes:
 
-Field rules (use JSON null — NOT empty strings — for unknown optional fields; NEVER add keys):
-- id: string, the input id verbatim. is_vacancy: boolean. confidence: number 0..1.
-- reject_reason: null when is_vacancy=true, else one of: ${list(REJECT_REASONS)}.
-- lang: ISO 639-1 string (ru/ko/uz/en/...), or null.
-- city_slug: a slug from the CITY list above, or null. region_slug: one of ${list(regionSlugs)}, or null.
-- work_type (REQUIRED): one of ${list(WORK_TYPES)}.
-- gender: one of ${list(GENDERS)}.
-- title/employer: string or null.
-- contact_raw: string or null — ALL contacts joined by " · ", each EXACTLY as written with the name/languages the message attached (see FIELDS). contact_kind: kind of the FIRST contact, one of ${list(CONTACT_KINDS)}, or null.
-- dedup_extra: string or null.
-- visa_types: array with a subset of ${list(VISA_TYPES)}; [] when not mentioned.
-- placement_fee: one of ${list(PLACEMENT_FEES)}.
-- has_housing / has_meals: boolean or null.
+(A) NOT a vacancy (is_vacancy=false): output EXACTLY these four keys and NOTHING else —
+    {"id":<echo>,"is_vacancy":false,"reject_reason":<reason>,"confidence":<0..1>}
+    reject_reason is one of: ${list(REJECT_REASONS)}. Do NOT output city_slug, work_type, contact_raw or any other field for a non-vacancy.
 
-WORKED EXAMPLES (input item -> the exact item you must return; study the field choices, do NOT copy these ids or values):
+(B) A vacancy (is_vacancy=true): ALWAYS output these five keys — id, is_vacancy, confidence, work_type, gender — then ADD an optional key ONLY when it has a real value. OMIT the key entirely (do NOT write null, "", [], or "unknown") when the value is empty / not stated:
+    - reject_reason: OMIT (always null for a vacancy).
+    - lang: ISO 639-1 (ru/ko/uz/en/...); add when known.
+    - city_slug: a slug from the CITY list above; add ONLY a real match, else OMIT. region_slug: one of ${list(regionSlugs)}; add only when a region is identifiable and city_slug is not, else OMIT.
+    - title / employer: add when present.
+    - contact_raw: ALL contacts joined by " · ", each EXACTLY as written with the name/languages the message attached (see FIELDS); OMIT when there is none. contact_kind: kind of the FIRST contact, one of ${list(CONTACT_KINDS)}; add ONLY together with contact_raw.
+    - dedup_extra: add ONLY when there is NO contact at all (see FIELDS); else OMIT.
+    - visa_types: a NON-EMPTY array (subset of ${list(VISA_TYPES)}) of explicitly named visas; OMIT when none.
+    - placement_fee: 'free' or 'paid' when explicitly stated; OMIT when unknown.
+    - has_housing / has_meals: true or false ONLY when explicitly stated; OMIT when not mentioned.
+
+Constant rules: id echoed verbatim; is_vacancy boolean; confidence a number 0..1; work_type one of ${list(WORK_TYPES)}; gender one of ${list(GENDERS)}. Values stay human-readable EXACTLY as the FIELDS / ATTRIBUTES rules describe — never shorten or re-code them. NEVER add a key not listed above.
+
+WORKED EXAMPLES (input item -> the exact item you must return; study the field choices AND which keys are OMITTED, do NOT copy these ids or values):
 IN  {"id":"ex1","text":"안산 부품 공장 상용직 모집. Завод автозапчастей в Ансане, конвейер. Общежитие + питание бесплатно. З/п 3.500.000 вон/мес. F-4 가능. 010-1234-5678","source_hint":"Работа Ансан вакансии"}
-OUT {"id":"ex1","is_vacancy":true,"confidence":0.96,"reject_reason":null,"lang":"ru","city_slug":"ansan","region_slug":null,"work_type":"factory","gender":"any","title":"Завод автозапчастей, конвейер","employer":null,"contact_raw":"010-1234-5678","contact_kind":"phone","dedup_extra":null,"visa_types":["f4"],"placement_fee":"unknown","has_housing":true,"has_meals":true}
-   (free MEALS -> has_meals=true; placement_fee stays 'unknown' because no AGENCY fee is mentioned; the won amount is left inside the text, never extracted; city known -> region_slug=null.)
+OUT {"id":"ex1","is_vacancy":true,"confidence":0.96,"work_type":"factory","gender":"any","lang":"ru","city_slug":"ansan","title":"Завод автозапчастей, конвейер","contact_raw":"010-1234-5678","contact_kind":"phone","visa_types":["f4"],"has_housing":true,"has_meals":true}
+   (free MEALS -> has_meals=true; placement_fee OMITTED because no AGENCY fee is mentioned; the won amount is left inside the text, never extracted; city known -> region_slug OMITTED; employer/dedup_extra/reject_reason OMITTED.)
 IN  {"id":"ex2","text":"Работа нужна? Пиши в личку — поможем с трудоустройством по всей Корее, огромная база вакансий! @jobs_agent"}
-OUT {"id":"ex2","is_vacancy":false,"confidence":0.05,"reject_reason":"agency_promo","lang":"ru","city_slug":null,"region_slug":null,"work_type":"other","gender":"any","title":null,"employer":null,"contact_raw":null,"contact_kind":null,"dedup_extra":null,"visa_types":[],"placement_fee":"unknown","has_housing":null,"has_meals":null}
-   (recruiter self-promo with no concrete opening -> agency_promo, NOT a vacancy, even though it says "работа" and gives a contact.)
+OUT {"id":"ex2","is_vacancy":false,"reject_reason":"agency_promo","confidence":0.05}
+   (recruiter self-promo with no concrete opening -> agency_promo, NOT a vacancy, even though it says "работа" and gives a contact. Non-vacancy -> ONLY the four keys, nothing else.)
 IN  {"id":"ex3","text":"Ищу работу на заводе, виза F-4, опыт 3 года, живу в Пхёнтхэке, готов к переезду"}
-OUT {"id":"ex3","is_vacancy":false,"confidence":0.06,"reject_reason":"resume_seeking_job","lang":"ru","city_slug":null,"region_slug":null,"work_type":"other","gender":"any","title":null,"employer":null,"contact_raw":null,"contact_kind":null,"dedup_extra":null,"visa_types":[],"placement_fee":"unknown","has_housing":null,"has_meals":null}
-   (a WORKER looking for a job is not an offer -> resume_seeking_job, regardless of the visa/city details in the text.)
+OUT {"id":"ex3","is_vacancy":false,"reject_reason":"resume_seeking_job","confidence":0.06}
+   (a WORKER looking for a job is not an offer -> resume_seeking_job, regardless of the visa/city details in the text. Four keys only.)
 IN  {"id":"ex4","text":"광주 경기도 물류센터 상하차 구인. 주야 가능, 당일지급. 남녀 모두 환영."}
-OUT {"id":"ex4","is_vacancy":true,"confidence":0.9,"reject_reason":null,"lang":"ko","city_slug":"gwangju_gyeonggi","region_slug":null,"work_type":"logistics","gender":"any","title":"물류센터 상하차 구인","employer":null,"contact_raw":null,"contact_kind":null,"dedup_extra":"gwangju gyeonggi logistics","visa_types":[],"placement_fee":"unknown","has_housing":null,"has_meals":null}
-   (광주 + 경기도 context -> gwangju_gyeonggi, NOT the metropolitan gwangju; no contact at all -> fill dedup_extra with a 2-3 token core. A province-only post instead would be city_slug=null with region_slug set.)
+OUT {"id":"ex4","is_vacancy":true,"confidence":0.9,"work_type":"logistics","gender":"any","lang":"ko","city_slug":"gwangju_gyeonggi","title":"물류센터 상하차 구인","dedup_extra":"gwangju gyeonggi logistics"}
+   (광주 + 경기도 context -> gwangju_gyeonggi, NOT the metropolitan gwangju; no contact at all -> fill dedup_extra with a 2-3 token core (and OMIT contact_raw/contact_kind). A province-only post instead would OMIT city_slug and set region_slug. visa_types/placement_fee/has_* all OMITTED.)
 IN  {"id":"ex5","text":"공장 구인, Ансан. Стабильно, общежитие. Звоните: 010-1111-2222 (корейский), Тина 010-3333-4444 (рус/узб/кор), Ирина 010-5555-6666 (рус/кор/англ)","source_hint":"Работа Ансан"}
-OUT {"id":"ex5","is_vacancy":true,"confidence":0.92,"reject_reason":null,"lang":"ru","city_slug":"ansan","region_slug":null,"work_type":"factory","gender":"any","title":"Завод, Ансан","employer":null,"contact_raw":"010-1111-2222 (корейский) · Тина 010-3333-4444 (рус/узб/кор) · Ирина 010-5555-6666 (рус/кор/англ)","contact_kind":"phone","dedup_extra":null,"visa_types":[],"placement_fee":"unknown","has_housing":true,"has_meals":null}
-   (THREE phones -> contact_raw lists ALL of them joined by " · ", each keeping the name and languages the message attached, in message order; contact_kind = the FIRST contact's kind. NEVER drop the 2nd/3rd contact or invent context.)`;
+OUT {"id":"ex5","is_vacancy":true,"confidence":0.92,"work_type":"factory","gender":"any","lang":"ru","city_slug":"ansan","title":"Завод, Ансан","contact_raw":"010-1111-2222 (корейский) · Тина 010-3333-4444 (рус/узб/кор) · Ирина 010-5555-6666 (рус/кор/англ)","contact_kind":"phone","has_housing":true}
+   (THREE phones -> contact_raw lists ALL of them joined by " · ", each keeping the name and languages the message attached, in message order; contact_kind = the FIRST contact's kind. NEVER drop the 2nd/3rd contact or invent context. has_meals OMITTED (not stated); visa_types/placement_fee/employer/dedup_extra also OMITTED.)`;
 }

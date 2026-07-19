@@ -121,6 +121,14 @@ const files = [
   // byte-for-byte unchanged -> no recompute of existing rows. Depends on kj_normalize_contact /
   // kj_normalize_phone (draft_0001_init.sql).
   'draft_0014_multi_contact_norm.sql',
+
+  // AI usage ledger (0015) — ADDITIVE / idempotent (CREATE TABLE IF NOT EXISTS). Adds ai_usage
+  // (one row per SUCCESSFUL model call) + an index on called_at. Fed best-effort by the parser
+  // (lib/korea/parser/run.ts) and the ad moderator (lib/korea/ads/moderation.ts) via
+  // lib/korea/ai-usage.ts; read by admin /stats for a tokens + $ cost view. Depends on pgcrypto
+  // (gen_random_uuid, draft_0001_init.sql). Stats reads it best-effort, so a deploy-before-apply
+  // window degrades to zeros rather than breaking /stats.
+  'draft_0015_ai_usage.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

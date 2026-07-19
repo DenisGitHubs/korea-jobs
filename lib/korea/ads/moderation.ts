@@ -15,6 +15,7 @@ import { getSql } from '../core/db.js';
 import { getConfigBool, getConfigNumber, getConfigString } from '../config.js';
 import { buildSystemPrompt, type CityRef, type ParsedVacancy } from '../parser/prompt.js';
 import { extractJson } from '../parser/extract-json.js';
+import { recordAiUsage } from '../ai-usage.js';
 import { looksLikeAdSpam } from './adspam.js';
 
 const MODEL_ALIASES: Record<string, string> = {
@@ -64,7 +65,8 @@ export async function classifyAdText(text: string): Promise<AdClassification> {
   // It starts as an empty Map so that even a FAILED cities read still yields a valid Map —
   // the AI city just won't resolve (acceptable), and the ad still routes to review.
   let cityIdBySlug = new Map<string, string>();
-  let system: string;
+  let baseSystem: string; // the shared, cacheable contract — byte-identical to the parser's
+  let fewShot = ''; // volatile learned examples — kept OUT of the cached prefix (see the call)
   let model: string;
   try {
     // PREAMBLE (client handle + cities read + config + few-shot + prompt build) is wrapped so
@@ -84,19 +86,22 @@ export async function classifyAdText(text: string): Promise<AdClassification> {
     const regionSlugs = [...new Set(cityRows.map((r) => r.region_slug).filter(Boolean))] as string[];
     cityIdBySlug = new Map<string, string>(cityRows.map((r) => [r.slug as string, r.id as string]));
 
-    system = buildSystemPrompt(cities, regionSlugs);
+    // Base contract built EXACTLY like the parser (same buildSystemPrompt + same cities/regions
+    // derivation) so its text is byte-for-byte identical → the two callers share ONE cache entry.
+    // The learned few-shot is built SEPARATELY and kept out of this string (see the model call):
+    // it changes per request, so prepending it — as the old code did — made the cached prefix
+    // start with volatile text and the shared cache never hit.
+    baseSystem = buildSystemPrompt(cities, regionSlugs);
     if (await getConfigBool('ads_fewshot_enabled', true)) {
       const size = await getConfigNumber('ads_fewshot_size', 10);
-      // Few-shot is a best-effort enhancement: if its own DB reads fail, fall back to an
-      // empty preface (base prompt only) instead of sinking the whole classification.
-      let preface = '';
+      // Few-shot is a best-effort enhancement: if its own DB reads fail, fall back to no
+      // examples (base prompt only) instead of sinking the whole classification.
       try {
-        preface = await buildFewShot(sql, size);
+        fewShot = await buildFewShot(sql, size);
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error('[ads] few-shot build failed, using base prompt:', err instanceof Error ? err.message : String(err));
       }
-      if (preface) system = `${preface}\n\n${system}`;
     }
 
     const modelAlias = await getConfigString('parser_model', 'haiku');
@@ -118,12 +123,26 @@ export async function classifyAdText(text: string): Promise<AdClassification> {
     // constructor throws when it can't resolve a key) degrades softly — item:null → the
     // ad routes to 'pending' human review — instead of throwing out of classifyAdText.
     const client = new Anthropic(); // reads ANTHROPIC_API_KEY from env
+    // TWO system blocks: [0] the shared cacheable contract (cache_control, byte-identical to the
+    // parser → common 1h cache entry), then [1] the volatile few-shot WITHOUT cache_control so it
+    // sits AFTER the cached prefix and never busts it. The few-shot stays a system block (not a
+    // user turn) because the API forbids two consecutive user turns and the data itself is the one
+    // user message ({messages:[{id:'ad',text}]}); as calibration DATA it reads well right after the
+    // stable contract and before the data. Omitting cache_control on block [1] means it is billed
+    // as ordinary input each call — acceptable, it is small and changes constantly.
+    const system: { type: 'text'; text: string; cache_control?: { type: 'ephemeral'; ttl: '1h' } }[] = [
+      { type: 'text', text: baseSystem, cache_control: { type: 'ephemeral', ttl: '1h' } },
+    ];
+    if (fewShot) system.push({ type: 'text', text: fewShot });
     const resp = await client.messages.create({
       model,
       max_tokens: 2000,
-      system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } }],
+      system,
       messages: [{ role: 'user', content: JSON.stringify({ messages: [{ id: 'ad', text }] }) }],
     } as Anthropic.MessageCreateParamsNonStreaming);
+
+    // Weigh the tokens (best-effort, never throws). One ad classified per call → batch_size=1.
+    await recordAiUsage('ads', model, resp.usage, 1);
 
     const textBlock = resp.content.find((b) => b.type === 'text');
     if (textBlock && 'text' in textBlock) {
