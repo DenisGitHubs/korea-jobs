@@ -28,7 +28,7 @@ const CONSENT_KEY = 'kj:ads-consent';
 const STEP_COUNT = 7;
 const LAST = STEP_COUNT - 1;
 const MIN_DESC = 15;
-const CONTACT_RAW_MAX = 200;
+const CONTACT_RAW_MAX = 300;
 
 /** Fees offered in the wizard — deliberately no 'unknown' (owner decision). */
 const WIZARD_FEES: readonly PlacementFee[] = ['free', 'paid'];
@@ -92,7 +92,7 @@ function buildContactRaw(d: Draft, username: string, t: TFunction): string {
   return parts.join(' · ');
 }
 
-/** Contact step is valid with >=1 method, each (bar Telegram) filled, within 200 chars. */
+/** Contact step is valid with >=1 method, each (bar Telegram) filled, within 300 chars. */
 function contactStepValid(d: Draft, username: string, t: TFunction): boolean {
   if (d.contactSel.length === 0) return false;
   for (const k of d.contactSel) {

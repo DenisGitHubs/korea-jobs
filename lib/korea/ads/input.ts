@@ -12,6 +12,7 @@
 // decideAdModeration) on the text adModText() assembles.
 
 import { WORK_TYPES, VISA_TYPES, PLACEMENT_FEES, CONTACT_KINDS } from '../parser/prompt.js';
+import { truncateContacts } from '../core/contact-trim.js';
 
 /** Canonical UUID shape, shared by the ad handlers that validate a path :id. */
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -77,7 +78,12 @@ export type ParseResult = { ok: true; fields: AdFields } | { ok: false; error: s
 export function parseAdInput(body: AdBody | null): ParseResult {
   const title = s(body?.title, 120);
   const description = s(body?.description, 4000);
-  const contactRaw = s(body?.contact_raw, 200);
+  // contact_raw may carry SEVERAL contacts joined by " · " on the client (owner rule
+  // 2026-07-19). Trim/blank-check with the default ceiling FIRST, then clamp to 300 on a
+  // CONTACT boundary (never mid-number) — symmetric with the parser cap in run.ts, and so the
+  // FIRST contact (which drives contact_normalized / content_hash, see 0014) is never split.
+  const contactRawFull = s(body?.contact_raw);
+  const contactRaw = contactRawFull ? truncateContacts(contactRawFull, 300) : null;
   if (!title || !description || !contactRaw) {
     return { ok: false, error: 'title, description and contact_raw are required' };
   }

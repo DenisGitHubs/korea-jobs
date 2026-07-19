@@ -17,6 +17,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getSql } from '../core/db.js';
 import { scrubContacts } from '../core/scrub.js';
+import { truncateContacts } from '../core/contact-trim.js';
 import { getConfigNumber, getConfigString } from '../config.js';
 import { textHash } from './texthash.js';
 import { extractJson } from './extract-json.js';
@@ -374,6 +375,13 @@ export async function runParse(): Promise<ParseResult> {
     const hasHousing = cleanTriState(it.has_housing);
     const hasMeals = cleanTriState(it.has_meals);
     const title = it.title ? it.title.slice(0, 120) : null; // schema no longer caps length
+    // contact_raw may now hold SEVERAL contacts joined by " · " (owner rule 2026-07-19: show
+    // every contact, not just the first). Cap the whole string at 300 chars so a pathological
+    // list can't blow up the row / content_hash input — but on a CONTACT boundary, never
+    // mid-number (truncateContacts, shared with ads/input.ts). The SAME value feeds the
+    // block-check hash below AND the insert so the prospective content_hash matches what is
+    // stored (and matches contact_normalized, which keys on the FIRST contact — see 0014).
+    const contactRaw = it.contact_raw ? truncateContacts(it.contact_raw, 300) : null;
     // Owner rule (2026-07-15): description = the FULL original message text minus contacts
     // (the AI no longer summarizes it, and no longer interprets salary — salary now lives
     // inside this text). scrubContacts strips phones/@handles/t.me·wa.me·kakao links.
@@ -391,7 +399,7 @@ export async function runParse(): Promise<ParseResult> {
     const blocked = await sql`
       with h as (
         select kj_content_hash(
-          ${it.contact_raw ?? null}, ${cityId}::uuid, ${it.work_type}::work_type,
+          ${contactRaw}, ${cityId}::uuid, ${it.work_type}::work_type,
           ${it.gender}::gender, ${it.dedup_extra ?? null}) as content_hash)
       select 'takedown' as reason from takedowns, h where takedowns.content_hash = h.content_hash
       union all
@@ -423,7 +431,7 @@ export async function runParse(): Promise<ParseResult> {
         ) values (
           ${cityId}::uuid, ${regionSlug}, ${it.work_type}::work_type, ${it.gender}::gender, ${it.lang ?? null},
           ${title}, ${description}, ${it.employer ?? null},
-          ${it.contact_raw ?? null}, ${it.contact_kind ?? null}::contact_kind,
+          ${contactRaw}, ${it.contact_kind ?? null}::contact_kind,
           ${visaTypes}::visa_type[], ${placementFee}::placement_fee, ${hasHousing}, ${hasMeals},
           ${row.source_id}::uuid, ${rawId}::uuid, ${row.posted_at ?? null}, ${it.dedup_extra ?? null}
         )

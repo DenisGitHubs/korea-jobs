@@ -149,7 +149,8 @@ FIELDS:
 - gender: any/male/female/couple (who the offer is for).
 - title: <=80 chars, in the message's language.
 - employer: company/name if present.
-- contact_raw: the phone/handle EXACTLY as written (do NOT normalize). contact_kind: phone/telegram/kakao/whatsapp/other.
+- contact_raw: EVERY contact the message gives — ALL phone numbers, @handles, Kakao/WhatsApp ids, e-mails, etc., NOT just the first one. Copy each value EXACTLY as written (do NOT normalize). Join the contacts with " · " (a space, a middle-dot "·", a space), in the ORDER they appear in the message. Keep the context the message itself attaches to a contact: a NAME written next to it, and any languages / short note in parentheses — e.g. "010-1111-2222 (корейский) · Тина 010-3333-4444 (рус/узб/кор) · Ирина 010-5555-6666 (рус/кор/англ)". NEVER invent a name, language or note the message does not state; a bare number stays bare. One contact -> contact_raw is just that single value (no " · ").
+- contact_kind: the kind of the FIRST contact in contact_raw — phone/telegram/kakao/whatsapp/other.
 - dedup_extra: ONLY when there is NO contact at all — a 2-3 token normalized core (e.g. "ansan factory autoparts") to tell otherwise-identical no-contact offers apart.
 - lang: ISO 639-1 of the message.
 - SALARY: do NOT extract or interpret pay in any way. There are no salary fields. The pay figure stays inside the original message; never convert currency/units or output a number.
@@ -185,7 +186,7 @@ Field rules (use JSON null — NOT empty strings — for unknown optional fields
 - work_type (REQUIRED): one of ${list(WORK_TYPES)}.
 - gender: one of ${list(GENDERS)}.
 - title/employer: string or null.
-- contact_raw: string or null. contact_kind: one of ${list(CONTACT_KINDS)}, or null.
+- contact_raw: string or null — ALL contacts joined by " · ", each EXACTLY as written with the name/languages the message attached (see FIELDS). contact_kind: kind of the FIRST contact, one of ${list(CONTACT_KINDS)}, or null.
 - dedup_extra: string or null.
 - visa_types: array with a subset of ${list(VISA_TYPES)}; [] when not mentioned.
 - placement_fee: one of ${list(PLACEMENT_FEES)}.
@@ -203,5 +204,8 @@ OUT {"id":"ex3","is_vacancy":false,"confidence":0.06,"reject_reason":"resume_see
    (a WORKER looking for a job is not an offer -> resume_seeking_job, regardless of the visa/city details in the text.)
 IN  {"id":"ex4","text":"광주 경기도 물류센터 상하차 구인. 주야 가능, 당일지급. 남녀 모두 환영."}
 OUT {"id":"ex4","is_vacancy":true,"confidence":0.9,"reject_reason":null,"lang":"ko","city_slug":"gwangju_gyeonggi","region_slug":null,"work_type":"logistics","gender":"any","title":"물류센터 상하차 구인","employer":null,"contact_raw":null,"contact_kind":null,"dedup_extra":"gwangju gyeonggi logistics","visa_types":[],"placement_fee":"unknown","has_housing":null,"has_meals":null}
-   (광주 + 경기도 context -> gwangju_gyeonggi, NOT the metropolitan gwangju; no contact at all -> fill dedup_extra with a 2-3 token core. A province-only post instead would be city_slug=null with region_slug set.)`;
+   (광주 + 경기도 context -> gwangju_gyeonggi, NOT the metropolitan gwangju; no contact at all -> fill dedup_extra with a 2-3 token core. A province-only post instead would be city_slug=null with region_slug set.)
+IN  {"id":"ex5","text":"공장 구인, Ансан. Стабильно, общежитие. Звоните: 010-1111-2222 (корейский), Тина 010-3333-4444 (рус/узб/кор), Ирина 010-5555-6666 (рус/кор/англ)","source_hint":"Работа Ансан"}
+OUT {"id":"ex5","is_vacancy":true,"confidence":0.92,"reject_reason":null,"lang":"ru","city_slug":"ansan","region_slug":null,"work_type":"factory","gender":"any","title":"Завод, Ансан","employer":null,"contact_raw":"010-1111-2222 (корейский) · Тина 010-3333-4444 (рус/узб/кор) · Ирина 010-5555-6666 (рус/кор/англ)","contact_kind":"phone","dedup_extra":null,"visa_types":[],"placement_fee":"unknown","has_housing":true,"has_meals":null}
+   (THREE phones -> contact_raw lists ALL of them joined by " · ", each keeping the name and languages the message attached, in message order; contact_kind = the FIRST contact's kind. NEVER drop the 2nd/3rd contact or invent context.)`;
 }

@@ -1033,6 +1033,38 @@ a {
   font-weight: 500;
 }
 
+/* Multi-contact list: one row per contact packed into a ' · '-joined field. */
+.contacts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.contact-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  background: var(--kj-secondary-bg);
+  border-radius: var(--kj-radius);
+  padding: 12px 14px;
+}
+
+.contact-line .contact__value {
+  font-size: 15px;
+  flex: 1 1 55%;
+  min-width: 0;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.contact-line__actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 /* Prepayment safety reminder shown under the "show contact" action. */
 .contact-note {
   color: var(--kj-brand-strong);

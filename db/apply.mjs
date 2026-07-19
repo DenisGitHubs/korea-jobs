@@ -110,6 +110,17 @@ const files = [
   // cap. Now a purged raw leaves its audit row alive (raw_id nulled); the cap counts by
   // (user_id, revealed_at) so it stays exact. Depends on raw_contact_reveals (draft_0008_raw_reveal.sql).
   'draft_0013_reveal_fk.sql',
+
+  // Multi-contact normalize (0014) — ADDITIVE / idempotent (CREATE OR REPLACE). Since 2026-07-19
+  // contact_raw may join several contacts with " · "; the old kj_normalize_contact treated the
+  // whole list as one over-long phone (>13 digits -> NULL), which killed has_contact and collapsed
+  // content_hash to 'nocontact' (distinct vacancies colliding). Now it keys on the FIRST contact
+  // (split_part on " · ") before the existing logic. One function change: contact_normalized,
+  // content_hash and kj_content_hash all call kj_normalize_contact, so has_contact + the stored
+  // dedup hash + the parser's prospective hash stay in lockstep. Single values (no separator) are
+  // byte-for-byte unchanged -> no recompute of existing rows. Depends on kj_normalize_contact /
+  // kj_normalize_phone (draft_0001_init.sql).
+  'draft_0014_multi_contact_norm.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

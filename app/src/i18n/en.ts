@@ -233,7 +233,7 @@ export const en: typeof ru = {
     contactWhatsappPlaceholder: 'WhatsApp number',
     contactOtherLabel: 'Other',
     contactOtherPlaceholder: 'Link, handle or how to reach you',
-    contactLenHint: 'Contacts: {{n}}/200',
+    contactLenHint: 'Contacts: {{n}}/300',
     contactTag: {
       phone: 'Tel.',
       telegram: 'TG',
@@ -396,6 +396,8 @@ export const en: typeof ru = {
   contact: {
     writeTelegram: 'Message on Telegram',
     writeTelegramPrefix: "Hello! I'm writing about your listing:",
+    call: 'Call',
+    copyAll: 'Copy all',
   },
   raw: {
     badge: 'Unverified',

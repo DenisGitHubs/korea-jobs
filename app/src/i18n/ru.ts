@@ -230,7 +230,7 @@ export const ru = {
     contactWhatsappPlaceholder: 'Номер WhatsApp',
     contactOtherLabel: 'Другой способ',
     contactOtherPlaceholder: 'Ссылка, ник или как связаться',
-    contactLenHint: 'Контакты: {{n}}/200',
+    contactLenHint: 'Контакты: {{n}}/300',
     contactTag: {
       phone: 'Тел.',
       telegram: 'TG',
@@ -393,6 +393,8 @@ export const ru = {
   contact: {
     writeTelegram: 'Написать в Telegram',
     writeTelegramPrefix: 'Здравствуйте! Пишу вам по объявлению:',
+    call: 'Позвонить',
+    copyAll: 'Скопировать все',
   },
   raw: {
     badge: 'Не проверено',

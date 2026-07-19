@@ -15,6 +15,8 @@ import { Loading } from '../components/Loading';
 import { EmptyState } from '../components/EmptyState';
 import { WorkTypeBadge } from '../components/WorkTypeBadge';
 import { HeartIcon } from '../components/VacancyCard';
+import { ContactLines } from '../components/ContactLines';
+import { findTelegramUsername, splitContacts } from '../lib/contacts';
 
 function ShieldIcon() {
   return (
@@ -49,21 +51,10 @@ const TG_MSG_MAX = 700;
 /** Value looks like a Telegram handle/link (used to detect tg for non-'telegram' kinds). */
 const TG_LIKE_RE = /^\s*(?:https?:\/\/)?(?:t\.me\/|@|tg:\/\/resolve\?domain=)/i;
 
-/** Extract a bare Telegram username from @nick / t.me/nick / https://t.me/nick / tg://resolve?domain=nick. */
-function telegramUsername(raw: string): string | null {
-  const s = raw
-    .trim()
-    .replace(/^(?:https?:\/\/)?t\.me\//i, '')
-    .replace(/^tg:\/\/resolve\?domain=/i, '')
-    .replace(/^@/, '');
-  const nick = s.split(/[?/\s]/)[0]; // nick is everything up to '?', '/', or whitespace
-  return /^[A-Za-z0-9_]{3,32}$/.test(nick) ? nick : null;
-}
-
 /** True when we can open a Telegram chat with this contact. */
 function isTelegramContact(c: VacancyContact): boolean {
-  if (c.kind === 'telegram') return telegramUsername(c.value) !== null;
-  return TG_LIKE_RE.test(c.value) && telegramUsername(c.value) !== null;
+  if (c.kind === 'telegram') return findTelegramUsername(c.value) !== null;
+  return TG_LIKE_RE.test(c.value) && findTelegramUsername(c.value) !== null;
 }
 
 export default function VacancyScreen() {
@@ -174,12 +165,13 @@ export default function VacancyScreen() {
     [isReal],
   );
 
-  // Open a Telegram chat with the author, prefilling a message referencing this listing.
-  // Real client: raw `web_app_open_tg_link` event (relative path) — bypasses the SDK's
-  // desktop/macOS window.open fallback (tma.js #712). Browser: plain t.me link.
-  const writeTelegram = useCallback(
-    (c: VacancyContact) => {
-      const username = telegramUsername(c.value);
+  // Open a Telegram chat with the author (by bare username), prefilling a message
+  // referencing this listing. Real client: raw `web_app_open_tg_link` event
+  // (relative path) — bypasses the SDK's desktop/macOS window.open fallback
+  // (tma.js #712). Browser: plain t.me link. Used both by the single-contact
+  // block and by each Telegram row of the multi-contact list.
+  const writeTelegramUsername = useCallback(
+    (username: string) => {
       if (!username || !vacancy) return;
       const full = vacancy.description;
       const desc = full.length > TG_MSG_MAX ? `${full.slice(0, TG_MSG_MAX)} …` : full;
@@ -196,6 +188,14 @@ export default function VacancyScreen() {
       }
     },
     [vacancy, isReal, t],
+  );
+
+  const writeTelegram = useCallback(
+    (c: VacancyContact) => {
+      const username = findTelegramUsername(c.value);
+      if (username) writeTelegramUsername(username);
+    },
+    [writeTelegramUsername],
   );
 
   const threeState = (v: boolean | null): string =>
@@ -322,41 +322,46 @@ export default function VacancyScreen() {
             ) : contact.status === 'loading' ? (
               <Loading text={t('vacancy.loadingContact')} />
             ) : contact.contact ? (
-              <div className="contact">
-                <div>
-                  <div className="contact__kind">{t(`contactKind.${contact.contact.kind}`)}</div>
-                  <div className="contact__value">{contact.contact.value}</div>
-                </div>
-                {isTelegramContact(contact.contact) ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <button
-                      className="btn btn--tg btn--block"
-                      onClick={() => writeTelegram(contact.contact!)}
-                    >
-                      {t('contact.writeTelegram')}
-                    </button>
-                    <button className="btn btn--secondary" onClick={() => copy(contact.contact!.value)}>
-                      {copied ? t('vacancy.copied') : t('vacancy.copy')}
-                    </button>
+              splitContacts(contact.contact.value).length > 1 ? (
+                // Several contacts packed into one field → one row each.
+                <ContactLines value={contact.contact.value} onTelegram={writeTelegramUsername} />
+              ) : (
+                <div className="contact">
+                  <div>
+                    <div className="contact__kind">{t(`contactKind.${contact.contact.kind}`)}</div>
+                    <div className="contact__value">{contact.contact.value}</div>
                   </div>
-                ) : (
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button className="btn btn--secondary" onClick={() => copy(contact.contact!.value)}>
-                      {copied ? t('vacancy.copied') : t('vacancy.copy')}
-                    </button>
-                    {contactHref(contact.contact) ? (
-                      <a
-                        className="btn btn--tg"
-                        href={contactHref(contact.contact) ?? undefined}
-                        target="_blank"
-                        rel="noreferrer"
+                  {isTelegramContact(contact.contact) ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <button
+                        className="btn btn--tg btn--block"
+                        onClick={() => writeTelegram(contact.contact!)}
                       >
-                        {t('vacancy.open')}
-                      </a>
-                    ) : null}
-                  </div>
-                )}
-              </div>
+                        {t('contact.writeTelegram')}
+                      </button>
+                      <button className="btn btn--secondary" onClick={() => copy(contact.contact!.value)}>
+                        {copied ? t('vacancy.copied') : t('vacancy.copy')}
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button className="btn btn--secondary" onClick={() => copy(contact.contact!.value)}>
+                        {copied ? t('vacancy.copied') : t('vacancy.copy')}
+                      </button>
+                      {contactHref(contact.contact) ? (
+                        <a
+                          className="btn btn--tg"
+                          href={contactHref(contact.contact) ?? undefined}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {t('vacancy.open')}
+                        </a>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              )
             ) : (
               <div className="muted" style={{ padding: '4px 4px' }}>
                 {t('vacancy.noContact')}
