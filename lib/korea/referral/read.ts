@@ -21,6 +21,7 @@ import { type ReqLike, type ResLike, send, sendError } from '../core/http.js';
 import { ApiErrorCode } from '../core/errors.js';
 import { authenticate } from '../core/context.js';
 import { getConfigNumber, getConfigString } from '../config.js';
+import { readStreakSummary } from '../streaks/update.js';
 
 /**
  * Build the canonical Mini App deep link `https://t.me/<bot>/<app>?startapp=<code>`.
@@ -117,19 +118,33 @@ export async function referralGet(req: ReqLike, res: ResLike): Promise<void> {
     const c = counts[0] ?? { inv_l1: 0, inv_l2: 0, inv_l3: 0 };
     const pointsPending = pending[0]?.points_pending ?? 0;
 
+    // Streak state + bonuses. points_total is the GRAND balance = confirmed referral ledger +
+    // all streak_awards (the per-level `points` below stay referral-only, so they do NOT sum to
+    // points_total once any streak bonus lands — that is intentional). The bonus amounts come from
+    // config (defaults 20 / 30, no seed — see draft_0018).
+    const [streak, visitBonus, openBonus] = await Promise.all([
+      readStreakSummary(sql, me),
+      getConfigNumber('streak_visit_bonus', 20),
+      getConfigNumber('streak_open_bonus', 30),
+    ]);
+
     const code = auth.user.publicId;
     const link = await buildReferralLink(code);
 
     send(res, 200, {
       code,
       link,
-      points_total: l.points_total,
+      points_total: l.points_total + streak.bonusTotal,
       points_pending: pointsPending,
       levels: [
         { level: 1, invited: c.inv_l1, points: l.pts_l1 },
         { level: 2, invited: c.inv_l2, points: l.pts_l2 },
         { level: 3, invited: c.inv_l3, points: l.pts_l3 },
       ],
+      streaks: {
+        visit: { len: streak.visitLen, bonus_every: 7, bonus: visitBonus },
+        open: { len: streak.openLen, bonus_every: 7, bonus: openBonus },
+      },
     });
   } catch {
     sendError(res, ApiErrorCode.Internal);

@@ -38,6 +38,7 @@ import { getConfigNumber, getConfigString } from '../config.js';
 import { WORK_TYPES, VISA_TYPES } from '../parser/prompt.js';
 import { scrubContacts } from '../core/scrub.js';
 import { recordReferralActivation } from '../referral/accrue.js';
+import { bumpOpenStreakBestEffort } from '../streaks/update.js';
 
 const PAGE_SIZE = 20;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -426,7 +427,11 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
       left join sources src on src.id = v.source_id
       where v.id = ${id}::uuid and v.is_active and v.duplicate_of is null
       limit 1`) as unknown as Row[];
-    if (vac[0]) return send(res, 200, toView(vac[0]));
+    if (vac[0]) {
+      // Daily OPEN streak: a delivered card (vacancy) counts today. Best-effort, once per Seoul day.
+      await bumpOpenStreakBestEffort(sql, auth.user.id);
+      return send(res, 200, toView(vac[0]));
+    }
 
     const ad = (await sql`
       select a.id, c.slug as city_slug, c.name as city_name, a.region_slug,
@@ -445,7 +450,11 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
       left join cities c on c.id = a.city_id
       where a.id = ${id}::uuid and a.status = 'approved' and (a.expires_at is null or a.expires_at > now())
       limit 1`) as unknown as Row[];
-    if (ad[0]) return send(res, 200, toView(ad[0]));
+    if (ad[0]) {
+      // Daily OPEN streak: a delivered card (user ad) counts today. Best-effort, once per Seoul day.
+      await bumpOpenStreakBestEffort(sql, auth.user.id);
+      return send(res, 200, toView(ad[0]));
+    }
 
     return sendError(res, ApiErrorCode.NotFound);
   } catch {

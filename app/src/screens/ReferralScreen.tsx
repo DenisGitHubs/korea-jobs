@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { postEvent } from '@telegram-apps/sdk-react';
 import { api } from '../shared/api/client';
-import type { ReferralView } from '../shared/types/api';
+import type { ReferralView, StreakStat } from '../shared/types/api';
 import { useBackButton } from '../hooks/useBackButton';
 import { useSettingsStore } from '../store/settingsStore';
 import { AppBar } from '../components/AppBar';
@@ -34,6 +34,22 @@ const STATUS_TIERS = [
 
 /** Last points_total the user has seen — drives the "+N points" nudge. */
 const POINTS_SEEN_KEY = 'kj:refPointsSeen';
+
+type TFn = ReturnType<typeof useTranslation>['t'];
+
+/**
+ * Days-to-next-bonus caption. Bonus size + cadence come from the API (server-driven).
+ * On an exact multiple (a bonus was just earned) we say so and count down the next cycle;
+ * otherwise we show how many days are left. len === 0 → a full cycle remains.
+ */
+function streakHint(s: StreakStat, t: TFn): string {
+  const every = s.bonus_every > 0 ? s.bonus_every : 7;
+  const rem = s.len % every;
+  if (s.len > 0 && rem === 0) {
+    return t('referral.streakBonusGot', { count: every });
+  }
+  return t('referral.streakToBonus', { count: every - rem, bonus: s.bonus });
+}
 
 type State =
   | { status: 'loading' }
@@ -175,8 +191,14 @@ function ReferralBody({
   onShare: (link: string) => void;
   t: ReturnType<typeof useTranslation>['t'];
 }) {
-  const { link, points_total, points_pending, levels } = data;
+  const { link, points_total, points_pending, levels, streaks } = data;
   const totalInvited = levels.reduce((sum, l) => sum + l.invited, 0);
+
+  // Visit gets the 🔥; open is the quieter companion. Amounts/cadence stay server-driven.
+  const streakRows = [
+    { key: 'visit', s: streaks.visit, label: t('referral.streakVisit'), fire: true },
+    { key: 'open', s: streaks.open, label: t('referral.streakOpen'), fire: false },
+  ] as const;
 
   // Status from confirmed direct invites (the most legible "people you brought").
   const directInvited = levels[0]?.invited ?? 0;
@@ -215,6 +237,32 @@ function ReferralBody({
           </>
         ) : null}
       </section>
+
+      {/* Daily streaks — sits right under the balance (streaks feed the same points). */}
+      <div className="region">
+        <div className="region__title">{t('referral.streaksTitle')}</div>
+        <div className="section">
+          {streakRows.map(({ key, s, label, fire }) => (
+            <div className="ref-streak" key={key}>
+              <div className="ref-streak__top">
+                <span className="ref-streak__name">
+                  {label}
+                  {fire ? (
+                    <span className="ref-streak__fire" aria-hidden>
+                      {' '}
+                      🔥
+                    </span>
+                  ) : null}
+                </span>
+                <span className="ref-streak__count">
+                  <b>{s.len}</b> {t('referral.streakDaysUnit', { count: s.len })}
+                </span>
+              </div>
+              <p className="ref-streak__hint">{streakHint(s, t)}</p>
+            </div>
+          ))}
+        </div>
+      </div>
 
       {/* 2nd — my link, primary Share, secondary Copy link. */}
       <div className="region">

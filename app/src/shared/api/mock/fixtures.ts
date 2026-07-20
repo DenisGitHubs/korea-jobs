@@ -408,4 +408,8 @@ export const DEFAULT_REFERRAL: ReferralView = {
     { level: 2, invited: 7, points: 35 },
     { level: 3, invited: 12, points: 12 },
   ],
+  streaks: {
+    visit: { len: 3, bonus: 20, bonus_every: 7 },
+    open: { len: 1, bonus: 30, bonus_every: 7 },
+  },
 };

@@ -8,6 +8,7 @@ import { type ReqLike, type ResLike, send, sendError } from '../core/http.js';
 import { ApiErrorCode } from '../core/errors.js';
 import { authenticate } from '../core/context.js';
 import { getConfigString } from '../config.js';
+import { readStreakSummary } from '../streaks/update.js';
 
 export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
   if ((req.method ?? 'GET') !== 'GET') return sendError(res, ApiErrorCode.NotFound);
@@ -78,14 +79,16 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
     // One-time onboarding gate for the client (users.onboarded_at; POST /api/onboarded).
     const onboarded = (termsRows[0]?.onboarded_at ?? null) !== null;
 
-    // Loyalty balance for the header badge. The ledger is the SINGLE source of truth
-    // (there is no cached balance column) — confirmed rows only.
+    // Loyalty balance for the header badge. Truth is DERIVED (no cached column, draft_0004):
+    // confirmed referral ledger rows + all streak_awards. readStreakSummary degrades to 0 in a
+    // deploy-before-migration window, so the badge never 500s over a missing streak table.
     const balRows = (await sql`
       select coalesce(sum(amount) filter (where status = 'confirmed'), 0)::int as points_total
       from referral_points_ledger where user_id = ${user.id}::uuid`) as unknown as {
       points_total: number;
     }[];
-    const pointsTotal = balRows[0]?.points_total ?? 0;
+    const streak = await readStreakSummary(sql, user.id);
+    const pointsTotal = (balRows[0]?.points_total ?? 0) + streak.bonusTotal;
 
     send(res, 200, {
       public_id: user.publicId,

@@ -143,6 +143,22 @@ const files = [
   // (self-throttled via the config marker 'digest_last_run', written by the run — no seed here).
   // Depends on subscriptions (draft_0003_subscription_filters.sql / draft_0001_init.sql).
   'draft_0017_digest.sql',
+
+  // Daily streaks (0018) — ADDITIVE / idempotent (ADD COLUMN IF NOT EXISTS + CREATE TABLE IF NOT
+  // EXISTS). Adds users.{visit,open}_streak[_day] + the streak_awards table (one-time 7-day bonuses,
+  // unique(user_id,kind,streak_len)). authenticate() advances the visit streak, vacancyDetail() the
+  // open streak — both atomic + race-safe (WHERE guard on the Seoul-day). Balance becomes
+  // sum(confirmed ledger) + sum(streak_awards); no config seed (defaults live in getConfigNumber).
+  // Depends on users (draft_0001_init.sql) + config (draft_0001_init.sql); it is the streak
+  // counterpart of the referral ledger (draft_0004_referral.sql).
+  'draft_0018_streaks.sql',
+
+  // Admin broadcast (0019) — ADDITIVE / idempotent (CREATE TABLE IF NOT EXISTS). Adds the
+  // broadcasts table: one row per admin /broadcast, a draft->sent/cancelled state machine whose
+  // atomic status flip (update ... where status='draft') is the anti-double-send guard, plus
+  // sent_at/sent_n/skipped_n for the delivery report. No config seed (broadcast_send_cap default
+  // lives in getConfigNumber). Depends only on pgcrypto (gen_random_uuid, draft_0001_init.sql).
+  'draft_0019_broadcast.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

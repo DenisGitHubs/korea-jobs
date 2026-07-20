@@ -9,6 +9,8 @@ import { getSql } from './db.js';
 import { verifyInitData } from './auth.js';
 import { type ReqLike, tmaInitData } from './http.js';
 import { getConfigNumber } from '../config.js';
+import { bumpVisitStreakBestEffort } from '../streaks/update.js';
+import { seoulDate, normalizeDbDate } from './time.js';
 
 export interface AuthedUser {
   id: string;
@@ -110,7 +112,7 @@ export async function authenticate(req: ReqLike): Promise<AuthResult> {
                 and not exists (select 1 from contact_reveals cr where cr.user_id = users.id)
                 and not exists (select 1 from ad_contact_reveals ar where ar.user_id = users.id)
               then (select l3 from ref) else users.ref_l3 end
-          returning id, telegram_id, public_id, lang, allows_write_to_pm, is_blocked`;
+          returning id, telegram_id, public_id, lang, allows_write_to_pm, is_blocked, visit_streak_day`;
       })()
     : await sql`
         insert into users (telegram_id, username, first_name, last_name, lang, allows_write_to_pm)
@@ -124,10 +126,22 @@ export async function authenticate(req: ReqLike): Promise<AuthResult> {
           last_name = excluded.last_name,
           last_seen_at = now(),
           allows_write_to_pm = users.allows_write_to_pm or excluded.allows_write_to_pm
-        returning id, telegram_id, public_id, lang, allows_write_to_pm, is_blocked`;
+        returning id, telegram_id, public_id, lang, allows_write_to_pm, is_blocked, visit_streak_day`;
 
   const u = rows[0];
   if (!u) return { ok: false };
+
+  // Daily VISIT streak: any authenticated action counts as "opened the app today". The streak
+  // advances at most once per Asia/Seoul day, and the upsert above already RETURNed the last
+  // credited day — so short-circuit and only pay the extra DB round-trip when today is not yet
+  // counted. Pure optimization: the bump statement's own WHERE guard (`visit_streak_day is
+  // distinct from $today`) stays the race-safe source of truth, and normalizeDbDate returns null
+  // on any ambiguity — so we may over-call (a cheap 0-row no-op) but never wrongly skip a real
+  // advance. Best-effort (its own try/catch) — a streak failure must NEVER break auth.
+  if (normalizeDbDate(u.visit_streak_day) !== seoulDate()) {
+    await bumpVisitStreakBestEffort(sql, u.id as string);
+  }
+
   return {
     ok: true,
     user: {

@@ -218,6 +218,17 @@ export interface ReferralLevelStat {
 }
 
 /**
+ * One daily streak (visit or open). `bonus` points are granted every `bonus_every`
+ * consecutive days; `len` is the current run length. Amounts come from the server
+ * (config-driven) — never hardcode them in the UI.
+ */
+export interface StreakStat {
+  len: number;
+  bonus: number;
+  bonus_every: number;
+}
+
+/**
  * GET /api/referral — the invite screen's data. `code`/`link` are minted by the
  * backend (canonical Mini App deep link); scope is always derived server-side
  * from the authenticated user, never from the request body.
@@ -231,6 +242,8 @@ export interface ReferralView {
   points_pending: number;
   /** Exactly three tiers, L1→L3. */
   levels: ReferralLevelStat[];
+  /** Daily engagement streaks + their 7-day bonuses (server-driven amounts). */
+  streaks: { visit: StreakStat; open: StreakStat };
 }
 
 /** POST /api/terms/accept response. */

@@ -25,6 +25,19 @@ import { gatherStats, renderStats } from '../admin/stats.js';
 import { moderateAd } from '../ads/rw.js';
 import { normalizeRefCode } from '../core/context.js';
 import { getConfigNumber } from '../config.js';
+import {
+  type BroadcastRunResult,
+  BROADCAST_TEXT_MAX,
+  broadcastBody,
+  previewText,
+  resultText,
+  parseBroadcastCallback,
+  insertBroadcastDraft,
+  countRecipients,
+  claimBroadcast,
+  cancelBroadcast,
+  runBroadcast,
+} from '../broadcast/run.js';
 
 const RATE_LIMIT_PER_MINUTE = 20;
 
@@ -85,6 +98,34 @@ function parseUpdate(body: unknown): ParsedUpdate | null {
 const CB_RE = /^ad:(approve|reject):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 const REPORT_CB_RE = /^rep:(hide|keep):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
+/**
+ * Best-effort admin notice that must NEVER throw (the webhook still has to answer 200). Try to edit
+ * the existing broadcast message first (so the note lands where the admin is looking); if that
+ * fails, fall back to a fresh DM. Each hop is isolated so a failing edit still gets a send attempt.
+ */
+async function notifyAdminBestEffort(
+  chatId: number | null,
+  messageId: number | null,
+  textMsg: string,
+): Promise<void> {
+  if (chatId === null) return;
+  if (messageId !== null) {
+    try {
+      await editMessageText(chatId, messageId, textMsg);
+      return;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[bot] broadcast notice edit failed:', maskToken(String(err)));
+    }
+  }
+  try {
+    await sendMessage(chatId, textMsg);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[bot] broadcast notice send failed:', maskToken(String(err)));
+  }
+}
+
 /** Handle an inline button (ad moderation / report action). Admin-gated by ADMIN_TELEGRAM_IDS. */
 async function dispatchCallback(u: ParsedUpdate): Promise<void> {
   const cb = u.callback;
@@ -138,6 +179,47 @@ async function dispatchCallback(u: ParsedUpdate): Promise<void> {
     return;
   }
 
+  // (3) Broadcast confirm/cancel: bc:send / bc:cancel. Same admin gate as above.
+  const bcM = parseBroadcastCallback(data);
+  if (bcM) {
+    if (bcM.action === 'cancel') {
+      const done = await cancelBroadcast(sql, bcM.id);
+      if (cb.id) await answerCallbackQuery(cb.id, done ? 'Отменено' : 'Уже обработано');
+      if (u.chatId !== null && cb.messageId !== null) {
+        await editMessageText(u.chatId, cb.messageId, done ? 'Рассылка отменена' : 'Уже обработано');
+      }
+      return;
+    }
+    // send: ATOMIC claim (status draft->sent) BEFORE the loop — the anti-double-send guard.
+    // 0 rows = a re-tap or a callback replay; toast and DO NOT resend / DO NOT overwrite.
+    const text = await claimBroadcast(sql, bcM.id);
+    if (text === null) {
+      if (cb.id) await answerCallbackQuery(cb.id, 'Уже обработано');
+      return;
+    }
+    // Stop the client spinner up front, THEN run the (potentially long) loop; edit the report on.
+    if (cb.id) await answerCallbackQuery(cb.id, 'Рассылка запущена');
+    // The claim already happened, so the row can NEVER resend. But if the loop or the report edit
+    // throws (DB blip, Bot API failure), the outer webhook catch would swallow it and the admin
+    // would be left with a "Рассылка запущена" toast and silence. Own the failure here: log it
+    // (token masked) and best-effort tell the admin — with the exact N/M when we already have it.
+    let res: BroadcastRunResult | null = null;
+    try {
+      res = await runBroadcast(sql, bcM.id, text);
+      if (u.chatId !== null && cb.messageId !== null) {
+        await editMessageText(u.chatId, cb.messageId, resultText(res));
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[bot] broadcast run error:', maskToken(String(err)));
+      const note = res
+        ? `⚠️ Рассылка прервана ошибкой. Отправлено ${res.sent} из ${res.total}`
+        : '⚠️ Рассылка упала с ошибкой, проверь /stats';
+      await notifyAdminBestEffort(u.chatId, cb.messageId, note);
+    }
+    return;
+  }
+
   // Unknown callback → just stop the client spinner.
   if (cb.id) await answerCallbackQuery(cb.id);
 }
@@ -166,6 +248,53 @@ async function dispatch(u: ParsedUpdate): Promise<void> {
       // eslint-disable-next-line no-console
       console.error('[bot] /stats collect error:', maskToken(String(err)));
       await sendMessage(u.chatId, 'Не удалось собрать статистику');
+    }
+    return;
+  }
+
+  // Admin-only /broadcast <text>. Private-only (chatType gate above) + admin-gated exactly like
+  // /stats: a non-admin gets NOTHING (do not reveal the command exists). The body is EVERYTHING
+  // after the first token, internal newlines preserved. Empty -> a usage hint; too long -> a size
+  // error; otherwise store a draft + reply with a preview and [Отправить]/[Отмена] inline buttons.
+  if (command === '/broadcast') {
+    if (!(await isAdminTelegram(getSql(), u.fromId))) return;
+    const body = broadcastBody(text);
+    if (body.length === 0) {
+      await sendMessage(u.chatId, 'Напиши: /broadcast <текст рассылки>');
+      return;
+    }
+    if (body.length > BROADCAST_TEXT_MAX) {
+      await sendMessage(u.chatId, `Слишком длинно, максимум ~${BROADCAST_TEXT_MAX} символов`);
+      return;
+    }
+    try {
+      const sql = getSql();
+      const id = await insertBroadcastDraft(sql, body);
+      const recipients = await countRecipients(sql);
+      try {
+        await sendMessage(u.chatId, previewText(body, recipients), {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: 'Отправить', callback_data: `bc:send:${id}` },
+                { text: 'Отмена', callback_data: `bc:cancel:${id}` },
+              ],
+            ],
+          },
+        });
+      } catch (previewErr) {
+        // The draft row exists but the preview (with its [Отправить]/[Отмена] buttons) never
+        // reached the admin. That orphan draft is harmless — no message points a callback at it, so
+        // it can never be claimed/sent — so just ask the admin to retry; a fresh /broadcast makes a
+        // new draft. (Distinct from a draft-creation failure below, which never inserted anything.)
+        // eslint-disable-next-line no-console
+        console.error('[bot] /broadcast preview error:', maskToken(String(previewErr)));
+        await sendMessage(u.chatId, 'Не удалось показать предпросмотр, отправь команду ещё раз');
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[bot] /broadcast draft error:', maskToken(String(err)));
+      await sendMessage(u.chatId, 'Не удалось создать рассылку');
     }
     return;
   }

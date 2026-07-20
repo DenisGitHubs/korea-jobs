@@ -2041,6 +2041,51 @@ a {
   letter-spacing: 0.3px;
 }
 
+/* ── Referral: daily streaks ───────────────────────────────────────────── */
+.ref-streak {
+  padding: 14px 16px;
+  position: relative;
+}
+
+.ref-streak + .ref-streak::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: var(--kj-separator);
+}
+
+.ref-streak__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ref-streak__name {
+  font-weight: 600;
+}
+
+.ref-streak__count {
+  flex: 0 0 auto;
+  color: var(--kj-hint);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ref-streak__count b {
+  color: var(--kj-brand-strong);
+  font-size: 15px;
+}
+
+.ref-streak__hint {
+  margin: 4px 0 0;
+  color: var(--kj-hint);
+  font-size: 13px;
+}
+
 /* ── Referral: link + share ────────────────────────────────────────────── */
 .ref-link {
   display: flex;
