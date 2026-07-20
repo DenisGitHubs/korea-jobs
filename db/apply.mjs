@@ -129,6 +129,13 @@ const files = [
   // (gen_random_uuid, draft_0001_init.sql). Stats reads it best-effort, so a deploy-before-apply
   // window degrades to zeros rather than breaking /stats.
   'draft_0015_ai_usage.sql',
+
+  // AI reject journal (0016) — ADDITIVE / idempotent (CREATE TABLE IF NOT EXISTS). Adds two INTERNAL
+  // tables: ai_reject_stats (per-day/per-reason counter, tiny, never purged) and ai_reject_samples
+  // (FULL original text of AI-discarded messages, written best-effort by lib/korea/parser/run.ts only
+  // while config 'reject_log_enabled' is on, purged > 7 days by lib/korea/cleanup/run.ts). No API/bot
+  // surface reads them — owner-inspection only. Depends on pgcrypto (gen_random_uuid, draft_0001_init.sql).
+  'draft_0016_reject_log.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

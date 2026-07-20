@@ -25,7 +25,10 @@
 //   7. delete long-inactive vacancies so employers' contacts don't linger forever
 //      (cascades clean notifications_sent / contact_reveals);
 //   8. purge old moderation_examples by age — the learning set stores ad text that can
-//      contain a phone number, so it must not grow unbounded (007 minor).
+//      contain a phone number, so it must not grow unbounded (007 minor);
+//   9. purge ai_reject_samples older than 7 days (owner rule 2026-07-20) — the reject-inspection
+//      buffer holds full raw text (third-party PII), so it is time-boxed; the tiny per-day
+//      ai_reject_stats counters are kept (not purged).
 //
 // NOTE FK: vacancies.raw_message_id -> raw_messages(id) ON DELETE SET NULL (draft_0001_init.sql
 // line 322). Deleting a raw row never cascades to a vacancy: the card keeps living, its
@@ -44,6 +47,7 @@ export interface CleanupResult {
   purged: number;
   deletedVacancies: number;
   moderationExamplesPurged: number;
+  rejectSamplesPurged: number;
 }
 
 export async function runCleanup(): Promise<CleanupResult> {
@@ -114,6 +118,22 @@ export async function runCleanup(): Promise<CleanupResult> {
     where created_at < now() - make_interval(days => ${modDays})
     returning id`;
 
+  // AI reject SAMPLES (owner rule 2026-07-20): the full-text inspection buffer is time-boxed. Keep a
+  // day's collection window plus slack — purge samples older than 7 days. The tiny ai_reject_stats
+  // COUNTERS are deliberately NOT purged (they are cheap and the whole point is a running tally).
+  // Best-effort like ai-usage/stats reads (Цензор, gate 20.07): in the deploy-before-migrate window
+  // the table may not exist yet — swallow, so the other cleanup steps' results still return 200.
+  let rejectSamplesPurged: unknown[] = [];
+  try {
+    rejectSamplesPurged = await sql`
+      delete from ai_reject_samples
+      where rejected_at < now() - interval '7 days'
+      returning id`;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[cleanup] ai_reject_samples purge failed (table missing?):', err instanceof Error ? err.message : String(err));
+  }
+
   return {
     deactivated: deact.length,
     takedownEnforced: takedown.length,
@@ -123,5 +143,6 @@ export async function runCleanup(): Promise<CleanupResult> {
     purged: purged.length,
     deletedVacancies: deleted.length,
     moderationExamplesPurged: modPurged.length,
+    rejectSamplesPurged: rejectSamplesPurged.length,
   };
 }

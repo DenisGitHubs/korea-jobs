@@ -18,11 +18,13 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getSql } from '../core/db.js';
 import { scrubContacts } from '../core/scrub.js';
 import { truncateContacts } from '../core/contact-trim.js';
-import { getConfigNumber, getConfigString } from '../config.js';
+import { getConfigNumber, getConfigString, getConfigBool } from '../config.js';
 import { textHash } from './texthash.js';
+import { cleanForAi } from './text-clean.js';
 import { extractJson } from './extract-json.js';
 import { looksLikeSpam } from './spamfilter.js';
 import { recordAiUsage } from '../ai-usage.js';
+import { recordAiReject } from './reject-log.js';
 import {
   buildSystemPrompt,
   VISA_TYPES,
@@ -124,6 +126,12 @@ export async function runParse(): Promise<ParseResult> {
   // dozens of times can't glue itself to the top. Read with a default; the key is NOT seeded here.
   const bumpMinHours = await getConfigNumber('repost_bump_min_hours', 12);
 
+  // Reject journal (owner rule 2026-07-20): count every AI-verdict reject by day+reason always, and
+  // — only while this flag is on — also keep the FULL original text for a day so the owner can look
+  // at what the AI discards (see parser/reject-log.ts). Read ONCE per batch; key is NOT seeded here
+  // (owner flips it via the orchestrator after the migration is applied). Default off.
+  const rejectLogEnabled = await getConfigBool('reject_log_enabled', false);
+
   // Owner rule: the AI never parses messages older than the freshness window
   // (default 1 week) — stale postings, and no tokens spent on them. Sweep any
   // stale 'pending' rows out of the queue first so they cannot accumulate.
@@ -136,7 +144,7 @@ export async function runParse(): Promise<ParseResult> {
   // can pass the channel title/notes to the model as a per-item city hint (source_hint).
   const pendingAll = await sql`
     select r.id, r.text, r.source_id, r.posted_at, r.sender_username,
-           s.title as source_title, s.notes as source_notes
+           s.title as source_title, s.notes as source_notes, s.username as source_username
     from raw_messages r
     left join sources s on s.id = r.source_id
     where r.status = 'pending'
@@ -321,9 +329,12 @@ export async function runParse(): Promise<ParseResult> {
     const title = ((r.source_title as string | null) ?? '').trim();
     const notes = ((r.source_notes as string | null) ?? '').trim();
     const sourceHint = [title, notes].filter(Boolean).join(' — ');
+    // cleanForAi collapses decorative emoji noise for the MODEL INPUT ONLY (fewer tokens). The
+    // ORIGINAL r.text still drives text_hash (above), description and every content hash below, so
+    // this can never move a dedup bucket. See parser/text-clean.ts.
     const item: { id: string; text: string; source_hint?: string } = {
       id: String(i),
-      text: (r.text as string | null) ?? '',
+      text: cleanForAi((r.text as string | null) ?? ''),
     };
     if (sourceHint) item.source_hint = sourceHint;
     return item;
@@ -391,12 +402,26 @@ export async function runParse(): Promise<ParseResult> {
 
     if (!it.is_vacancy || (it.confidence ?? 0) < minConfidence) {
       // Persist WHY + confidence so the corpus is tunable (which reasons over/under-fire).
+      const rejectReason = it.reject_reason ?? (it.is_vacancy ? 'low_confidence' : 'not_vacancy');
       await sql`
         update raw_messages
         set status='skipped', processed_at=now(),
-            reject_reason=${it.reject_reason ?? (it.is_vacancy ? 'low_confidence' : 'not_vacancy')},
+            reject_reason=${rejectReason},
             confidence=${it.confidence ?? null}, text_hash=${hash}
         where id=${rawId}::uuid`;
+      // Reject journal (owner rule 2026-07-20), best-effort. Count + (when enabled) sample the FULL
+      // original text of AI-verdict rejects. EXCLUDE 'low_confidence' — those are the visible "Не
+      // проверено" tab, not discarded — (spam_prefilter never reaches the AI at all). Never throws.
+      if (rejectReason !== 'low_confidence') {
+        await recordAiReject({
+          reason: rejectReason,
+          confidence: it.confidence ?? null,
+          postedAt: (row.posted_at as Date | string | null) ?? null,
+          text: (row.text as string | null) ?? '',
+          sourceNote: (row.source_username as string | null) ?? null,
+          logSample: rejectLogEnabled,
+        });
+      }
       continue;
     }
 
@@ -408,7 +433,6 @@ export async function runParse(): Promise<ParseResult> {
     const placementFee = cleanPlacementFee(it.placement_fee);
     const hasHousing = cleanTriState(it.has_housing);
     const hasMeals = cleanTriState(it.has_meals);
-    const title = it.title ? it.title.slice(0, 120) : null; // schema no longer caps length
     // contact_raw may now hold SEVERAL contacts joined by " · " (owner rule 2026-07-19: show
     // every contact, not just the first). Cap the whole string at 300 chars so a pathological
     // list can't blow up the row / content_hash input — but on a CONTACT boundary, never
@@ -476,6 +500,10 @@ export async function runParse(): Promise<ParseResult> {
       // (it confused currency/units — "7000 руб", "2300 тыс вон"), so salary_text/min/max/
       // period all take their NULL default and salary_currency keeps its NOT NULL 'KRW'
       // default (never surfaced in the feed). The number stays inside description.
+      // title/lang are written NULL (owner rule 2026-07-20): the model no longer returns them
+      // (parser/prompt.ts dropped both from the contract). The columns stay in the DB untouched
+      // — both are nullable (vacancies.lang carries no default), so NULL is valid. The feed reads
+      // description, and the complaint snippet (reports/rw.ts) already falls back title -> description.
       upserted = await sql`
         insert into vacancies (
           city_id, region_slug, work_type, gender, lang,
@@ -484,8 +512,8 @@ export async function runParse(): Promise<ParseResult> {
           visa_types, placement_fee, has_housing, has_meals,
           source_id, raw_message_id, posted_at, dedup_extra
         ) values (
-          ${cityId}::uuid, ${regionSlug}, ${workType}::work_type, ${gender}::gender, ${it.lang ?? null},
-          ${title}, ${description}, ${it.employer ?? null},
+          ${cityId}::uuid, ${regionSlug}, ${workType}::work_type, ${gender}::gender, ${null},
+          ${null}, ${description}, ${it.employer ?? null},
           ${contactRaw}, ${contactKind}::contact_kind,
           ${visaTypes}::visa_type[], ${placementFee}::placement_fee, ${hasHousing}, ${hasMeals},
           ${row.source_id}::uuid, ${rawId}::uuid, ${row.posted_at ?? null}, ${it.dedup_extra ?? null}
