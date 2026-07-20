@@ -61,19 +61,3 @@ export const visaKey = (v: VisaType): string => `visa.${v}`;
 export const feeKey = (f: PlacementFee): string => `fee.${f}`;
 export const contactKindKey = (k: ContactKind): string => `contactKind.${k}`;
 export const freshnessKey = (d: 1 | 3 | 7 | 14): string => `freshness.d${d}`;
-
-/** Small glyph per work type for the feed/card badges (product UI, not chrome). */
-export const WORK_TYPE_EMOJI: Record<WorkType, string> = {
-  factory: '🏭',
-  construction: '🏗️',
-  agriculture: '🌾',
-  fishery: '🐟',
-  food: '🍱',
-  logistics: '📦',
-  restaurant: '🍜',
-  cleaning: '🧹',
-  caregiving: '🧑‍⚕️',
-  hotel: '🏨',
-  services: '🛠️',
-  other: '💼',
-};

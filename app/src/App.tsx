@@ -6,6 +6,7 @@ import { Splash } from './components/Splash';
 import { Layout } from './components/Layout';
 import { ConsentGate } from './components/ConsentGate';
 import { Onboarding } from './components/Onboarding';
+import { Tour } from './components/Tour';
 import FeedScreen from './screens/FeedScreen';
 import VacancyScreen from './screens/VacancyScreen';
 import SettingsScreen from './screens/SettingsScreen';
@@ -83,6 +84,8 @@ export default function App() {
           preferences; onboarding (guarded by !termsRequired) then runs before the app. */}
       <ConsentGate />
       <Onboarding />
+      {/* Runs after onboarding is done (guarded inside): the how-to tour, once. */}
+      <Tour />
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<Navigate to="/feed" replace />} />

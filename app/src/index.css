@@ -732,6 +732,25 @@ a {
   padding: 3px 4px;
 }
 
+/* Work-type contour glyph (chips + card/badge). Sized in `em` so it tracks the
+   host font-size; `currentColor` strokes inherit the chip/badge text colour. */
+.wt-ico {
+  flex: none;
+  width: 1em;
+  height: 1em;
+}
+
+.chip__ico {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+/* Nudge the badge glyph up a hair so it sits on the text baseline. */
+.badge--work .wt-ico {
+  margin-top: -0.05em;
+}
+
 /* ── Buttons ───────────────────────────────────────────────────────────── */
 .btn {
   position: relative;

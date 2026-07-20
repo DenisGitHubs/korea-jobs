@@ -3,7 +3,8 @@ import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { Subscription, VisaType, WorkType } from '../shared/types/api';
-import { VISA_TYPES, WORK_TYPES, WORK_TYPE_EMOJI, visaKey, workTypeKey } from '../shared/labels';
+import { VISA_TYPES, WORK_TYPES, visaKey, workTypeKey } from '../shared/labels';
+import { WorkTypeIcon } from './icons/WorkTypeIcon';
 import { api } from '../shared/api/client';
 import { subscriptionValue, useSubscriptionStore } from '../store/subscriptionStore';
 import { useUiStore } from '../store/uiStore';
@@ -78,7 +79,7 @@ export function Onboarding() {
   }, [show, setTabBarHidden]);
 
   const workOptions = useMemo<ChipOption<WorkType>[]>(
-    () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), emoji: WORK_TYPE_EMOJI[w] })),
+    () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), icon: <WorkTypeIcon type={w} /> })),
     [t],
   );
   const visaOptions = useMemo<ChipOption<VisaType>[]>(

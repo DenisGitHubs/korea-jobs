@@ -5,7 +5,8 @@ import type { AdMine } from '../../shared/types/api';
 import { useSettingsStore } from '../../store/settingsStore';
 import { localized } from '../../lib/localized';
 import { adStatusInfo } from '../../lib/adStatus';
-import { workTypeKey, WORK_TYPE_EMOJI } from '../../shared/labels';
+import { workTypeKey } from '../../shared/labels';
+import { WorkTypeIcon } from '../../components/icons/WorkTypeIcon';
 import { EmptyState } from '../../components/EmptyState';
 import { Modal } from '../../components/Modal';
 
@@ -199,7 +200,7 @@ export function MyAdsTab({ onEdit, onGoCompose }: MyAdsTabProps) {
                 <span className={`ad-status ad-status--${info.kind}`}>{info.label}</span>
               </div>
               <div className="ad-card__meta">
-                <span aria-hidden>{WORK_TYPE_EMOJI[ad.work_type]}</span>
+                <WorkTypeIcon type={ad.work_type} />
                 <span>{t(workTypeKey(ad.work_type))}</span>
                 {cityName ? <span className="ad-card__dot">·</span> : null}
                 {cityName ? <span>{cityName}</span> : null}

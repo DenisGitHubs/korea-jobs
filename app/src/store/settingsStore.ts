@@ -21,10 +21,10 @@ export function loadStoredThemeMode(): ThemeMode {
   } catch {
     /* storage blocked */
   }
-  // Dark is the product's primary theme: default to forced dark when the user
-  // has not chosen otherwise. 'auto'/'light' stay available in Settings and,
-  // once picked, are persisted and override this default.
-  return 'dark';
+  // Owner rule (2026-07-20): AUTO (light by day, dark by evening — device clock)
+  // is the default for anyone who has not explicitly chosen a theme. A picked
+  // 'light'/'dark' is persisted and overrides this.
+  return 'auto';
 }
 
 interface SettingsState {
@@ -41,10 +41,10 @@ interface SettingsState {
 
 export const useSettingsStore = create<SettingsState>((set) => ({
   lang: 'ru',
-  themeMode: 'dark',
+  themeMode: 'auto',
   isReal: false,
   username: '',
-  init: ({ lang, isReal, username = '', themeMode = 'dark' }) =>
+  init: ({ lang, isReal, username = '', themeMode = 'auto' }) =>
     set({ lang, isReal, username, themeMode }),
   setLang: (l) => {
     try {

@@ -3,9 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api } from '../shared/api/client';
 import type { VisaType, WorkType } from '../shared/types/api';
-import { VISA_TYPES, WORK_TYPES, WORK_TYPE_EMOJI, visaKey, workTypeKey } from '../shared/labels';
+import { VISA_TYPES, WORK_TYPES, visaKey, workTypeKey } from '../shared/labels';
+import { WorkTypeIcon } from '../components/icons/WorkTypeIcon';
 import { toSubscription, useSubscriptionStore } from '../store/subscriptionStore';
 import { useSettingsStore } from '../store/settingsStore';
+import { useUiStore } from '../store/uiStore';
 import type { Lang } from '../i18n';
 import type { ThemeMode } from '../lib/theme';
 import { AppBar } from '../components/AppBar';
@@ -27,6 +29,7 @@ export default function SettingsScreen() {
   const setLang = useSettingsStore((s) => s.setLang);
   const themeMode = useSettingsStore((s) => s.themeMode);
   const setThemeMode = useSettingsStore((s) => s.setThemeMode);
+  const setTourReplay = useUiStore((s) => s.setTourReplay);
 
   const apply = useSubscriptionStore((s) => s.apply);
   const sCities = useSubscriptionStore((s) => s.citySlugs);
@@ -79,7 +82,7 @@ export default function SettingsScreen() {
   }, [saving, sCities, work, notify, visa, paid, housing, meals, apply]);
 
   const workOptions = useMemo<ChipOption<WorkType>[]>(
-    () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), emoji: WORK_TYPE_EMOJI[w] })),
+    () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), icon: <WorkTypeIcon type={w} /> })),
     [t],
   );
   const visaOptions = useMemo<ChipOption<VisaType>[]>(
@@ -156,6 +159,15 @@ export default function SettingsScreen() {
 
         <div className="region">
           <div className="section">
+            <button className="row row--nav" onClick={() => setTourReplay(true)}>
+              <div className="row__label">
+                <div>{t('settings.howto')}</div>
+                <div className="row__sub">{t('settings.howtoHint')}</div>
+              </div>
+              <span className="row__chevron" aria-hidden>
+                ›
+              </span>
+            </button>
             <button className="row row--nav" onClick={() => navigate('/referral')}>
               <div className="row__label">
                 <div>{t('settings.inviteFriends')}</div>
@@ -199,7 +211,10 @@ export default function SettingsScreen() {
           <div className="region__title">{t('settings.appearance')}</div>
           <div className="section">
             <div className="row">
-              <span className="row__label">{t('settings.theme')}</span>
+              <div className="row__label">
+                <div>{t('settings.theme')}</div>
+                <div className="row__sub">{t('settings.themeHint')}</div>
+              </div>
               <Segmented<ThemeMode>
                 value={themeMode}
                 options={[

@@ -1,15 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { VisaType, WorkType } from '../shared/types/api';
-import {
-  FRESHNESS_DAYS,
-  VISA_TYPES,
-  WORK_TYPES,
-  WORK_TYPE_EMOJI,
-  freshnessKey,
-  visaKey,
-  workTypeKey,
-} from '../shared/labels';
+import { FRESHNESS_DAYS, VISA_TYPES, WORK_TYPES, freshnessKey, visaKey, workTypeKey } from '../shared/labels';
+import { WorkTypeIcon } from './icons/WorkTypeIcon';
 import { EMPTY_FILTER, filterToQuery, useFilterStore, type FilterValue } from '../store/filterStore';
 import { api } from '../shared/api/client';
 import { useSettingsStore } from '../store/settingsStore';
@@ -95,7 +88,7 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
   useMainButton({ text: applyLabel, visible: open, enabled: true, loading: counting, onClick: doApply });
 
   const workOptions = useMemo<ChipOption<WorkType>[]>(
-    () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), emoji: WORK_TYPE_EMOJI[w] })),
+    () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), icon: <WorkTypeIcon type={w} /> })),
     [t],
   );
   const visaOptions = useMemo<ChipOption<VisaType>[]>(

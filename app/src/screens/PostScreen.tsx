@@ -8,12 +8,12 @@ import {
   CONTACT_KINDS,
   VISA_TYPES,
   WORK_TYPES,
-  WORK_TYPE_EMOJI,
   contactKindKey,
   feeKey,
   visaKey,
   workTypeKey,
 } from '../shared/labels';
+import { WorkTypeIcon } from '../components/icons/WorkTypeIcon';
 import { useSettingsStore } from '../store/settingsStore';
 import { useBackButton } from '../hooks/useBackButton';
 import { AppBar } from '../components/AppBar';
@@ -355,7 +355,7 @@ export default function PostScreen() {
   }, []);
 
   const workOptions = useMemo<ChipOption<WorkType>[]>(
-    () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), emoji: WORK_TYPE_EMOJI[w] })),
+    () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), icon: <WorkTypeIcon type={w} /> })),
     [t],
   );
   // 'any' ("Неважно") is intentionally added here only — hidden elsewhere.

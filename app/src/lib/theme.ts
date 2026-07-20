@@ -1,46 +1,34 @@
 /**
- * Bridge Telegram theme params -> our own `--kj-*` CSS variables, and reflect
- * dark/light on <html data-theme>.
- *
- * Three modes (Settings -> Theme):
- *  - 'auto'  : follow the Telegram client theme (read the SDK theme signals).
- *  - 'light' : force our own LIGHT_THEME palette regardless of themeParams.
- *  - 'dark'  : force our own DARK_THEME palette regardless of themeParams.
+ * Drive our own `--kj-*` CSS variables + `<html data-theme>` from one of three
+ * user-chosen modes (Settings -> Theme):
+ *  - 'auto'  : follow the DEVICE CLOCK — light during the day, dark in the
+ *              evening/night, "so it doesn't burn the eyes". NOT the Telegram
+ *              client theme.
+ *  - 'light' : force our own LIGHT_THEME palette.
+ *  - 'dark'  : force our own DARK_THEME palette.
  * Native Telegram popups always follow the client theme — the override is
- * in-app only.
+ * in-app only. The Telegram chrome (header/background/bottom-bar) is kept in
+ * sync with our base bg via syncChromeColor/syncBottomBarColor after each apply.
  */
-import { miniApp, themeParams } from '@telegram-apps/sdk-react';
 import { DARK_THEME, LIGHT_THEME, syncBottomBarColor, syncChromeColor } from './telegram';
 
 export type ThemeMode = 'auto' | 'light' | 'dark';
 
-type ColorSignal = { (): string | undefined; sub(fn: () => void): () => void };
-type BoolSignal = { (): boolean | undefined; sub(fn: () => void): () => void };
+// 'auto' boundaries on the device's local clock (24h). Light from 07:00 up to
+// 20:00; dark from 20:00 up to 07:00. Picked from the UX read (Вася): 20:00 is
+// early enough that late-evening phone use in a dim room isn't a white glare,
+// and 07:00 keeps early factory shifts on the softer dark screen a touch longer.
+export const AUTO_LIGHT_FROM_HOUR = 7; // inclusive — light starts here
+export const AUTO_DARK_FROM_HOUR = 20; // inclusive — dark starts here
 
-const tp = themeParams as unknown as Record<string, ColorSignal>;
-const isDark = (miniApp as unknown as { isDark: BoolSignal }).isDark;
+/** True when the device local time falls inside the "dark" window. */
+export function isNightNow(now: Date = new Date()): boolean {
+  const h = now.getHours();
+  return h < AUTO_LIGHT_FROM_HOUR || h >= AUTO_DARK_FROM_HOUR;
+}
 
-// SDK signal -> css var (used in 'auto' mode).
-const COLOR_VARS: Array<[ColorSignal, string]> = [
-  [tp.backgroundColor, '--kj-bg'],
-  [tp.textColor, '--kj-text'],
-  [tp.hintColor, '--kj-hint'],
-  [tp.linkColor, '--kj-link'],
-  [tp.buttonColor, '--kj-button'],
-  [tp.buttonTextColor, '--kj-button-text'],
-  [tp.secondaryBackgroundColor, '--kj-secondary-bg'],
-  [tp.headerBackgroundColor, '--kj-header-bg'],
-  [tp.accentTextColor, '--kj-accent'],
-  [tp.sectionBackgroundColor, '--kj-section-bg'],
-  [tp.sectionHeaderTextColor, '--kj-section-header-text'],
-  [tp.subtitleTextColor, '--kj-subtitle'],
-  [tp.destructiveTextColor, '--kj-destructive'],
-  [tp.sectionSeparatorColor, '--kj-separator'],
-  [tp.bottomBarBgColor, '--kj-bottom-bar-bg'],
-];
-
-// Snake_case theme key -> css var (used in the forced 'light'/'dark' modes).
-const FORCED_VARS: Array<[keyof typeof LIGHT_THEME, string]> = [
+// Snake_case theme key -> css var.
+const THEME_VARS: Array<[keyof typeof LIGHT_THEME, string]> = [
   ['bg_color', '--kj-bg'],
   ['text_color', '--kj-text'],
   ['hint_color', '--kj-hint'],
@@ -60,36 +48,18 @@ const FORCED_VARS: Array<[keyof typeof LIGHT_THEME, string]> = [
 
 let currentMode: ThemeMode = 'auto';
 
-function applyAuto(): void {
+function applyPalette(theme: Record<keyof typeof LIGHT_THEME, string>, dark: boolean): void {
   const root = document.documentElement;
-  for (const [sig, cssVar] of COLOR_VARS) {
-    let value: string | undefined;
-    try {
-      value = typeof sig === 'function' ? sig() : undefined;
-    } catch {
-      value = undefined;
-    }
-    if (value) root.style.setProperty(cssVar, value);
-  }
-  let dark: boolean | undefined;
-  try {
-    dark = typeof isDark === 'function' ? isDark() : undefined;
-  } catch {
-    dark = undefined;
-  }
-  root.setAttribute('data-theme', dark ? 'dark' : 'light');
-}
-
-function applyForced(theme: Record<keyof typeof LIGHT_THEME, string>, dark: boolean): void {
-  const root = document.documentElement;
-  for (const [key, cssVar] of FORCED_VARS) root.style.setProperty(cssVar, theme[key]);
+  for (const [key, cssVar] of THEME_VARS) root.style.setProperty(cssVar, theme[key]);
   root.setAttribute('data-theme', dark ? 'dark' : 'light');
 }
 
 function render(): void {
-  if (currentMode === 'light') applyForced(LIGHT_THEME, false);
-  else if (currentMode === 'dark') applyForced(DARK_THEME, true);
-  else applyAuto();
+  let dark: boolean;
+  if (currentMode === 'light') dark = false;
+  else if (currentMode === 'dark') dark = true;
+  else dark = isNightNow(); // 'auto' -> by device clock
+  applyPalette(dark ? DARK_THEME : LIGHT_THEME, dark);
   syncBottomBarColor();
   syncChromeColor();
 }
@@ -100,35 +70,23 @@ export function applyThemeMode(mode: ThemeMode): void {
   render();
 }
 
-/** Apply once and subscribe to live client theme changes. Returns an unsubscribe fn. */
+/**
+ * Apply once and, for 'auto', re-evaluate the clock only when the app regains
+ * focus/visibility (e.g. reopened later in the evening). We deliberately do NOT
+ * flip the theme on a timer mid-session — a live recolour while the user is
+ * reading a card is jarring (UX call). Returns an unsubscribe fn.
+ */
 export function initTheme(mode: ThemeMode = 'auto'): () => void {
   currentMode = mode;
   render();
 
-  // Re-render on client theme changes, but only while in 'auto' mode.
-  const onChange = (): void => {
-    if (currentMode === 'auto') render();
+  const reEval = (): void => {
+    if (currentMode === 'auto' && document.visibilityState !== 'hidden') render();
   };
-  const unsubs: Array<() => void> = [];
-  for (const [sig] of COLOR_VARS) {
-    try {
-      if (sig && typeof sig.sub === 'function') unsubs.push(sig.sub(onChange));
-    } catch {
-      /* signal not subscribable in this environment */
-    }
-  }
-  try {
-    if (isDark && typeof isDark.sub === 'function') unsubs.push(isDark.sub(onChange));
-  } catch {
-    /* ignore */
-  }
+  document.addEventListener('visibilitychange', reEval);
+  window.addEventListener('focus', reEval);
   return () => {
-    for (const u of unsubs) {
-      try {
-        u();
-      } catch {
-        /* ignore */
-      }
-    }
+    document.removeEventListener('visibilitychange', reEval);
+    window.removeEventListener('focus', reEval);
   };
 }

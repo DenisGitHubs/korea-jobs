@@ -80,6 +80,23 @@ export const en: typeof ru = {
     sumNotifyOff: 'Alerts off',
     sumAll: 'All jobs',
   },
+  tour: {
+    skip: 'Skip',
+    next: 'Next',
+    done: 'Got it',
+    s1: {
+      title: 'Browse the jobs',
+      lead: 'Scroll the feed, open a job and tap “Show contact” to message the employer.',
+    },
+    s2: {
+      title: 'Tune it to you',
+      lead: 'Set your visa, city and work type — the bot will DM you matching jobs.',
+    },
+    s3: {
+      title: 'Post and share',
+      lead: 'Got a job or looking for one — post a listing and invite friends for points.',
+    },
+  },
   filter: {
     title: 'Filter',
     apply: 'Apply',
@@ -150,10 +167,13 @@ export const en: typeof ru = {
     themeAuto: 'Auto',
     themeLight: 'Light',
     themeDark: 'Dark',
+    themeHint: 'Auto: light by day, dark in the evening — by your device clock.',
     language: 'Language',
     aboutTitle: 'About',
     aboutText: 'Fresh blue-collar job openings from open chats across Korea, gathered in one place.',
     version: 'Version',
+    howto: 'How to use',
+    howtoHint: 'A quick tour of the app',
     inviteFriends: 'Invite friends',
     inviteFriendsHint: 'Earn points for friends you invite',
     safety: 'Safety',

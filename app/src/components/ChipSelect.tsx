@@ -1,7 +1,10 @@
+import type { ReactNode } from 'react';
+
 export interface ChipOption<T extends string> {
   value: T;
   label: string;
-  emoji?: string;
+  /** Optional leading glyph (e.g. a WorkTypeIcon for the work-type sets). */
+  icon?: ReactNode;
 }
 
 interface ChipSelectProps<T extends string> {
@@ -49,7 +52,11 @@ export function ChipSelect<T extends string>({
             onClick={() => toggle(o.value)}
             aria-pressed={on}
           >
-            {o.emoji ? <span aria-hidden>{o.emoji}</span> : null}
+            {o.icon ? (
+              <span className="chip__ico" aria-hidden>
+                {o.icon}
+              </span>
+            ) : null}
             {o.label}
           </button>
         );
