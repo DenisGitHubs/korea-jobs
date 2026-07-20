@@ -167,7 +167,12 @@ export const en: typeof ru = {
     themeAuto: 'Auto',
     themeLight: 'Light',
     themeDark: 'Dark',
-    themeHint: 'Auto: light by day, dark in the evening — by your device clock.',
+    themeHint: 'Auto: light by day, dark in the evening — by Korean time, 8:00–19:00.',
+    themeAutoInfo: {
+      title: 'Auto theme',
+      body: 'Light from 8:00 to 19:00, dark from 19:00 to 8:00 — by Korean time. The theme switches when you open the app, not while you are working.',
+      ok: 'Got it',
+    },
     language: 'Language',
     aboutTitle: 'About',
     aboutText: 'Fresh blue-collar job openings from open chats across Korea, gathered in one place.',

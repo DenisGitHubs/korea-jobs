@@ -14,6 +14,7 @@ import { AppBar } from '../components/AppBar';
 import { Switch } from '../components/Switch';
 import { Segmented } from '../components/Segmented';
 import { ChipSelect, type ChipOption } from '../components/ChipSelect';
+import { Modal } from '../components/Modal';
 
 function sameSet(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
@@ -49,6 +50,17 @@ export default function SettingsScreen() {
   const [meals, setMeals] = useState<boolean>(() => sMeals === true);
   const [notify, setNotify] = useState<boolean>(() => sNotify);
   const [saving, setSaving] = useState(false);
+  // Info popup shown every time the user picks the 'auto' theme, explaining the
+  // Korean-time schedule. Purely informational — the mode is applied instantly.
+  const [autoInfo, setAutoInfo] = useState(false);
+
+  const onThemeChange = useCallback(
+    (m: ThemeMode) => {
+      setThemeMode(m);
+      if (m === 'auto') setAutoInfo(true);
+    },
+    [setThemeMode],
+  );
 
   const dirty =
     !sameSet(work, sWork) ||
@@ -222,7 +234,7 @@ export default function SettingsScreen() {
                   { value: 'light', label: t('settings.themeLight') },
                   { value: 'dark', label: t('settings.themeDark') },
                 ]}
-                onChange={setThemeMode}
+                onChange={onThemeChange}
               />
             </div>
             <div className="row">
@@ -252,6 +264,18 @@ export default function SettingsScreen() {
           </div>
         </div>
       </div>
+
+      <Modal
+        open={autoInfo}
+        title={t('settings.themeAutoInfo.title')}
+        actions={
+          <button className="btn btn--primary btn--block" onClick={() => setAutoInfo(false)}>
+            {t('settings.themeAutoInfo.ok')}
+          </button>
+        }
+      >
+        <p className="modal__text">{t('settings.themeAutoInfo.body')}</p>
+      </Modal>
     </div>
   );
 }
