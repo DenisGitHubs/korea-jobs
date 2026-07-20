@@ -16,12 +16,12 @@
 //   /api/cities|vacancies|me|subscription|terms|ads|cooperation|referral -> tma <initData>
 //   /api/vacancies/:id/takedown, /api/ads/:id/moderate-> admin (CRON_SECRET | ADMIN_TELEGRAM_IDS)
 //   /api/bot/webhook                                  -> X-Telegram-Bot-Api-Secret-Token
-//   /api/cron/parse|notify|cleanup|referral-confirm   -> Bearer CRON_SECRET
+//   /api/cron/parse|notify|digest|cleanup|referral-confirm -> Bearer CRON_SECRET
 
 import { type ReqLike, type ResLike, send } from '../lib/korea/core/http.js';
 import { ApiErrorCode, httpStatusFor, makeError } from '../lib/korea/core/errors.js';
 import { sourcesGet, ingestPost } from '../lib/korea/ingest/handler.js';
-import { cronParse, cronNotify, cronCleanup, cronReferralConfirm } from '../lib/korea/cron/handler.js';
+import { cronParse, cronNotify, cronDigest, cronCleanup, cronReferralConfirm } from '../lib/korea/cron/handler.js';
 import { botWebhook } from '../lib/korea/bot/webhook.js';
 import { citiesGet } from '../lib/korea/cities/read.js';
 import {
@@ -108,6 +108,7 @@ const ROUTES: Route[] = [
   { segments: ['bot', 'webhook'], handler: botWebhook },
   // Cron (bearer CRON_SECRET)
   { segments: ['cron', 'notify'], handler: cronNotify },
+  { segments: ['cron', 'digest'], handler: cronDigest },
   { segments: ['cron', 'cleanup'], handler: cronCleanup },
   { segments: ['cron', 'referral-confirm'], handler: cronReferralConfirm },
 ];

@@ -10,6 +10,8 @@ export interface SubscriptionValue {
   placementFee: PlacementFee | null;
   requireHousing: boolean | null;
   requireMeals: boolean | null;
+  /** Daily digest opt-in (bot sends one summary a day). Defaults to true. */
+  digestEnabled: boolean;
 }
 
 interface SubscriptionState extends SubscriptionValue {
@@ -35,6 +37,7 @@ const EMPTY: SubscriptionValue = {
   placementFee: null,
   requireHousing: null,
   requireMeals: null,
+  digestEnabled: true,
 };
 
 function fromSubscription(s: Subscription): SubscriptionValue {
@@ -46,6 +49,7 @@ function fromSubscription(s: Subscription): SubscriptionValue {
     placementFee: s.placement_fee ?? null,
     requireHousing: s.require_housing ?? null,
     requireMeals: s.require_meals ?? null,
+    digestEnabled: s.digest_enabled ?? true,
   };
 }
 
@@ -59,6 +63,7 @@ export function subscriptionValue(s: SubscriptionState): SubscriptionValue {
     placementFee: s.placementFee,
     requireHousing: s.requireHousing,
     requireMeals: s.requireMeals,
+    digestEnabled: s.digestEnabled,
   };
 }
 
@@ -72,6 +77,7 @@ export function toSubscription(v: SubscriptionValue): Subscription {
     placement_fee: v.placementFee,
     require_housing: v.requireHousing,
     require_meals: v.requireMeals,
+    digest_enabled: v.digestEnabled,
   };
 }
 

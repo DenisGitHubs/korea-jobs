@@ -9,6 +9,7 @@ import { workTypeKey } from '../../shared/labels';
 import { WorkTypeIcon } from '../../components/icons/WorkTypeIcon';
 import { EmptyState } from '../../components/EmptyState';
 import { Modal } from '../../components/Modal';
+import { IconDoc, IconWarn } from '../../components/icons/StateIcons';
 
 /** Reject reasons we have friendly copy for; anything else is shown verbatim. */
 const KNOWN_REASONS = new Set(['too_short', 'no_contact', 'policy', 'network']);
@@ -140,7 +141,7 @@ export function MyAdsTab({ onEdit, onGoCompose }: MyAdsTabProps) {
   if (error) {
     return (
       <EmptyState
-        emoji="⚠️"
+        icon={<IconWarn />}
         title={t('common.error')}
         subtitle={t('myAds.loadError')}
         actionLabel={t('common.retry')}
@@ -166,7 +167,7 @@ export function MyAdsTab({ onEdit, onGoCompose }: MyAdsTabProps) {
   if (ads.length === 0) {
     return (
       <EmptyState
-        emoji="📝"
+        icon={<IconDoc />}
         title={t('myAds.emptyTitle')}
         subtitle={t('myAds.emptySub')}
         actionLabel={t('myAds.emptyCta')}

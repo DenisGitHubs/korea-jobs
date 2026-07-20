@@ -652,6 +652,22 @@ a {
   white-space: nowrap;
 }
 
+/* Quiet "contact opened" marker on the card city-line (money-green, low key). */
+.card__revealed {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--kj-money-strong);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.card__revealed svg {
+  width: 13px;
+  height: 13px;
+}
+
 .card__badges {
   display: flex;
   flex-wrap: wrap;
@@ -914,6 +930,24 @@ a {
   margin-bottom: 12px;
 }
 
+/* Line-icon in a soft brand-tint disc (replaces the old emoji glyph). */
+.empty__icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  background: var(--kj-brand-tint);
+  color: var(--kj-brand-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.empty__icon svg {
+  width: 30px;
+  height: 30px;
+}
+
 .empty__title {
   font-size: 17px;
   font-weight: 700;
@@ -984,10 +1018,10 @@ a {
   border: 1px solid var(--kj-card-border);
 }
 
-.skeleton-line {
-  height: 12px;
-  border-radius: 6px;
-  margin-bottom: 10px;
+/* Shared shimmer for every skeleton primitive (line / pill / dot). */
+.skeleton-line,
+.skeleton-pill,
+.skeleton-dot {
   background: linear-gradient(
     90deg,
     var(--kj-secondary-bg) 25%,
@@ -996,6 +1030,13 @@ a {
   );
   background-size: 400% 100%;
   animation: kj-shimmer 1.2s linear infinite;
+}
+
+.skeleton-line {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  margin-bottom: 10px;
 }
 
 .skeleton-line--sm {
@@ -1007,8 +1048,55 @@ a {
   height: 18px;
 }
 
+.skeleton-line--w80 {
+  width: 80%;
+}
+
+/* Employer line: a little extra top gap, no bottom margin (sits last). */
+.skeleton-line--gap {
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
 .skeleton-line:last-child {
   margin-bottom: 0;
+}
+
+/* Card-top row: a title line on the left, a heart-sized disc on the right. */
+.skeleton-cardtop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.skeleton-cardtop .skeleton-line {
+  margin-bottom: 0;
+}
+
+.skeleton-dot {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+}
+
+/* Row of pill badges mirroring the card's badge strip. */
+.skeleton-pills {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.skeleton-pill {
+  height: 20px;
+  width: 64px;
+  border-radius: 999px;
+}
+
+.skeleton-pill--wide {
+  width: 92px;
 }
 
 @keyframes kj-shimmer {
@@ -1036,6 +1124,11 @@ a {
   background: #34c759;
 }
 
+.switch:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .switch__dot {
   position: absolute;
   top: 3px;
@@ -1054,6 +1147,7 @@ a {
 
 /* ── Segmented (theme / language) ──────────────────────────────────────── */
 .segmented {
+  position: relative;
   display: inline-flex;
   background: var(--kj-secondary-bg);
   border-radius: 9px;
@@ -1061,7 +1155,24 @@ a {
   gap: 2px;
 }
 
+/* Floating active pill — geometry set inline from JS; slides with a spring. */
+.segmented__pill {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  z-index: 0;
+  border-radius: 7px;
+  pointer-events: none;
+  background-image: linear-gradient(120deg, var(--kj-brand), color-mix(in srgb, var(--kj-brand) 68%, #ffca9a));
+  box-shadow: 0 3px 10px -3px color-mix(in srgb, var(--kj-brand) 50%, transparent);
+  transition: transform 0.34s cubic-bezier(0.34, 1.56, 0.64, 1),
+    width 0.34s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
 .segmented__opt {
+  position: relative;
+  z-index: 1;
   border: none;
   background: transparent;
   color: var(--kj-subtitle);
@@ -1069,14 +1180,12 @@ a {
   border-radius: 7px;
   font-size: 14px;
   font-weight: 500;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: color 0.15s ease;
 }
 
 .segmented__opt--on {
   color: var(--kj-brand-ink);
   font-weight: 600;
-  background-image: linear-gradient(120deg, var(--kj-brand), color-mix(in srgb, var(--kj-brand) 68%, #ffca9a));
-  box-shadow: 0 3px 10px -3px color-mix(in srgb, var(--kj-brand) 50%, transparent);
 }
 
 /* ── Contact reveal ────────────────────────────────────────────────────── */
@@ -1561,6 +1670,33 @@ a {
   }
 }
 
+/* Symmetric close: panel slides back down, backdrop fades out, then unmounts. */
+.sheet--closing .sheet__panel {
+  animation: kj-sheet-down 0.18s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+.sheet--closing .sheet__backdrop {
+  animation: kj-fade-out 0.18s ease forwards;
+}
+
+@keyframes kj-sheet-down {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes kj-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 .sheet__head {
   display: flex;
   align-items: center;
@@ -1630,6 +1766,7 @@ a {
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
+  animation: kj-fade-in 0.18s ease;
 }
 
 .modal__card {
@@ -1639,6 +1776,38 @@ a {
   background: var(--kj-sheet-bg);
   border-radius: var(--kj-radius-lg);
   padding: 22px 20px;
+  animation: kj-modal-in 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Symmetric close: card scales/fades down, backdrop fades out, then unmounts. */
+.modal--closing .modal__backdrop {
+  animation: kj-fade-out 0.16s ease forwards;
+}
+
+.modal--closing .modal__card {
+  animation: kj-modal-out 0.16s ease forwards;
+}
+
+@keyframes kj-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes kj-modal-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
 }
 
 .modal__title {
@@ -2592,6 +2761,16 @@ a {
   font-size: 12.5px;
   line-height: 1.4;
   color: var(--kj-hint);
+}
+
+/* Vacancy contact-reveal error (limit / network) under the "show contact" button. */
+.reveal-error {
+  margin-top: 8px;
+  padding: 0 4px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--kj-hint);
+  text-align: center;
 }
 
 /* ── Trust card (vacancy + safety screens) ─────────────────────────────────*/

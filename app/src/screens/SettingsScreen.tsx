@@ -40,6 +40,7 @@ export default function SettingsScreen() {
   const sHousing = useSubscriptionStore((s) => s.requireHousing);
   const sMeals = useSubscriptionStore((s) => s.requireMeals);
   const sNotify = useSubscriptionStore((s) => s.notify);
+  const sDigest = useSubscriptionStore((s) => s.digestEnabled);
 
   const [work, setWork] = useState<WorkType[]>(() => sWork);
   const [visa, setVisa] = useState<VisaType[]>(() => sVisa);
@@ -49,6 +50,7 @@ export default function SettingsScreen() {
   const [housing, setHousing] = useState<boolean>(() => sHousing === true);
   const [meals, setMeals] = useState<boolean>(() => sMeals === true);
   const [notify, setNotify] = useState<boolean>(() => sNotify);
+  const [digest, setDigest] = useState<boolean>(() => sDigest);
   const [saving, setSaving] = useState(false);
   // Info popup shown every time the user picks the 'auto' theme, explaining the
   // Korean-time schedule. Purely informational — the mode is applied instantly.
@@ -68,7 +70,8 @@ export default function SettingsScreen() {
     paid !== (sFee === 'free' || sFee === 'paid' ? sFee : null) ||
     housing !== (sHousing === true) ||
     meals !== (sMeals === true) ||
-    notify !== sNotify;
+    notify !== sNotify ||
+    digest !== sDigest;
 
   const save = useCallback(async () => {
     if (saving) return;
@@ -83,6 +86,7 @@ export default function SettingsScreen() {
         placementFee: paid,
         requireHousing: housing ? true : null,
         requireMeals: meals ? true : null,
+        digestEnabled: digest,
       });
       const saved = await api.saveSubscription(body);
       apply(saved);
@@ -91,7 +95,7 @@ export default function SettingsScreen() {
     } finally {
       setSaving(false);
     }
-  }, [saving, sCities, work, notify, visa, paid, housing, meals, apply]);
+  }, [saving, sCities, work, notify, visa, paid, housing, meals, digest, apply]);
 
   const workOptions = useMemo<ChipOption<WorkType>[]>(
     () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), icon: <WorkTypeIcon type={w} /> })),
@@ -123,6 +127,16 @@ export default function SettingsScreen() {
                 <div className="row__sub">{t('settings.notificationsHint')}</div>
               </div>
               <Switch checked={notify} onChange={setNotify} label={t('settings.notifications')} />
+            </div>
+            <div className="row">
+              <div className="row__label">
+                <div>{t('settings.digest')}</div>
+                <div className="row__sub">{t('settings.digestHint')}</div>
+              </div>
+              {/* INDEPENDENT of the realtime notify toggle (Цензор, gate 21.07): a user may
+                  want only the once-a-day digest. The bot's ability to DM is granted by
+                  allows_write_to_pm, not by the notify subscription flag. */}
+              <Switch checked={digest} onChange={setDigest} label={t('settings.digest')} />
             </div>
           </div>
         </div>

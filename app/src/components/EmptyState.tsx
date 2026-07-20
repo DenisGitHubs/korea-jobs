@@ -1,17 +1,22 @@
+import type { ReactNode } from 'react';
+
 interface EmptyStateProps {
-  emoji?: string;
+  /** Line icon rendered in a soft brand-tint disc above the title. */
+  icon?: ReactNode;
   title: string;
   subtitle?: string;
   actionLabel?: string;
   onAction?: () => void;
 }
 
-export function EmptyState({ emoji = '🗂️', title, subtitle, actionLabel, onAction }: EmptyStateProps) {
+export function EmptyState({ icon, title, subtitle, actionLabel, onAction }: EmptyStateProps) {
   return (
     <div className="empty">
-      <div className="empty__emoji" aria-hidden>
-        {emoji}
-      </div>
+      {icon ? (
+        <div className="empty__icon" aria-hidden>
+          {icon}
+        </div>
+      ) : null}
       <div className="empty__title">{title}</div>
       {subtitle ? <div className="empty__sub">{subtitle}</div> : null}
       {actionLabel && onAction ? (

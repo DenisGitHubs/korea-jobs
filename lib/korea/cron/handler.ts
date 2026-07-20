@@ -6,8 +6,9 @@
 // resumable, so a missed or duplicated tick is harmless.
 //
 //   POST /api/cron/parse   -> lib/korea/parser/run.ts (AI extraction)
-//   POST /api/cron/notify  -> TODO (push new matching vacancies)
-//   POST /api/cron/cleanup -> TODO (TTL retention / takedown)
+//   POST /api/cron/notify  -> lib/korea/notify/run.ts (realtime per-item push)
+//   POST /api/cron/digest  -> lib/korea/digest/run.ts (once-a-day matched-vacancy summary)
+//   POST /api/cron/cleanup -> lib/korea/cleanup/run.ts (TTL retention / takedown)
 
 import {
   type ReqLike,
@@ -20,6 +21,7 @@ import {
 import { ApiErrorCode } from '../core/errors.js';
 import { runParse } from '../parser/run.js';
 import { runNotify } from '../notify/run.js';
+import { runDigest } from '../digest/run.js';
 import { runCleanup } from '../cleanup/run.js';
 import { runReferralConfirm } from '../referral/confirm.js';
 
@@ -50,6 +52,19 @@ export async function cronNotify(req: ReqLike, res: ResLike): Promise<void> {
   if (!authorized(req)) return unauthorized(res);
   try {
     const result = await runNotify();
+    send(res, 200, { ok: true, ...result });
+  } catch {
+    sendError(res, ApiErrorCode.Internal);
+  }
+}
+
+/** POST /api/cron/digest — send the once-a-day matched-vacancy digest. Self-throttled: it only
+ *  acts inside 09:00–12:00 Asia/Seoul and at most once / 22h, so the ~3-min poll is harmless. */
+export async function cronDigest(req: ReqLike, res: ResLike): Promise<void> {
+  if ((req.method ?? 'GET') !== 'POST') return sendError(res, ApiErrorCode.NotFound);
+  if (!authorized(req)) return unauthorized(res);
+  try {
+    const result = await runDigest();
     send(res, 200, { ok: true, ...result });
   } catch {
     sendError(res, ApiErrorCode.Internal);

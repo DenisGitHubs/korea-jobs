@@ -16,6 +16,7 @@ import { EmptyState } from '../components/EmptyState';
 import { WorkTypeBadge } from '../components/WorkTypeBadge';
 import { HeartIcon } from '../components/VacancyCard';
 import { ContactLines } from '../components/ContactLines';
+import { IconSearch } from '../components/icons/StateIcons';
 import { findPhone, findTelegramUsername, splitContacts } from '../lib/contacts';
 
 function ShieldIcon() {
@@ -30,7 +31,8 @@ function ShieldIcon() {
 type ContactState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'done'; contact: VacancyContact | null };
+  | { status: 'done'; contact: VacancyContact | null }
+  | { status: 'error'; message: string };
 
 function contactHref(c: VacancyContact): string | null {
   switch (c.kind) {
@@ -113,13 +115,23 @@ export default function VacancyScreen() {
     });
   }, [saved, id]);
 
+  // Distinguish the three failure modes the reveal can hit: 429 → the shared
+  // daily budget is spent; any other network/server error → generic retry; a
+  // real {contact:null} is NOT an error (falls into the 'done' branch below and
+  // shows "no contact"). Mirrors the RawCard reveal handling.
   const revealContact = useCallback(() => {
     setContact({ status: 'loading' });
     api
       .vacancyContact(id)
       .then((r) => setContact({ status: 'done', contact: r.contact }))
-      .catch(() => setContact({ status: 'done', contact: null }));
-  }, [id]);
+      .catch((e: unknown) => {
+        const http = e instanceof ApiError ? e.http : 0;
+        setContact({
+          status: 'error',
+          message: http === 429 ? t('vacancy.errorLimit') : t('vacancy.errorGeneric'),
+        });
+      });
+  }, [id, t]);
 
   const copy = useCallback((value: string) => {
     void navigator.clipboard
@@ -225,7 +237,7 @@ export default function VacancyScreen() {
         {loading ? (
           <Loading text={t('common.loading')} />
         ) : notFound || !vacancy ? (
-          <EmptyState emoji="🔎" title={t('common.error')} actionLabel={t('nav.feed')} onAction={goBack} />
+          <EmptyState icon={<IconSearch />} title={t('common.error')} actionLabel={t('nav.feed')} onAction={goBack} />
         ) : (
           <>
             <div className="hero">
@@ -312,13 +324,18 @@ export default function VacancyScreen() {
                   {t('vacancy.noContact')}
                 </div>
               )
-            ) : contact.status === 'idle' ? (
-              <button className="btn btn--primary btn--block" onClick={revealContact}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                  <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
-                </svg>
-                {t('vacancy.showContact')}
-              </button>
+            ) : contact.status === 'idle' || contact.status === 'error' ? (
+              <>
+                <button className="btn btn--primary btn--block" onClick={revealContact}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
+                  </svg>
+                  {/* Already revealed before → the button reads "contact opened"; a
+                      repeat reveal is free (backend serves it again). */}
+                  {vacancy.is_revealed ? t('vacancy.revealed') : t('vacancy.showContact')}
+                </button>
+                {contact.status === 'error' ? <div className="reveal-error">{contact.message}</div> : null}
+              </>
             ) : contact.status === 'loading' ? (
               <Loading text={t('vacancy.loadingContact')} />
             ) : contact.contact ? (

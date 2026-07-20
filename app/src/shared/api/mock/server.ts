@@ -21,6 +21,7 @@ import {
   CITIES,
   DEFAULT_ME,
   DEFAULT_REFERRAL,
+  INITIAL_REVEALED_IDS,
   INITIAL_SAVED_IDS,
   MOCK_SOURCES_COUNT,
   RAW_ITEMS,
@@ -47,6 +48,8 @@ let myAds: UserAd[] = buildMyAds();
 const adUpdatedAt = new Map<string, number>();
 /** Bookmarked offer ids (source of truth for is_saved in every projection). */
 const savedIds = new Set<string>(INITIAL_SAVED_IDS);
+/** Offer ids whose contact this user already revealed (source of truth for is_revealed). */
+const revealedIds = new Set<string>(INITIAL_REVEALED_IDS);
 
 interface MockError {
   __mockHttp: number;
@@ -62,9 +65,9 @@ function fail(status: number, error: string): never {
 
 const delay = (ms = 200): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** Feed/detail projection: drop the contact, project the live is_saved state. */
+/** Feed/detail projection: drop the contact, project the live is_saved/is_revealed state. */
 function withoutContact(v: MockVacancy): VacancyView {
-  const copy: MockVacancy = { ...v, is_saved: savedIds.has(v.id) };
+  const copy: MockVacancy = { ...v, is_saved: savedIds.has(v.id), is_revealed: revealedIds.has(v.id) };
   delete copy.contact;
   return copy;
 }
@@ -178,6 +181,7 @@ function feedItemFromAd(ad: UserAd, postedAt: string): MockVacancy {
     source_kind: 'user',
     repost: false,
     is_saved: false,
+    is_revealed: false,
     contact: ad.contact_raw ? { kind: ad.contact_kind ?? 'other', value: ad.contact_raw } : undefined,
   };
 }
@@ -230,9 +234,11 @@ export async function handleMock(method: string, path: string, body?: unknown): 
     }
 
     // GET /vacancies/:id/contact — the reveal endpoint (explicit user action).
+    // Revealing marks the offer as revealed for this user (repeat reveals are free).
     if (method === 'GET' && seg.length === 3 && seg[2] === 'contact') {
       const v = ALL.find((x) => x.id === seg[1]);
       if (!v) return fail(404, 'not_found');
+      if (v.contact) revealedIds.add(v.id);
       return { contact: v.contact ?? null };
     }
 
@@ -319,6 +325,7 @@ export async function handleMock(method: string, path: string, body?: unknown): 
       placement_fee: b.placement_fee ?? null,
       require_housing: typeof b.require_housing === 'boolean' ? b.require_housing : null,
       require_meals: typeof b.require_meals === 'boolean' ? b.require_meals : null,
+      digest_enabled: typeof b.digest_enabled === 'boolean' ? b.digest_enabled : true,
     };
     me = { ...me, subscription: next };
     return next;

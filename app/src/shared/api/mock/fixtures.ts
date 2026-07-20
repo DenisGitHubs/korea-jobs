@@ -142,6 +142,9 @@ export const MOCK_SOURCES_COUNT = 14;
 /** Offers bookmarked at session start (mock is_saved seed). */
 export const INITIAL_SAVED_IDS = ['v05', 'v12', 'v18'];
 
+/** Offers whose contact was already revealed by this user (mock is_revealed seed). */
+export const INITIAL_REVEALED_IDS = ['v01'];
+
 const FEE_CYCLE: PlacementFee[] = ['free', 'free', 'unknown', 'paid'];
 
 const HOUSING_HINTS = ['жиль', 'общежит', 'проживан'];
@@ -192,6 +195,7 @@ export function buildVacancies(): MockVacancy[] {
       source_kind,
       repost: REPOSTS.has(r.id),
       is_saved: INITIAL_SAVED_IDS.includes(r.id),
+      is_revealed: INITIAL_REVEALED_IDS.includes(r.id),
       // Only for listings without a direct contact (mirrors the backend rule).
       source_post_url: r.contact === null ? (SOURCE_POST_URL[r.id] ?? null) : null,
       // Kept internally so the reveal endpoint can serve it; the feed strips it.
@@ -272,6 +276,7 @@ export const DEFAULT_ME: Me = {
     placement_fee: null,
     require_housing: null,
     require_meals: null,
+    digest_enabled: true,
   },
 };
 

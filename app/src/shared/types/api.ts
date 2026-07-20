@@ -108,6 +108,12 @@ export interface VacancyView {
   repost: boolean;
   /** Whether the current user has bookmarked this offer (present in all projections). */
   is_saved: boolean;
+  /**
+   * Whether the current user has already revealed this offer's contact before
+   * (present in all projections). A repeat reveal is free — the backend serves
+   * the contact again without charging the daily budget.
+   */
+  is_revealed: boolean;
   /** Present only on the detail/reveal endpoint, never in the feed. */
   contact?: VacancyContact;
   /**
@@ -183,6 +189,8 @@ export interface Subscription {
   /** true = require housing (or unstated); null/false = no filter. */
   require_housing: boolean | null;
   require_meals: boolean | null;
+  /** Daily digest opt-in (bot sends one summary message a day). Defaults to true. */
+  digest_enabled?: boolean;
 }
 
 export interface TermsState {

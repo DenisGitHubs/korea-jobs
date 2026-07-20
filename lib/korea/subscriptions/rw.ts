@@ -24,6 +24,7 @@ interface Body {
   city_slugs?: unknown;
   work_types?: unknown;
   notify?: unknown;
+  digest_enabled?: unknown;
   visa_types?: unknown;
   placement_fee?: unknown;
   require_housing?: unknown;
@@ -47,6 +48,9 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
   const inSlugs = stringArray(body?.city_slugs);
   const workTypes = stringArray(body?.work_types).filter((w) => WORK_TYPE_SET.has(w));
   const notify = body?.notify === undefined ? true : body?.notify === true;
+  // digest_enabled: the once-a-day summary opt-in (separate from realtime `notify`). Mirrors
+  // notify — absent defaults to true, so the client should always send the current toggle.
+  const digestEnabled = body?.digest_enabled === undefined ? true : body?.digest_enabled === true;
   const visaTypes = [...new Set(stringArray(body?.visa_types).filter((v) => VISA_TYPE_SET.has(v)))];
   const placementFee =
     typeof body?.placement_fee === 'string' && PLACEMENT_FEE_SET.has(body.placement_fee) && body.placement_fee !== 'unknown'
@@ -68,16 +72,18 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
 
     await sql`
       insert into subscriptions (
-        user_id, city_ids, work_types, notify, visa_types, placement_fee, require_housing, require_meals
+        user_id, city_ids, work_types, notify, digest_enabled,
+        visa_types, placement_fee, require_housing, require_meals
       )
       values (
-        ${user.id}::uuid, ${cityIds}::uuid[], ${workTypes}::work_type[], ${notify},
+        ${user.id}::uuid, ${cityIds}::uuid[], ${workTypes}::work_type[], ${notify}, ${digestEnabled},
         ${visaTypes}::visa_type[], ${placementFee}::placement_fee, ${requireHousing}, ${requireMeals}
       )
       on conflict (user_id) do update set
         city_ids = excluded.city_ids,
         work_types = excluded.work_types,
         notify = excluded.notify,
+        digest_enabled = excluded.digest_enabled,
         visa_types = excluded.visa_types,
         placement_fee = excluded.placement_fee,
         require_housing = excluded.require_housing,
@@ -88,6 +94,7 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
       city_slugs: validSlugs,
       work_types: workTypes,
       notify,
+      digest_enabled: digestEnabled,
       visa_types: visaTypes,
       placement_fee: placementFee,
       require_housing: requireHousing,

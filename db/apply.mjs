@@ -136,6 +136,13 @@ const files = [
   // while config 'reject_log_enabled' is on, purged > 7 days by lib/korea/cleanup/run.ts). No API/bot
   // surface reads them — owner-inspection only. Depends on pgcrypto (gen_random_uuid, draft_0001_init.sql).
   'draft_0016_reject_log.sql',
+
+  // Daily digest (0017) — ADDITIVE / idempotent (ADD COLUMN IF NOT EXISTS). Adds
+  // subscriptions.digest_enabled (default true) + subscriptions.last_digest_at + a partial index, so
+  // lib/korea/digest/run.ts can DM opted-in subscribers one "N new vacancies" line each morning
+  // (self-throttled via the config marker 'digest_last_run', written by the run — no seed here).
+  // Depends on subscriptions (draft_0003_subscription_filters.sql / draft_0001_init.sql).
+  'draft_0017_digest.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

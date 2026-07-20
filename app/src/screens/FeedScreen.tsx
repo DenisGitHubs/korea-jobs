@@ -8,6 +8,7 @@ import { feeKey, freshnessKey, visaKey, workTypeKey } from '../shared/labels';
 import { subscriptionValue, useSubscriptionStore } from '../store/subscriptionStore';
 import { filterSignature, filterToQuery, isFilterActive, useFilterStore, type FilterValue } from '../store/filterStore';
 import { applySaveToCaches, revertSaveInCaches, useFeedStore, type FeedItem } from '../store/feedStore';
+import { useUiStore, type FeedSegment } from '../store/uiStore';
 import { useCountUp } from '../hooks/useCountUp';
 import { AppBar } from '../components/AppBar';
 import { Loading } from '../components/Loading';
@@ -17,8 +18,9 @@ import { VacancyCard, HeartIcon } from '../components/VacancyCard';
 import { RawCard } from '../components/RawCard';
 import { FilterSheet } from '../components/FilterSheet';
 import { ReferralBanner } from '../components/ReferralBanner';
+import { IconCheckCircle, IconSearch, IconWarn } from '../components/icons/StateIcons';
 
-type Segment = 'all' | 'saved' | 'raw';
+type Segment = FeedSegment;
 
 function FilterIcon() {
   return (
@@ -146,7 +148,10 @@ export default function FeedScreen() {
   const sig = filterSignature(filter);
   const active = isFilterActive(filter);
 
-  const [segment, setSegment] = useState<Segment>('all');
+  // Remember the last-viewed tab across navigations (session store): returning
+  // from a card restores the segment; the per-segment feed cache restores scroll.
+  const segment = useUiStore((s) => s.feedSegment);
+  const setSegment = useUiStore((s) => s.setFeedSegment);
   const [items, setItems] = useState<FeedItem[]>([]);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [hasMore, setHasMore] = useState(true);
@@ -356,7 +361,7 @@ export default function FeedScreen() {
         {loading ? (
           <FeedSkeleton />
         ) : error && !items.length ? (
-          <EmptyState emoji="⚠️" title={t('common.error')} actionLabel={t('common.retry')} onAction={retry} />
+          <EmptyState icon={<IconWarn />} title={t('common.error')} actionLabel={t('common.retry')} onAction={retry} />
         ) : !items.length ? (
           segment === 'saved' ? (
             <div className="feed-empty">
@@ -367,10 +372,10 @@ export default function FeedScreen() {
               <div className="feed-empty__sub">{t('feed.savedEmptySub')}</div>
             </div>
           ) : segment === 'raw' ? (
-            <EmptyState emoji="✅" title={t('feed.rawEmptyTitle')} subtitle={t('feed.rawEmptySub')} />
+            <EmptyState icon={<IconCheckCircle />} title={t('feed.rawEmptyTitle')} subtitle={t('feed.rawEmptySub')} />
           ) : (
             <EmptyState
-              emoji="🗂️"
+              icon={<IconSearch />}
               title={t('feed.emptyTitle')}
               subtitle={t('feed.emptyRelax')}
               actionLabel={t('feed.emptyCta')}
@@ -460,16 +465,28 @@ function QuickFilters({
   );
 }
 
-/** Shimmer placeholder cards shown while a segment's first page loads. */
+/**
+ * Shimmer placeholders shaped like a real VacancyCard: a city-line + heart row,
+ * a row of pill badges, two text lines and an employer line. Keeps the loading
+ * state from "jumping" when the real cards paint in.
+ */
 function FeedSkeleton() {
   return (
     <div aria-hidden>
       {Array.from({ length: 5 }, (_, i) => (
         <div key={i} className="skeleton-card">
-          <div className="skeleton-line skeleton-line--sm" />
-          <div className="skeleton-line skeleton-line--lg" />
-          <div className="skeleton-line" />
-          <div className="skeleton-line skeleton-line--sm" />
+          <div className="skeleton-cardtop">
+            <span className="skeleton-line skeleton-line--sm" />
+            <span className="skeleton-dot" />
+          </div>
+          <div className="skeleton-pills">
+            <span className="skeleton-pill" />
+            <span className="skeleton-pill skeleton-pill--wide" />
+            <span className="skeleton-pill" />
+          </div>
+          <span className="skeleton-line" />
+          <span className="skeleton-line skeleton-line--w80" />
+          <span className="skeleton-line skeleton-line--sm skeleton-line--gap" />
         </div>
       ))}
     </div>

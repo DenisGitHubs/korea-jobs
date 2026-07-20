@@ -9,6 +9,7 @@ import { useSettingsStore } from '../store/settingsStore';
 import { AppBar } from '../components/AppBar';
 import { Loading } from '../components/Loading';
 import { EmptyState } from '../components/EmptyState';
+import { IconWarn } from '../components/icons/StateIcons';
 
 /** Teaser bullets — all future ("planned"); nothing is spendable yet. */
 const REWARDS = ['faster', 'boost', 'status', 'discounts'] as const;
@@ -148,7 +149,7 @@ export default function ReferralScreen() {
           <Loading text={t('common.loading')} />
         ) : state.status === 'error' ? (
           <EmptyState
-            emoji="⚠️"
+            icon={<IconWarn />}
             title={t('referral.loadError')}
             actionLabel={t('common.retry')}
             onAction={() => setReloadKey((k) => k + 1)}

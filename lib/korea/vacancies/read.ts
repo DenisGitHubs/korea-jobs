@@ -67,6 +67,10 @@ interface Row {
   source_kind: string;
   repost: boolean;
   is_saved: boolean;
+  // Whether THIS caller has already revealed the contact for this card — mirrors is_saved, but
+  // sourced from the reveal audit (contact_reveals for scraped, ad_contact_reveals for user ads).
+  // Lets the card show "уже смотрел контакт". Only the caller's own reveal is ever exposed.
+  is_revealed: boolean;
   // Only populated by the saved feed (savedUnionSql) — the bookmark's created_at, used as
   // the saved-list cursor. Absent (undefined) on the main feed / detail rows.
   saved_at?: string;
@@ -100,6 +104,7 @@ function toView(r: Row) {
     source_kind: r.source_kind,
     repost: r.repost === true,
     is_saved: r.is_saved === true,
+    is_revealed: r.is_revealed === true,
     // Present in every projection for a stable shape; non-null ONLY on the detail endpoint
     // for a contactless scraped offer whose source channel has a username (feed/saved/user
     // ads leave the column unselected -> undefined -> null). Public link, no reveal gate.
@@ -177,6 +182,17 @@ function feedUnionSql(savedUserPh: string | null): string {
     ? `left join saved_ads sa on sa.ad_id = a.id and sa.user_id = ${savedUserPh}::uuid`
     : '';
   const saSel = savedUserPh ? '(sa.user_id is not null)' : 'false';
+  // is_revealed mirrors is_saved: LEFT JOIN the caller's OWN reveal audit (contact_reveals for
+  // scraped, ad_contact_reveals for user ads). Each join is on (id + fixed caller id) against a PK,
+  // so it never fans a row out. With null caller (the /count query) it collapses to a `false` literal.
+  const crJoin = savedUserPh
+    ? `left join contact_reveals cr on cr.vacancy_id = v.id and cr.user_id = ${savedUserPh}::uuid`
+    : '';
+  const crSel = savedUserPh ? '(cr.user_id is not null)' : 'false';
+  const arJoin = savedUserPh
+    ? `left join ad_contact_reveals ar on ar.user_ad_id = a.id and ar.user_id = ${savedUserPh}::uuid`
+    : '';
+  const arSel = savedUserPh ? '(ar.user_id is not null)' : 'false';
   return `
   select v.id, c.slug as city_slug, c.name as city_name, v.region_slug,
          v.work_type::text as work_type, v.gender::text as gender,
@@ -184,10 +200,12 @@ function feedUnionSql(savedUserPh: string | null): string {
          v.employer, v.description, v.posted_at,
          (v.contact_normalized is not null) as has_contact,
          v.visa_types, v.placement_fee::text as placement_fee, v.has_housing, v.has_meals,
-         'scraped'::text as source_kind, (v.repost_count > 0) as repost, ${svSel} as is_saved, v.search_tsv
+         'scraped'::text as source_kind, (v.repost_count > 0) as repost, ${svSel} as is_saved,
+         ${crSel} as is_revealed, v.search_tsv
   from vacancies v
   left join cities c on c.id = v.city_id
   ${svJoin}
+  ${crJoin}
   where v.is_active and v.duplicate_of is null
   union all
   select a.id, c.slug as city_slug, c.name as city_name, a.region_slug,
@@ -197,10 +215,12 @@ function feedUnionSql(savedUserPh: string | null): string {
          greatest(a.created_at, coalesce(a.bumped_at, a.created_at)) as posted_at,
          (a.contact_raw is not null) as has_contact,
          a.visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
-         'user'::text as source_kind, false as repost, ${saSel} as is_saved, a.search_tsv
+         'user'::text as source_kind, false as repost, ${saSel} as is_saved,
+         ${arSel} as is_revealed, a.search_tsv
   from user_ads a
   left join cities c on c.id = a.city_id
   ${saJoin}
+  ${arJoin}
   where a.status = 'approved' and (a.expires_at is null or a.expires_at > now())`;
 }
 
@@ -211,6 +231,8 @@ function feedUnionSql(savedUserPh: string | null): string {
 // row stays in saved_* but never surfaces stale/taken-down content (007). is_saved is a
 // `true` literal here by construction; `saved_at` (the bookmark's created_at) is the cursor.
 function savedUnionSql(userPh: string): string {
+  // is_revealed here uses the SAME caller-scoped reveal audit as the main feed (contact_reveals /
+  // ad_contact_reveals), LEFT-joined on the bookmarked item's id + the fixed caller id (PK -> no fan-out).
   return `
   select v.id, c.slug as city_slug, c.name as city_name, v.region_slug,
          v.work_type::text as work_type, v.gender::text as gender,
@@ -219,10 +241,12 @@ function savedUnionSql(userPh: string): string {
          (v.contact_normalized is not null) as has_contact,
          v.visa_types, v.placement_fee::text as placement_fee, v.has_housing, v.has_meals,
          'scraped'::text as source_kind, (v.repost_count > 0) as repost, true as is_saved,
+         (cr.user_id is not null) as is_revealed,
          s.created_at as saved_at
   from saved_vacancies s
   join vacancies v on v.id = s.vacancy_id and v.is_active and v.duplicate_of is null
   left join cities c on c.id = v.city_id
+  left join contact_reveals cr on cr.vacancy_id = v.id and cr.user_id = ${userPh}::uuid
   where s.user_id = ${userPh}::uuid
   union all
   select a.id, c.slug as city_slug, c.name as city_name, a.region_slug,
@@ -233,10 +257,12 @@ function savedUnionSql(userPh: string): string {
          (a.contact_raw is not null) as has_contact,
          a.visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
          'user'::text as source_kind, false as repost, true as is_saved,
+         (ar.user_id is not null) as is_revealed,
          s.created_at as saved_at
   from saved_ads s
   join user_ads a on a.id = s.ad_id and a.status = 'approved' and (a.expires_at is null or a.expires_at > now())
   left join cities c on c.id = a.city_id
+  left join ad_contact_reveals ar on ar.user_ad_id = a.id and ar.user_id = ${userPh}::uuid
   where s.user_id = ${userPh}::uuid`;
 }
 
@@ -309,7 +335,7 @@ export async function vacanciesFeed(req: ReqLike, res: ResLike): Promise<void> {
       `select f.id, f.city_slug, f.city_name, f.region_slug, f.work_type, f.gender,
              f.salary_text, f.salary_min, f.salary_max, f.salary_period, f.employer,
              f.description, f.posted_at, f.has_contact, f.visa_types::text[] as visa_types, f.placement_fee,
-             f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved
+             f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.is_revealed
       from (${feedUnionSql(savedUserPh)}) f
       ${where}
       ${cursorClause}
@@ -381,6 +407,8 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
              'scraped'::text as source_kind, (v.repost_count > 0) as repost,
              (exists (select 1 from saved_vacancies s
                       where s.user_id = ${auth.user.id}::uuid and s.vacancy_id = v.id)) as is_saved,
+             (exists (select 1 from contact_reveals r
+                      where r.user_id = ${auth.user.id}::uuid and r.vacancy_id = v.id)) as is_revealed,
              -- Fallback deep link to the original post ONLY when the offer carries no direct
              -- contact and its source channel has a public username. Exposes the username in
              -- the URL and nothing else (no tg_chat_id / sender_id / internal ids). tg_message_id
@@ -410,7 +438,9 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
              a.visa_types::text[] as visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
              'user'::text as source_kind, false as repost,
              (exists (select 1 from saved_ads s
-                      where s.user_id = ${auth.user.id}::uuid and s.ad_id = a.id)) as is_saved
+                      where s.user_id = ${auth.user.id}::uuid and s.ad_id = a.id)) as is_saved,
+             (exists (select 1 from ad_contact_reveals r
+                      where r.user_id = ${auth.user.id}::uuid and r.user_ad_id = a.id)) as is_revealed
       from user_ads a
       left join cities c on c.id = a.city_id
       where a.id = ${id}::uuid and a.status = 'approved' and (a.expires_at is null or a.expires_at > now())
@@ -552,7 +582,7 @@ export async function savedFeed(req: ReqLike, res: ResLike): Promise<void> {
       `select f.id, f.city_slug, f.city_name, f.region_slug, f.work_type, f.gender,
              f.salary_text, f.salary_min, f.salary_max, f.salary_period, f.employer,
              f.description, f.posted_at, f.has_contact, f.visa_types::text[] as visa_types, f.placement_fee,
-             f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.saved_at
+             f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.is_revealed, f.saved_at
       from (${savedUnionSql(userPh)}) f
       where true
       ${cursorClause}

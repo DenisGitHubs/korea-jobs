@@ -4,6 +4,7 @@ import { api } from '../shared/api/client';
 import { AppBar } from '../components/AppBar';
 import { Field } from '../components/Field';
 import { EmptyState } from '../components/EmptyState';
+import { IconSent } from '../components/icons/StateIcons';
 
 export default function PartnersScreen() {
   const { t } = useTranslation();
@@ -37,7 +38,7 @@ export default function PartnersScreen() {
       <div className="app">
         <AppBar title={t('partners.title')} />
         <div className="screen">
-          <EmptyState emoji="🤝" title={t('partners.sentTitle')} subtitle={t('partners.sentSubtitle')} />
+          <EmptyState icon={<IconSent />} title={t('partners.sentTitle')} subtitle={t('partners.sentSubtitle')} />
         </div>
       </div>
     );

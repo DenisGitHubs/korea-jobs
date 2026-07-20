@@ -6,6 +6,7 @@ import { localized } from '../lib/localized';
 import { timeAgo } from '../lib/format';
 import { genderKey } from '../shared/labels';
 import { WorkTypeBadge } from './WorkTypeBadge';
+import { IconCheck } from './icons/StateIcons';
 
 /** Max badges shown on a card; the rest collapse into a "+N" chip. */
 const MAX_BADGES = 4;
@@ -97,6 +98,13 @@ export function VacancyCard({
         <div className="card__cityline">
           <span className="card__city">{cityName}</span>
           <span className="card__time">{timeAgo(vacancy.posted_at, t)}</span>
+          {/* Quiet "you already opened this contact" marker (repeat reveal is free). */}
+          {vacancy.is_revealed ? (
+            <span className="card__revealed">
+              <IconCheck />
+              {t('vacancy.revealed')}
+            </span>
+          ) : null}
         </div>
         {onToggleSave ? (
           <button

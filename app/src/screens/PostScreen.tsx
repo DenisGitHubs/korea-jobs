@@ -22,6 +22,7 @@ import { Segmented } from '../components/Segmented';
 import { ChipSelect, type ChipOption } from '../components/ChipSelect';
 import { CityPicker } from '../components/CityPicker';
 import { EmptyState } from '../components/EmptyState';
+import { IconCheckCircle, IconClock, IconWarn } from '../components/icons/StateIcons';
 import { MyAdsTab } from './post/MyAdsTab';
 
 const CONSENT_KEY = 'kj:ads-consent';
@@ -409,7 +410,7 @@ export default function PostScreen() {
         <div className="screen">
           {result === 'approved' ? (
             <EmptyState
-              emoji="✅"
+              icon={<IconCheckCircle />}
               title={t('post.approvedTitle')}
               subtitle={t('post.approvedText')}
               actionLabel={editAction.label}
@@ -417,7 +418,7 @@ export default function PostScreen() {
             />
           ) : result === 'pending' ? (
             <EmptyState
-              emoji="🕓"
+              icon={<IconClock />}
               title={t('post.pendingTitle')}
               subtitle={lastWasEdit ? t('myAds.editReviewText') : t('post.pendingText')}
               actionLabel={editAction.label}
@@ -425,7 +426,7 @@ export default function PostScreen() {
             />
           ) : (
             <EmptyState
-              emoji="⚠️"
+              icon={<IconWarn />}
               title={t('post.rejectedTitle')}
               subtitle={rejectText(rejectReason, t)}
               actionLabel={lastWasEdit ? t('myAds.toMine') : t('post.edit')}
