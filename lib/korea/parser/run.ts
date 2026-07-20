@@ -25,6 +25,7 @@ import { extractJson } from './extract-json.js';
 import { looksLikeSpam } from './spamfilter.js';
 import { recordAiUsage } from '../ai-usage.js';
 import { recordAiReject } from './reject-log.js';
+import { pickCanonical, isLiveUserHandle, normalizeHandle } from './canonical.js';
 import {
   buildSystemPrompt,
   VISA_TYPES,
@@ -72,23 +73,10 @@ function cleanGender(v: unknown): Gender {
 // parser/spamfilter.ts (extracted so they are unit-testable); rows that match are marked
 // reject_reason='spam_prefilter' so the pattern set stays tunable from data.
 
-// Choose the in-batch canonical among byte-identical reposts: the EARLIEST posting wins (a
-// missing posted_at sorts LAST so a row with a real timestamp is preferred), id breaks ties so
-// the choice is deterministic. Neon returns timestamptz as Date|string; normalize to epoch ms.
-function postedMs(r: Record<string, unknown>): number {
-  const p = r.posted_at;
-  if (p == null) return Number.POSITIVE_INFINITY;
-  const t = new Date(p as string | Date).getTime();
-  return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t;
-}
-function cmpEarliest(a: Record<string, unknown>, b: Record<string, unknown>): number {
-  const pa = postedMs(a);
-  const pb = postedMs(b);
-  if (pa !== pb) return pa < pb ? -1 : 1;
-  const ia = a.id as string;
-  const ib = b.id as string;
-  return ia < ib ? -1 : ia > ib ? 1 : 0;
-}
+// In-batch canonical selection (pickCanonical) + the shared live-user/bot handle test live in
+// parser/canonical.ts (pure, unit-tested — canonical.test.ts). postedMsFinite below stays LOCAL:
+// it feeds the cross-time freshest-repost lift, whose null handling differs (null = "ignore this
+// repost's date", NOT "sort it last" as postedMs/cmpEarliest do for canonical selection).
 // Finite epoch ms of a raw row's posted_at, or null when missing/invalid. Used to pick the
 // FRESHEST repost date to lift a canonical to — nulls are IGNORED (never treated as "now"), so a
 // repost with no timestamp bumps the counter but never touches posted_at.
@@ -197,7 +185,15 @@ export async function runParse(): Promise<ParseResult> {
     for (const r of prior) priorVacancyByHash.set(r.text_hash as string, r.vacancy_id as string);
   }
 
-  const crossSkips: { rawId: string; hash: string; vacancyId: string; postedMs: number | null }[] = [];
+  const crossSkips: {
+    rawId: string;
+    hash: string;
+    vacancyId: string;
+    postedMs: number | null;
+    // Normalized live-user handle of THIS repost (null for a bot/anonymous copy). Used to backfill
+    // a contact-less canonical below (owner rule 2026-07-20); bots never become a contact.
+    senderHandle: string | null;
+  }[] = [];
   pending = pending.filter((r) => {
     const h = textHashById.get(r.id as string);
     if (h != null && priorVacancyByHash.has(h)) {
@@ -206,6 +202,7 @@ export async function runParse(): Promise<ParseResult> {
         hash: h,
         vacancyId: priorVacancyByHash.get(h) as string,
         postedMs: postedMsFinite(r),
+        senderHandle: isLiveUserHandle(r.sender_username) ? normalizeHandle(r.sender_username) : null,
       });
       return false;
     }
@@ -221,16 +218,31 @@ export async function runParse(): Promise<ParseResult> {
   if (crossSkips.length > 0) {
     // Aggregate per canonical: how many reposts (N) and the FRESHEST repost date in this batch
     // (null-posted rows ignored → freshestMs stays null). One UPDATE per vacancy.
-    const bump = new Map<string, { n: number; freshestMs: number | null }>();
+    const bump = new Map<
+      string,
+      { n: number; freshestMs: number | null; contactHandle: string | null; contactMs: number }
+    >();
     for (const s of crossSkips) {
-      const cur = bump.get(s.vacancyId) ?? { n: 0, freshestMs: null };
+      const cur =
+        bump.get(s.vacancyId) ??
+        { n: 0, freshestMs: null, contactHandle: null, contactMs: Number.POSITIVE_INFINITY };
       cur.n += 1;
       if (s.postedMs != null && (cur.freshestMs == null || s.postedMs > cur.freshestMs)) {
         cur.freshestMs = s.postedMs;
       }
+      // Contact-backfill candidate: the EARLIEST live-user repost's handle (a null posted_at sorts
+      // LAST via +Infinity, mirroring pickCanonical; first live copy wins ties — deterministic since
+      // crossSkips follows the fetched_at-asc pending order). A bot/anonymous copy is never taken.
+      if (s.senderHandle != null) {
+        const ms = s.postedMs ?? Number.POSITIVE_INFINITY;
+        if (cur.contactHandle == null || ms < cur.contactMs) {
+          cur.contactHandle = s.senderHandle;
+          cur.contactMs = ms;
+        }
+      }
       bump.set(s.vacancyId, cur);
     }
-    for (const [vacancyId, { n, freshestMs }] of bump) {
+    for (const [vacancyId, { n, freshestMs, contactHandle }] of bump) {
       // Owner rule 2026-07-19: a repost ALWAYS bumps the counter, refreshes last_seen_at and
       // REVIVES the card (is_active=true) — even one that had gone dark past its TTL. It only
       // LIFTS posted_at to the freshest repost date past the cooldown (freshest newer than the
@@ -262,6 +274,58 @@ export async function runParse(): Promise<ParseResult> {
             else vacancies.posted_at
           end
         where id=${vacancyId}::uuid`;
+
+      // CONTACT BACKFILL on repost (owner rule 2026-07-20). A contact-less canonical ("подробности
+      // в ЛС", no @handle in the text) can be made reachable when a repost of it comes from a LIVE
+      // Telegram user — surface that author as the telegram contact. Done as a SEPARATE UPDATE
+      // AFTER the bump so a failure here can never drop the counter/revive above.
+      //   Guards (in the WHERE, so they are atomic with the write):
+      //     • only when the canonical's contact is empty/NULL  — never overwrite a real contact;
+      //     • never on an admin_hidden or takedown canonical    — those content_hashes must stay
+      //       frozen (a takedown is keyed BY content_hash; changing contact would recompute it and
+      //       let the content escape the block). Such canonicals are also left dark by the bump.
+      //   content_hash is GENERATED from contact_raw, so this write RECOMPUTES the canonical's hash.
+      //   uniq_vacancies_active_hash (partial unique over active canonicals) can then raise 23505 if
+      //   the new hash collides with ANOTHER live canonical → we swallow it and simply skip the
+      //   backfill (card stays contact-less); the bump already committed. Text-hash dedup is
+      //   unaffected (it never depends on contact), so future byte-identical reposts still collapse.
+      if (contactHandle != null) {
+        try {
+          await sql`
+            update vacancies set
+              contact_raw = ${'@' + contactHandle},
+              contact_kind = 'telegram'::contact_kind
+            where id = ${vacancyId}::uuid
+              and (vacancies.contact_raw is null or btrim(vacancies.contact_raw) = '')
+              and not vacancies.admin_hidden
+              and not exists (
+                select 1 from takedowns t where t.content_hash = vacancies.content_hash)
+              -- 007 (gate 20.07): also gate on the PROSPECTIVE hash — the recomputed identity
+              -- (with the new contact) must not land ON a takedown/admin_hidden hash either,
+              -- mirroring the insert-time block-check. Without this a clean card could mutate
+              -- into a blocked identity, bypassing the insert gate (admin_hidden has no
+              -- cleanup re-sweep, so such a collision would otherwise persist).
+              and not exists (
+                select 1 from takedowns t2
+                where t2.content_hash = kj_content_hash(${'@' + contactHandle}, vacancies.city_id,
+                        vacancies.work_type, vacancies.gender, vacancies.dedup_extra))
+              and not exists (
+                select 1 from vacancies h
+                where h.admin_hidden
+                  and h.content_hash = kj_content_hash(${'@' + contactHandle}, vacancies.city_id,
+                        vacancies.work_type, vacancies.gender, vacancies.dedup_extra))`;
+        } catch (err) {
+          // Expected case: 23505 unique_violation on uniq_vacancies_active_hash (the recomputed
+          // content_hash clashes with another active canonical). Any error here is non-fatal — the
+          // canonical simply keeps its "открыть в канале" fallback. Never rethrow: it would abort
+          // the remaining bumps and the AI parse for a best-effort enrichment.
+          // eslint-disable-next-line no-console
+          console.error(
+            '[parser] contact backfill skipped (hash conflict/other):',
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }
     }
     // eslint-disable-next-line no-console
     console.log(`[parser] cross-time duplicates (no AI): ${crossSkips.length}`);
@@ -280,10 +344,15 @@ export async function runParse(): Promise<ParseResult> {
   const dropInBatch = new Map<string, string>(); // rawId -> hash
   for (const group of groups.values()) {
     if (group.length < 2) continue;
-    const sorted = [...group].sort(cmpEarliest);
-    for (let i = 1; i < sorted.length; i++) {
-      const dupId = sorted[i]!.id as string;
-      dropInBatch.set(dupId, textHashById.get(dupId) as string);
+    // Owner rule 2026-07-20: don't just keep the earliest copy — keep the one whose AUTHOR is a live
+    // Telegram user (non-bot @username) so the published card can carry a real DM contact; fall back
+    // to a bot/anonymous copy only when no copy has a live-user author. Earliest wins within that
+    // class (pickCanonical). Every OTHER copy in the group is the in-batch duplicate.
+    const canonId = pickCanonical(group).id as string;
+    for (const r of group) {
+      const rid = r.id as string;
+      if (rid === canonId) continue;
+      dropInBatch.set(rid, textHashById.get(rid) as string);
     }
   }
   if (dropInBatch.size > 0) {
@@ -455,10 +524,9 @@ export async function runParse(): Promise<ParseResult> {
     // fires ONLY on no-contact rows, which is EXACTLY where the AI fills dedup_extra — so two
     // different offers from one author stay distinct on dedup_extra, and it also REMOVES the old
     // cross-author 'nocontact' collision (different authors used to share the 'nocontact' bucket).
-    const senderUsername = ((row.sender_username as string | null) ?? '').trim().replace(/^@+/, '');
     const hasAiContact = contactRaw != null && contactRaw.trim() !== '';
-    if (!hasAiContact && senderUsername !== '' && !senderUsername.toLowerCase().endsWith('bot')) {
-      contactRaw = '@' + senderUsername;
+    if (!hasAiContact && isLiveUserHandle(row.sender_username)) {
+      contactRaw = '@' + normalizeHandle(row.sender_username);
       contactKind = 'telegram';
     }
     // Owner rule (2026-07-15): description = the FULL original message text minus contacts
