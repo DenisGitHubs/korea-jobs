@@ -3,7 +3,15 @@ import { useTranslation } from 'react-i18next';
 import type { VisaType, WorkType } from '../shared/types/api';
 import { FRESHNESS_DAYS, VISA_TYPES, WORK_TYPES, freshnessKey, visaKey, workTypeKey } from '../shared/labels';
 import { WorkTypeIcon } from './icons/WorkTypeIcon';
-import { EMPTY_FILTER, filterToQuery, useFilterStore, type FilterValue } from '../store/filterStore';
+import {
+  EMPTY_FILTER,
+  filterEquals,
+  filterFromSubscription,
+  filterToQuery,
+  useFilterStore,
+  type FilterValue,
+} from '../store/filterStore';
+import { subscriptionValue, useSubscriptionStore } from '../store/subscriptionStore';
 import { api } from '../shared/api/client';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUiStore } from '../store/uiStore';
@@ -76,7 +84,21 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
     };
   }, [draft, open]);
 
-  // Hide the TabBar while the sheet (with its Apply MainButton) is open.
+  // Instant apply: any change to the draft (a tapped chip / toggle / city) is
+  // pushed to the live filter after a short debounce, so the feed behind the sheet
+  // updates without a separate "Apply" button and the selection is persisted. The
+  // debounce coalesces a burst of taps. Skipped while the draft still equals the
+  // applied value (e.g. right after seeding on open, or after Reset), so merely
+  // opening the sheet never rewrites the feed or storage on its own.
+  useEffect(() => {
+    if (!open) return;
+    const timer = window.setTimeout(() => {
+      if (!filterEquals(useFilterStore.getState().value, draft)) apply(draft);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [draft, open, apply]);
+
+  // Hide the TabBar while the sheet (with its Done MainButton) is open.
   useEffect(() => {
     setTabBarHidden(open);
     return () => setTabBarHidden(false);
@@ -89,15 +111,20 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
 
   const patch = useCallback((p: Partial<FilterValue>) => setDraft((d) => ({ ...d, ...p })), []);
 
-  const doApply = useCallback(() => {
-    apply(draft);
+  // "Done" just closes the sheet — filters already applied live on each tap. We
+  // still flush the latest draft here in case the debounce timer is mid-flight
+  // (a tap immediately followed by Done), but only when something actually changed
+  // so an unchanged open→close never writes storage.
+  const doDone = useCallback(() => {
+    if (!filterEquals(useFilterStore.getState().value, draft)) apply(draft);
     onClose();
   }, [apply, draft, onClose]);
 
-  // Soft-degrade to plain "Apply" until the first count arrives.
-  const applyLabel = count === null ? t('filter.apply') : t('filter.showCount', { count });
+  // Keep the live match count on the button; the button only closes now. Degrade to
+  // a plain "Done" until the first count arrives.
+  const doneLabel = count === null ? t('common.done') : t('filter.doneCount', { count });
 
-  useMainButton({ text: applyLabel, visible: open, enabled: true, loading: counting, onClick: doApply });
+  useMainButton({ text: doneLabel, visible: open, enabled: true, loading: counting, onClick: doDone });
 
   const workOptions = useMemo<ChipOption<WorkType>[]>(
     () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), icon: <WorkTypeIcon type={w} /> })),
@@ -118,8 +145,17 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
     ...FRESHNESS_DAYS.map((d) => ({ value: String(d), label: t(freshnessKey(d)) })),
   ];
 
+  // Reset returns to the subscription default AND forgets the saved filter, so the
+  // next launch follows the subscription again (not the last custom selection).
+  // draft == store value afterwards, so the instant-apply effect stays quiet.
+  const doReset = useCallback(() => {
+    const def = filterFromSubscription(subscriptionValue(useSubscriptionStore.getState()));
+    useFilterStore.getState().reset(def);
+    setDraft(def);
+  }, []);
+
   const reset = (
-    <button className="sheet__reset" onClick={() => setDraft(EMPTY_FILTER)}>
+    <button className="sheet__reset" onClick={doReset}>
       {t('common.clear')}
     </button>
   );
@@ -205,9 +241,9 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
         </section>
 
         {!isReal ? (
-          <button className="btn btn--primary btn--block" onClick={doApply} aria-busy={counting || undefined}>
+          <button className="btn btn--primary btn--block" onClick={doDone} aria-busy={counting || undefined}>
             {counting ? <span className="btn__spinner" aria-hidden="true" /> : null}
-            {applyLabel}
+            {doneLabel}
           </button>
         ) : null}
       </div>

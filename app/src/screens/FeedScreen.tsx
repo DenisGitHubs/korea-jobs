@@ -145,6 +145,10 @@ export default function FeedScreen() {
 
   const filter = useFilterStore((s) => s.value);
   const applyFilter = useFilterStore((s) => s.apply);
+  // The filter is "ready" once it has been settled: restored from storage
+  // synchronously in main.tsx, or seeded from the subscription below. The feed load
+  // is hard-gated on this so the first request never flies with the empty default.
+  const filterReady = useFilterStore((s) => s.initialized);
   const sig = filterSignature(filter);
   const active = isFilterActive(filter);
 
@@ -189,6 +193,13 @@ export default function FeedScreen() {
   // Load (or restore from cache) whenever the segment or the (All) filter changes.
   useEffect(() => {
     let alive = true;
+    // Hard gate: never fetch before the filter is settled. On a cold start the store
+    // is uninitialized until either main.tsx restored a saved filter (synchronous, so
+    // this is already true on the first render) or initFromSubscription seeded the
+    // subscription default just below. Skeleton (loading=true) stays until then. The
+    // effect re-runs when `filterReady` flips, even if cacheKey is unchanged (e.g. an
+    // empty subscription default), so the fetch is never skipped.
+    if (!filterReady) return;
     // New segment/filter: release any load-more lock still held by the previous view
     // (its in-flight request, if any, self-discards) so this view's pagination is not
     // blocked, and hide a leftover spinner.
@@ -234,7 +245,7 @@ export default function FeedScreen() {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cacheKey, reloadKey]);
+  }, [cacheKey, reloadKey, filterReady]);
 
   // Persist scroll position when leaving the current segment/view.
   useEffect(() => {
