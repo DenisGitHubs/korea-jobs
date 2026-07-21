@@ -10,6 +10,7 @@ import { Tour } from './components/Tour';
 import FeedScreen from './screens/FeedScreen';
 import VacancyScreen from './screens/VacancyScreen';
 import SettingsScreen from './screens/SettingsScreen';
+import SettingsCitiesScreen from './screens/SettingsCitiesScreen';
 import PostScreen from './screens/PostScreen';
 import PartnersScreen from './screens/PartnersScreen';
 import ReferralScreen from './screens/ReferralScreen';
@@ -92,6 +93,7 @@ export default function App() {
           <Route path="feed" element={<FeedScreen />} />
           <Route path="feed/:id" element={<VacancyScreen />} />
           <Route path="settings" element={<SettingsScreen />} />
+          <Route path="settings/cities" element={<SettingsCitiesScreen />} />
           <Route path="post" element={<PostScreen />} />
           <Route path="partners" element={<PartnersScreen />} />
           <Route path="referral" element={<ReferralScreen />} />

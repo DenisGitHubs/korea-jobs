@@ -18,6 +18,13 @@
 // cleared only once a post-run re-check finds no un-notified matching subscriber left for that item.
 // Only city-scoped items are pushed; city-less ones have their pending flag cleared up front. The
 // per-run cap counts MESSAGES (the Bot API ceiling is per message); a 40ms gap paces the sends.
+//
+// MULTI-CITY (multi-city plan): the app-wide city rule lives in kj_city_match (draft_0020) and is
+// used by the feed + digest. notify is DELIBERATELY NARROWER: it pushes ONLY localized offers (those
+// with ≥1 city) and matches a subscriber by ARRAY OVERLAP of s.city_ids && the offer's city_ids (a
+// no-city subscriber, cardinality 0, still gets everything). The subscription `no_city` toggle does
+// NOT affect realtime pushes — it governs only the passive feed/digest surface, where a user browses
+// city-less offers on purpose; a realtime DM about a city-less offer would be noise, so it is skipped.
 
 import { getSql } from '../core/db.js';
 import { getConfigBool, getConfigNumber } from '../config.js';
@@ -79,7 +86,8 @@ interface Displayable {
 
 interface VacRow extends Displayable {
   id: string;
-  city_id: string;
+  city_id: string | null; // PRIMARY city (may be null on a repost-only card); display via coalesce
+  city_ids: string[]; // MULTI-CITY: the full city set, matched against subscribers by array overlap
   visa_types: string[];
   placement_fee: string;
   has_housing: boolean | null;
@@ -88,7 +96,8 @@ interface VacRow extends Displayable {
 
 interface AdRow extends Displayable {
   id: string;
-  city_id: string;
+  city_id: string | null;
+  city_ids: string[];
   visa_types: string[];
   placement_fee: string;
   has_housing: boolean | null;
@@ -179,7 +188,7 @@ function vacSubs(sql: Sql, v: VacRow): Promise<{ user_id: string; telegram_id: s
     select u.id as user_id, u.telegram_id
     from subscriptions s join users u on u.id = s.user_id
     where s.notify and u.allows_write_to_pm and not u.is_blocked
-      and (cardinality(s.city_ids) = 0 or s.city_ids @> array[${v.city_id}::uuid])
+      and (cardinality(s.city_ids) = 0 or s.city_ids && ${v.city_ids}::uuid[])
       and (s.work_types is null or cardinality(s.work_types) = 0 or ${v.work_type}::work_type = any(s.work_types))
       and (
         cardinality(s.visa_types) = 0
@@ -206,7 +215,7 @@ function adSubs(sql: Sql, a: AdRow): Promise<{ user_id: string; telegram_id: str
     from subscriptions s join users u on u.id = s.user_id
     where s.notify and u.allows_write_to_pm and not u.is_blocked
       and u.id is distinct from ${a.author_user_id}::uuid
-      and (cardinality(s.city_ids) = 0 or s.city_ids @> array[${a.city_id}::uuid])
+      and (cardinality(s.city_ids) = 0 or s.city_ids && ${a.city_ids}::uuid[])
       and (s.work_types is null or cardinality(s.work_types) = 0 or ${a.work_type}::work_type = any(s.work_types))
       and (
         cardinality(s.visa_types) = 0
@@ -269,9 +278,11 @@ export async function runNotify(): Promise<NotifyResult> {
   const sql = getSql();
 
   // City-less items are never pushed (subscriptions are city-scoped) — clear their pending flag
-  // so they aren't rescanned every tick. Same rule for vacancies and approved ads.
-  await sql`update vacancies set notify_pending = false where notify_pending and city_id is null`;
-  await sql`update user_ads set notify_pending = false where notify_pending and city_id is null`;
+  // so they aren't rescanned every tick. Same rule for vacancies and approved ads. MULTI-CITY: the
+  // "has a city" test is now cardinality(city_ids)=0 (was city_id is null) — an offer with ANY city
+  // in its set is pushable, matched by array overlap below.
+  await sql`update vacancies set notify_pending = false where notify_pending and cardinality(city_ids) = 0`;
+  await sql`update user_ads set notify_pending = false where notify_pending and cardinality(city_ids) = 0`;
 
   const batch = await getConfigNumber('notify_vacancy_batch', 10);
   const sendCap = await getConfigNumber('notify_send_cap', 200); // messages per run
@@ -279,18 +290,22 @@ export async function runNotify(): Promise<NotifyResult> {
   const appUrl = process.env.APP_URL;
 
   // ── 1. Fetch this tick's pending items (same permissive scope, order, and batch as before) ───
+  // MULTI-CITY: carry the full city_ids set (used for the subscriber overlap match below). The
+  // DISPLAY city is the PRIMARY city_id, or — when a repost never set a primary — the first of
+  // city_ids (coalesce(city_id, city_ids[1])); the join is LEFT so a row is never dropped for a
+  // null primary. The gard above already cleared pending on city-less (cardinality=0) rows.
   const vacs = (await sql`
-    select v.id, v.work_type, v.city_id, c.name as city_name, v.salary_text,
+    select v.id, v.work_type, v.city_id, v.city_ids, c.name as city_name, v.salary_text,
            v.visa_types, v.placement_fee, v.has_housing, v.has_meals
-    from vacancies v join cities c on c.id = v.city_id
+    from vacancies v left join cities c on c.id = coalesce(v.city_id, v.city_ids[1])
     where v.notify_pending and v.is_active and v.duplicate_of is null
     order by v.first_seen_at asc
     limit ${batch}`) as unknown as VacRow[];
 
   const ads = (await sql`
-    select a.id, a.work_type, a.city_id, c.name as city_name, a.salary_text,
+    select a.id, a.work_type, a.city_id, a.city_ids, c.name as city_name, a.salary_text,
            a.visa_types, a.placement_fee, a.has_housing, a.has_meals, a.author_user_id
-    from user_ads a join cities c on c.id = a.city_id
+    from user_ads a left join cities c on c.id = coalesce(a.city_id, a.city_ids[1])
     where a.notify_pending and a.status = 'approved'
     order by a.created_at asc
     limit ${batch}`) as unknown as AdRow[];

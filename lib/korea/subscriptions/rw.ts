@@ -25,6 +25,7 @@ interface Body {
   work_types?: unknown;
   notify?: unknown;
   digest_enabled?: unknown;
+  no_city?: unknown;
   visa_types?: unknown;
   placement_fee?: unknown;
   require_housing?: unknown;
@@ -51,6 +52,10 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
   // digest_enabled: the once-a-day summary opt-in (separate from realtime `notify`). Mirrors
   // notify — absent defaults to true, so the client should always send the current toggle.
   const digestEnabled = body?.digest_enabled === undefined ? true : body?.digest_enabled === true;
+  // no_city (MULTI-CITY): when the user HAS picked cities, whether to ALSO see city-less offers.
+  // Mirrors digest_enabled — absent defaults to true. Ignored server-side when no city is chosen
+  // (kj_city_match returns all). Fed to the feed (buildFilterWhere) + the digest (has_filters).
+  const noCity = body?.no_city === undefined ? true : body?.no_city === true;
   const visaTypes = [...new Set(stringArray(body?.visa_types).filter((v) => VISA_TYPE_SET.has(v)))];
   const placementFee =
     typeof body?.placement_fee === 'string' && PLACEMENT_FEE_SET.has(body.placement_fee) && body.placement_fee !== 'unknown'
@@ -72,11 +77,11 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
 
     await sql`
       insert into subscriptions (
-        user_id, city_ids, work_types, notify, digest_enabled,
+        user_id, city_ids, work_types, notify, digest_enabled, no_city,
         visa_types, placement_fee, require_housing, require_meals
       )
       values (
-        ${user.id}::uuid, ${cityIds}::uuid[], ${workTypes}::work_type[], ${notify}, ${digestEnabled},
+        ${user.id}::uuid, ${cityIds}::uuid[], ${workTypes}::work_type[], ${notify}, ${digestEnabled}, ${noCity},
         ${visaTypes}::visa_type[], ${placementFee}::placement_fee, ${requireHousing}, ${requireMeals}
       )
       on conflict (user_id) do update set
@@ -84,6 +89,7 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
         work_types = excluded.work_types,
         notify = excluded.notify,
         digest_enabled = excluded.digest_enabled,
+        no_city = excluded.no_city,
         visa_types = excluded.visa_types,
         placement_fee = excluded.placement_fee,
         require_housing = excluded.require_housing,
@@ -95,6 +101,7 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
       work_types: workTypes,
       notify,
       digest_enabled: digestEnabled,
+      no_city: noCity,
       visa_types: visaTypes,
       placement_fee: placementFee,
       require_housing: requireHousing,

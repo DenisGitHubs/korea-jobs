@@ -108,9 +108,18 @@ function filterFeed(sp: URLSearchParams): MockVacancy[] {
   const meals = sp.get('meals') === 'true';
   const q = sp.get('q') ?? '';
   const freshness = Number.parseInt(sp.get('freshness') ?? '', 10);
+  // Absent === included; "0" excludes offers with no city. Only acts below when a
+  // city is selected — with no city filter the whole feed is shown.
+  const includeNoCity = sp.get('no_city') !== '0';
 
   let items = ALL;
-  if (cities.length) items = items.filter((v) => v.city != null && cities.includes(v.city.slug));
+  if (cities.length) {
+    items = items.filter((v) => {
+      const vc = v.cities ?? (v.city ? [v.city] : []);
+      if (vc.length === 0) return includeNoCity;
+      return vc.some((c) => cities.includes(c.slug));
+    });
+  }
   if (regions.length) items = items.filter((v) => v.region_slug != null && regions.includes(v.region_slug));
   if (workTypes.length) items = items.filter((v) => workTypes.includes(v.work_type));
 
@@ -163,6 +172,8 @@ function feedItemFromAd(ad: UserAd, postedAt: string): MockVacancy {
   return {
     id: ad.id,
     city: ad.city,
+    // User ads are single-city in the wizard → the feed carries it as `cities`.
+    cities: ad.city ? [{ slug: ad.city.slug, name: ad.city.name }] : [],
     region_slug: ad.region_slug,
     work_type: ad.work_type,
     gender: 'any',
@@ -326,6 +337,7 @@ export async function handleMock(method: string, path: string, body?: unknown): 
       require_housing: typeof b.require_housing === 'boolean' ? b.require_housing : null,
       require_meals: typeof b.require_meals === 'boolean' ? b.require_meals : null,
       digest_enabled: typeof b.digest_enabled === 'boolean' ? b.digest_enabled : true,
+      no_city: typeof b.no_city === 'boolean' ? b.no_city : true,
     };
     me = { ...me, subscription: next };
     return next;

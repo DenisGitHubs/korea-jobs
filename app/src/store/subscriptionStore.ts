@@ -12,6 +12,8 @@ export interface SubscriptionValue {
   requireMeals: boolean | null;
   /** Daily digest opt-in (bot sends one summary a day). Defaults to true. */
   digestEnabled: boolean;
+  /** Include offers with no city (used with the city filter). Defaults to true. */
+  noCity: boolean;
 }
 
 interface SubscriptionState extends SubscriptionValue {
@@ -38,6 +40,7 @@ const EMPTY: SubscriptionValue = {
   requireHousing: null,
   requireMeals: null,
   digestEnabled: true,
+  noCity: true,
 };
 
 function fromSubscription(s: Subscription): SubscriptionValue {
@@ -50,6 +53,7 @@ function fromSubscription(s: Subscription): SubscriptionValue {
     requireHousing: s.require_housing ?? null,
     requireMeals: s.require_meals ?? null,
     digestEnabled: s.digest_enabled ?? true,
+    noCity: s.no_city ?? true,
   };
 }
 
@@ -64,6 +68,7 @@ export function subscriptionValue(s: SubscriptionState): SubscriptionValue {
     requireHousing: s.requireHousing,
     requireMeals: s.requireMeals,
     digestEnabled: s.digestEnabled,
+    noCity: s.noCity,
   };
 }
 
@@ -78,6 +83,7 @@ export function toSubscription(v: SubscriptionValue): Subscription {
     require_housing: v.requireHousing,
     require_meals: v.requireMeals,
     digest_enabled: v.digestEnabled,
+    no_city: v.noCity,
   };
 }
 

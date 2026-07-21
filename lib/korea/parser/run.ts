@@ -26,6 +26,7 @@ import { looksLikeSpam } from './spamfilter.js';
 import { recordAiUsage } from '../ai-usage.js';
 import { recordAiReject } from './reject-log.js';
 import { pickCanonical, isLiveUserHandle, normalizeHandle } from './canonical.js';
+import { buildCityMatcher, detectCitySlugs } from '../cities/detect.js';
 import {
   buildSystemPrompt,
   VISA_TYPES,
@@ -372,9 +373,11 @@ export async function runParse(): Promise<ParseResult> {
   const preAiSkipped = spamIds.length + crossSkips.length + dropInBatch.size;
   if (pending.length === 0) return { processed: preAiSkipped, vacancies: 0 };
 
-  // 2) Active cities → closed enum + prompt context; slug→id + slug→city map.
+  // 2) Active cities → closed enum + prompt context; slug→id + slug→city map. `aliases` (jsonb array
+  // of lowercased spellings) is pulled too so we can compile the multi-city text matcher ONCE for the
+  // whole batch (cities/detect.ts) — the additive city_ids scan complements the AI's single city_slug.
   const cityRows = await sql`
-    select id, slug, name, region_slug from cities where is_active = true order by sort_order, slug`;
+    select id, slug, name, region_slug, aliases from cities where is_active = true order by sort_order, slug`;
   const cities: CityRef[] = cityRows.map((r) => ({
     slug: r.slug as string,
     name: r.name as { ru: string; ko: string; en: string },
@@ -382,6 +385,10 @@ export async function runParse(): Promise<ParseResult> {
   }));
   const regionSlugs = [...new Set(cityRows.map((r) => r.region_slug).filter(Boolean))] as string[];
   const cityIdBySlug = new Map<string, string>(cityRows.map((r) => [r.slug as string, r.id as string]));
+  // Compiled ONCE, reused for every row below (the regexes are shared → cheap per message).
+  const cityMatcher = buildCityMatcher(
+    cityRows.map((r) => ({ slug: r.slug as string, aliases: r.aliases })),
+  );
   // city/region are guided by the prompt (not a schema enum), so re-close the set on the
   // server: unknown city slug -> null (cityIdBySlug.get below), unknown region -> null here.
   const regionSlugSet = new Set<string>(regionSlugs);
@@ -534,6 +541,25 @@ export async function runParse(): Promise<ParseResult> {
     // inside this text). scrubContacts strips phones/@handles/t.me·wa.me·kakao links.
     const description = scrubContacts((row.text as string | null) ?? null);
 
+    // MULTI-CITY (multi-city plan): city_ids = the DISTINCT union of the AI's primary city (cityId),
+    // every city named in the ORIGINAL text (NOT cleanForAi — cleaning could drop a city), and every
+    // city the source channel's title/notes name (source hint). detect passes the hint as CONTEXT too
+    // so a bare "Кванджу" in a Gyeonggi channel resolves correctly. city_id stays the PRIMARY city.
+    const srcTitle = ((row.source_title as string | null) ?? '').trim();
+    const srcNotes = ((row.source_notes as string | null) ?? '').trim();
+    const srcHint = [srcTitle, srcNotes].filter(Boolean).join(' — ');
+    const cityIdSet = new Set<string>();
+    if (cityId) cityIdSet.add(cityId);
+    const detectedSlugs = [
+      ...detectCitySlugs((row.text as string | null) ?? '', cityMatcher, { hintText: srcHint }),
+      ...detectCitySlugs(srcHint, cityMatcher),
+    ];
+    for (const slug of detectedSlugs) {
+      const id = cityIdBySlug.get(slug);
+      if (id) cityIdSet.add(id);
+    }
+    const cityIds = [...cityIdSet];
+
     // Takedown / admin-hidden gate (007 CRIT + owner-hide guard). Never resurrect content taken
     // down for a ToS 5.2(i) contact violation, NOR content the admin manually hid via rep:hide.
     // The prospective content_hash is computed via kj_content_hash (an exact mirror of the
@@ -574,13 +600,13 @@ export async function runParse(): Promise<ParseResult> {
       // description, and the complaint snippet (reports/rw.ts) already falls back title -> description.
       upserted = await sql`
         insert into vacancies (
-          city_id, region_slug, work_type, gender, lang,
+          city_id, city_ids, region_slug, work_type, gender, lang,
           title, description, employer,
           contact_raw, contact_kind,
           visa_types, placement_fee, has_housing, has_meals,
           source_id, raw_message_id, posted_at, dedup_extra
         ) values (
-          ${cityId}::uuid, ${regionSlug}, ${workType}::work_type, ${gender}::gender, ${null},
+          ${cityId}::uuid, ${cityIds}::uuid[], ${regionSlug}, ${workType}::work_type, ${gender}::gender, ${null},
           ${null}, ${description}, ${it.employer ?? null},
           ${contactRaw}, ${contactKind}::contact_kind,
           ${visaTypes}::visa_type[], ${placementFee}::placement_fee, ${hasHousing}, ${hasMeals},
@@ -590,6 +616,12 @@ export async function runParse(): Promise<ParseResult> {
         do update set
           repost_count = vacancies.repost_count + 1,
           last_seen_at = now(),
+          -- MULTI-CITY additive enrichment: a repost may name a city the first sighting missed.
+          -- UNION the existing and incoming city sets (DISTINCT); never shrink. city_id (PRIMARY) stays.
+          city_ids = (
+            select coalesce(array_agg(distinct e), '{}'::uuid[])
+            from unnest(vacancies.city_ids || excluded.city_ids) as e
+          ),
           -- Owner rule 2026-07-19: lift posted_at to this fresh sighting (the feed sorts posted_at
           -- desc) past the same cooldown. No is_active here: this partial index only matches a live
           -- canonical (where is_active), so a conflict is never with a dark card.

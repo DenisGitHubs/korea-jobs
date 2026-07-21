@@ -77,6 +77,16 @@ export function IconDoc() {
   );
 }
 
+/** Map pin with a dash instead of a dot — "city not specified" (muted). */
+export function IconGeoUnknown() {
+  return (
+    <svg {...base}>
+      <path d="M12 21s7-5.5 7-11a7 7 0 0 0-14 0c0 5.5 7 11 7 11z" />
+      <path d="M9 10h6" />
+    </svg>
+  );
+}
+
 /** Handshake-ish paper plane — "message sent" (partners) state. */
 export function IconSent() {
   return (

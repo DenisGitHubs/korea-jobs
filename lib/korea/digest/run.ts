@@ -22,6 +22,12 @@
 // necessity (the notify version matches ONE vacancy against MANY subs; this matches ONE sub against
 // MANY vacancies — same semantics, inverted direction). Keep the two lists in lockstep.
 //
+// MULTI-CITY: the CITY predicate here is the SHARED kj_city_match(s.city_ids, v.city_ids, s.no_city)
+// (draft_0020) — the EXACT same rule the feed applies (vacancies/read.ts), so the digest count can
+// never drift from what the feed shows. This is why the digest is the no_city-aware surface while
+// notify (realtime) is deliberately narrower and ignores no_city (see notify/run.ts). `no_city=false`
+// is itself a filter, so it also flips has_filters -> "по твоим фильтрам" wording.
+//
 // Caps/pacing mirror notify: at most digest_send_cap DMs per run, 40ms between sends. A 403 flips
 // users.is_blocked; a 429 sleeps and stops the run (the rest roll into tomorrow's digest); a
 // transient error skips that user for this run (no stamp -> retried next day).
@@ -144,12 +150,13 @@ export async function runDigest(now: Date = new Date()): Promise<DigestResult> {
           or s.placement_fee is not null
           or s.require_housing is true
           or s.require_meals is true
+          or s.no_city is false
         ) as has_filters,
         (
           select count(*) from vacancies v
           where v.is_active and v.duplicate_of is null
             and v.first_seen_at > now() - interval '24 hours'
-            and (cardinality(s.city_ids) = 0 or (v.city_id is not null and s.city_ids @> array[v.city_id]))
+            and kj_city_match(s.city_ids, v.city_ids, s.no_city)
             and (s.work_types is null or cardinality(s.work_types) = 0 or v.work_type = any(s.work_types))
             and (
               cardinality(s.visa_types) = 0

@@ -50,6 +50,9 @@ interface Row {
   id: string;
   city_slug: string | null;
   city_name: unknown;
+  // MULTI-CITY: the FULL city set of this offer, main city first then the rest by slug (built in SQL
+  // by json_agg over city_ids; see citiesAggSql). Same {slug,name} shape as the single `city` field.
+  cities: unknown;
   region_slug: string | null;
   work_type: string;
   gender: string;
@@ -87,6 +90,9 @@ function toView(r: Row) {
   return {
     id: r.id,
     city: r.city_slug ? { slug: r.city_slug, name: r.city_name } : null,
+    // MULTI-CITY (contract): the full city list, main city first. Same {slug,name} items as `city`
+    // (kept for compat). Empty [] when the offer has no cities. The SQL guarantees the ordering.
+    cities: Array.isArray(r.cities) ? r.cities : [],
     region_slug: r.region_slug ?? null,
     work_type: r.work_type,
     gender: r.gender,
@@ -142,6 +148,9 @@ interface FeedFilters {
   meals: boolean;
   q: string;
   freshnessDays: number | null;
+  // MULTI-CITY (contract): whether to ALSO show city-less offers when a city IS selected. Default
+  // true (query param absent). Ignored when no city is selected (kj_city_match returns all anyway).
+  noCity: boolean;
 }
 
 /** Parse the shared VacancyQuery filters from the request (identical for feed + count). */
@@ -151,6 +160,9 @@ function parseFeedFilters(req: ReqLike): FeedFilters {
   const paidRaw = queryParam(req, 'paid');
   const qRaw = queryParam(req, 'q') ?? queryParam(req, 'keywords') ?? '';
   const freshRaw = Number(queryParam(req, 'freshness'));
+  // no_city: "1" (default/absent) shows city-less offers alongside the selected cities; "0" hides
+  // them. Only meaningful when a city IS selected — kj_city_match ignores it otherwise (contract).
+  const noCityRaw = queryParam(req, 'no_city');
   return {
     slugs: csv('cities'),
     workTypes: csv('work_types').filter((w) => WORK_TYPE_SET.has(w)),
@@ -161,13 +173,29 @@ function parseFeedFilters(req: ReqLike): FeedFilters {
     meals: ['1', 'true'].includes(queryParam(req, 'meals') ?? ''),
     q: qRaw.replace(/\./g, ' ').trim(),
     freshnessDays: FRESHNESS_DAYS.has(freshRaw) ? freshRaw : null,
+    noCity: !(noCityRaw === '0' || noCityRaw === 'false'),
   };
+}
+
+// MULTI-CITY city semantics are SHARED across the app via kj_city_match(selected, detected, no_city)
+// (draft_0020) so the feed, the /count preview and the daily digest apply the SAME rule and never
+// drift. NOTE: notify/run.ts is DELIBERATELY narrower — it only pushes localized (city-scoped) offers
+// and ignores no_city — see its header. Here (feed/detail/saved) is the full, no_city-aware surface.
+//
+// citiesAggSql — build a row's `cities` json array (contract): [{slug,name}, ...] resolved from the
+// uuid[] `idsCol`, ORDERED main city first (the row's `idCol` == city_id) then the rest by slug. Names
+// are the cities.name jsonb (identical shape to the single `city.name`). Empty offers -> [].
+function citiesAggSql(idCol: string, idsCol: string): string {
+  return `(select coalesce(json_agg(json_build_object('slug', cc.slug, 'name', cc.name)
+      order by (cc.id = ${idCol}) desc, cc.slug), '[]'::json)
+    from cities cc where cc.id = any(${idsCol}))`;
 }
 
 // The feed's row set: scraped vacancies ∪ APPROVED, unexpired user ads (a user ad's
 // posted_at is greatest(created_at, bumped_at)). `search_tsv` is carried for the keyword filter. This is
 // the SINGLE source of the union — the feed and the counter both wrap it, so they can
-// never diverge on which rows exist.
+// never diverge on which rows exist. city_id + city_ids are projected so the outer query can build
+// the `cities` array and apply the kj_city_match city filter.
 //
 // `is_saved`: when a caller id placeholder is given, LEFT JOIN the caller's bookmarks so
 // each row carries whether it is saved. scraped rows join saved_vacancies; user ads join
@@ -195,7 +223,7 @@ function feedUnionSql(savedUserPh: string | null): string {
     : '';
   const arSel = savedUserPh ? '(ar.user_id is not null)' : 'false';
   return `
-  select v.id, c.slug as city_slug, c.name as city_name, v.region_slug,
+  select v.id, c.slug as city_slug, c.name as city_name, v.city_id as city_id, v.city_ids as city_ids, v.region_slug,
          v.work_type::text as work_type, v.gender::text as gender,
          v.salary_text, v.salary_min, v.salary_max, v.salary_period::text as salary_period,
          v.employer, v.description, v.posted_at,
@@ -209,7 +237,7 @@ function feedUnionSql(savedUserPh: string | null): string {
   ${crJoin}
   where v.is_active and v.duplicate_of is null
   union all
-  select a.id, c.slug as city_slug, c.name as city_name, a.region_slug,
+  select a.id, c.slug as city_slug, c.name as city_name, a.city_id as city_id, a.city_ids as city_ids, a.region_slug,
          a.work_type::text as work_type, 'any'::text as gender,
          a.salary_text, null::int as salary_min, null::int as salary_max, null::text as salary_period,
          null::text as employer, a.description,
@@ -235,7 +263,7 @@ function savedUnionSql(userPh: string): string {
   // is_revealed here uses the SAME caller-scoped reveal audit as the main feed (contact_reveals /
   // ad_contact_reveals), LEFT-joined on the bookmarked item's id + the fixed caller id (PK -> no fan-out).
   return `
-  select v.id, c.slug as city_slug, c.name as city_name, v.region_slug,
+  select v.id, c.slug as city_slug, c.name as city_name, v.city_id as city_id, v.city_ids as city_ids, v.region_slug,
          v.work_type::text as work_type, v.gender::text as gender,
          v.salary_text, v.salary_min, v.salary_max, v.salary_period::text as salary_period,
          v.employer, v.description, v.posted_at,
@@ -250,7 +278,7 @@ function savedUnionSql(userPh: string): string {
   left join contact_reveals cr on cr.vacancy_id = v.id and cr.user_id = ${userPh}::uuid
   where s.user_id = ${userPh}::uuid
   union all
-  select a.id, c.slug as city_slug, c.name as city_name, a.region_slug,
+  select a.id, c.slug as city_slug, c.name as city_name, a.city_id as city_id, a.city_ids as city_ids, a.region_slug,
          a.work_type::text as work_type, 'any'::text as gender,
          a.salary_text, null::int as salary_min, null::int as salary_max, null::text as salary_period,
          null::text as employer, a.description,
@@ -284,7 +312,6 @@ function buildFilterWhere(f: FeedFilters): { where: string; params: unknown[] } 
     params.push(v);
     return `$${params.length}`;
   };
-  const citiesEmpty = f.slugs.length === 0;
   const wtEmpty = f.workTypes.length === 0;
   const regionsEmpty = f.regions.length === 0;
   const visaEmpty = f.visa.length === 0;
@@ -292,7 +319,14 @@ function buildFilterWhere(f: FeedFilters): { where: string; params: unknown[] } 
   const hasQ = f.q.length > 0;
   const noFreshness = f.freshnessDays === null;
 
-  const where = `where (${ph(citiesEmpty)} or f.city_slug = any(${ph(f.slugs)}::text[]))
+  // MULTI-CITY filter via the SHARED kj_city_match(selected, detected, no_city) predicate (draft_0020):
+  //   * selected = the picked slugs resolved to uuids (a single, non-correlated subquery -> InitPlan,
+  //     evaluated ONCE); empty selection -> the function returns true (show everything).
+  //   * detected = the row's f.city_ids (the offer's full city set).
+  //   * no_city  = only ever consulted when a city IS selected AND the offer is city-less.
+  const where = `where kj_city_match(
+        (select coalesce(array_agg(id), '{}'::uuid[]) from cities where slug = any(${ph(f.slugs)}::text[])),
+        f.city_ids, ${ph(f.noCity)})
       and (${ph(wtEmpty)} or f.work_type = any(${ph(f.workTypes)}::text[]))
       and (${ph(regionsEmpty)} or f.region_slug = any(${ph(f.regions)}::text[]))
       and (${ph(visaEmpty)} or cardinality(f.visa_types) = 0 or 'any' = any(f.visa_types) or f.visa_types && ${ph(f.visa)}::visa_type[])
@@ -333,7 +367,8 @@ export async function vacanciesFeed(req: ReqLike, res: ResLike): Promise<void> {
     // only in the outer SELECT lets the neon driver parse it (enum arrays otherwise arrive as
     // a raw "{...}" string that toView's Array.isArray guard collapses to []).
     const text =
-      `select f.id, f.city_slug, f.city_name, f.region_slug, f.work_type, f.gender,
+      `select f.id, f.city_slug, f.city_name, ${citiesAggSql('f.city_id', 'f.city_ids')} as cities,
+             f.region_slug, f.work_type, f.gender,
              f.salary_text, f.salary_min, f.salary_max, f.salary_period, f.employer,
              f.description, f.posted_at, f.has_contact, f.visa_types::text[] as visa_types, f.placement_fee,
              f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.is_revealed
@@ -399,7 +434,11 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
   try {
     const sql = getSql();
     const vac = (await sql`
-      select v.id, c.slug as city_slug, c.name as city_name, v.region_slug,
+      select v.id, c.slug as city_slug, c.name as city_name,
+             (select coalesce(json_agg(json_build_object('slug', cc.slug, 'name', cc.name)
+                order by (cc.id = v.city_id) desc, cc.slug), '[]'::json)
+              from cities cc where cc.id = any(v.city_ids)) as cities,
+             v.region_slug,
              v.work_type::text as work_type, v.gender::text as gender,
              v.salary_text, v.salary_min, v.salary_max, v.salary_period::text as salary_period,
              v.employer, v.description, v.posted_at,
@@ -434,7 +473,11 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
     }
 
     const ad = (await sql`
-      select a.id, c.slug as city_slug, c.name as city_name, a.region_slug,
+      select a.id, c.slug as city_slug, c.name as city_name,
+             (select coalesce(json_agg(json_build_object('slug', cc.slug, 'name', cc.name)
+                order by (cc.id = a.city_id) desc, cc.slug), '[]'::json)
+              from cities cc where cc.id = any(a.city_ids)) as cities,
+             a.region_slug,
              a.work_type::text as work_type, 'any'::text as gender,
              a.salary_text, null::int as salary_min, null::int as salary_max, null::text as salary_period,
              null::text as employer, a.description,
@@ -588,7 +631,8 @@ export async function savedFeed(req: ReqLike, res: ResLike): Promise<void> {
     // (see vacanciesFeed). savedUnionSql itself is left as visa_type[]; the saved feed applies
     // no visa filter, but keeping the cast at the projection boundary mirrors the main feed.
     const text =
-      `select f.id, f.city_slug, f.city_name, f.region_slug, f.work_type, f.gender,
+      `select f.id, f.city_slug, f.city_name, ${citiesAggSql('f.city_id', 'f.city_ids')} as cities,
+             f.region_slug, f.work_type, f.gender,
              f.salary_text, f.salary_min, f.salary_max, f.salary_period, f.employer,
              f.description, f.posted_at, f.has_contact, f.visa_types::text[] as visa_types, f.placement_fee,
              f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.is_revealed, f.saved_at

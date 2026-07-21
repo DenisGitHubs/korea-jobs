@@ -446,8 +446,10 @@ function QuickFilters({
   if (filter.cities.length)
     chips.push({
       key: 'cities',
-      label: `${t('filter.citiesSection')} · ${filter.cities.length}`,
-      onRemove: () => apply({ ...filter, cities: [] }),
+      label: `${t('filter.citiesSection')} · ${filter.cities.length}${
+        filter.noCity ? ` + ${t('filter.unspecifiedShort')}` : ''
+      }`,
+      onRemove: () => apply({ ...filter, cities: [], noCity: true }),
     });
 
   if (!chips.length) return null;

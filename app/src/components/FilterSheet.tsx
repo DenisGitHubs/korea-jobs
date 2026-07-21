@@ -8,7 +8,10 @@ import { api } from '../shared/api/client';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUiStore } from '../store/uiStore';
 import { useMainButton } from '../hooks/useMainButton';
+import { useCities } from '../hooks/useCities';
+import { citiesSummary } from '../lib/cities';
 import { Sheet } from './Sheet';
+import { CityPicker } from './CityPicker';
 import { Field } from './Field';
 import { ChipSelect, type ChipOption } from './ChipSelect';
 import { Switch } from './Switch';
@@ -23,9 +26,13 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
   const { t } = useTranslation();
   const apply = useFilterStore((s) => s.apply);
   const isReal = useSettingsStore((s) => s.isReal);
+  const lang = useSettingsStore((s) => s.lang);
   const setTabBarHidden = useUiStore((s) => s.setTabBarHidden);
+  const { bySlug } = useCities();
 
   const [draft, setDraft] = useState<FilterValue>(EMPTY_FILTER);
+  // Second sheet (city picker) stacked over the filter.
+  const [cityOpen, setCityOpen] = useState(false);
   // Live match count for the current draft; null = unknown (soft-degrade to plain label).
   const [count, setCount] = useState<number | null>(null);
   // True while a fresh count is being (re)computed for the current draft. We keep
@@ -75,6 +82,11 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
     return () => setTabBarHidden(false);
   }, [open, setTabBarHidden]);
 
+  // Closing the filter also dismisses the stacked city picker.
+  useEffect(() => {
+    if (!open) setCityOpen(false);
+  }, [open]);
+
   const patch = useCallback((p: Partial<FilterValue>) => setDraft((d) => ({ ...d, ...p })), []);
 
   const doApply = useCallback(() => {
@@ -112,9 +124,26 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
     </button>
   );
 
+  const citiesLabel = citiesSummary(draft.cities, draft.noCity, bySlug, lang, t);
+
   return (
+    <>
     <Sheet open={open} onClose={onClose} title={t('filter.title')} headerAction={reset}>
       <div className="filter">
+        <section className="filter__block">
+          <div className="section">
+            <button className="row row--nav" onClick={() => setCityOpen(true)}>
+              <div className="row__label">
+                <div>{t('filter.citiesSection')}</div>
+                <div className="row__sub row__sub--ellipsis">{citiesLabel}</div>
+              </div>
+              <span className="row__chevron" aria-hidden>
+                ›
+              </span>
+            </button>
+          </div>
+        </section>
+
         <section className="filter__block">
           <div className="region__title">{t('filter.keywords')}</div>
           <Field
@@ -183,5 +212,26 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
         ) : null}
       </div>
     </Sheet>
+
+    {/* Second sheet stacked over the filter — the city picker. The MainButton is
+        already taken by "Show N", so this one confirms with an in-sheet footer. */}
+    <Sheet
+      open={cityOpen}
+      onClose={() => setCityOpen(false)}
+      title={t('filter.citiesSection')}
+      footer={
+        <button className="btn btn--primary btn--block" onClick={() => setCityOpen(false)}>
+          {t('common.done')}
+        </button>
+      }
+    >
+      <CityPicker
+        value={draft.cities}
+        onChange={(next) => patch({ cities: next })}
+        noCity={draft.noCity}
+        onNoCityChange={(b) => patch({ noCity: b })}
+      />
+    </Sheet>
+    </>
   );
 }

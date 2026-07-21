@@ -13,6 +13,9 @@ export interface FilterValue {
   /** Keyword string as typed ("слово. слово"); passed through as `q`. */
   keywords: string;
   freshness: 1 | 3 | 7 | 14 | null;
+  /** Also include offers with no city. Acts only when `cities` is non-empty;
+   *  with no cities selected the whole feed is shown and this is ignored. */
+  noCity: boolean;
 }
 
 interface FilterState {
@@ -33,13 +36,14 @@ export const EMPTY_FILTER: FilterValue = {
   meals: false,
   keywords: '',
   freshness: null,
+  noCity: true,
 };
 
 export function filterFromSubscription(s: SubscriptionValue): FilterValue {
   return {
-    // City filter is temporarily hidden from the UI — don't seed it into the
-    // feed filter so the live feed is never silently narrowed by a city.
-    cities: [],
+    // Seed the temporary feed filter from the persistent subscription: the feed
+    // opens from the saved cities (and the "no city" preference) by default.
+    cities: [...s.citySlugs],
     workTypes: [...s.workTypes],
     visa: [...s.visaTypes],
     paid: s.placementFee === 'free' || s.placementFee === 'paid' ? s.placementFee : null,
@@ -47,6 +51,7 @@ export function filterFromSubscription(s: SubscriptionValue): FilterValue {
     meals: s.requireMeals === true,
     keywords: '',
     freshness: null,
+    noCity: s.noCity,
   };
 }
 
@@ -75,6 +80,9 @@ export function filterSignature(v: FilterValue): string {
     m: v.meals,
     q: v.keywords.trim().toLowerCase(),
     f: v.freshness,
+    // no_city only affects results while a city is selected — keep it out of the
+    // signature otherwise, so toggling it with no cities never churns the cache.
+    nc: v.cities.length ? v.noCity : true,
   });
 }
 
@@ -89,6 +97,8 @@ export function filterToQuery(v: FilterValue): VacancyQuery {
     meals: v.meals || undefined,
     q: v.keywords.trim() ? v.keywords.trim() : undefined,
     freshness: v.freshness ?? undefined,
+    // Only meaningful with a city selected (server ignores it otherwise).
+    no_city: v.cities.length ? v.noCity : undefined,
   };
 }
 

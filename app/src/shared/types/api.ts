@@ -84,6 +84,14 @@ export interface VacancyContact {
 export interface VacancyView {
   id: string;
   city: { slug: string; name: Localized } | null;
+  /**
+   * All cities of the offer (multi-city listings). The FIRST element is the main
+   * city (the one behind `city`/`city_id`); the rest follow deterministically by
+   * slug. Empty array = city not specified. `city` is kept for backward compat.
+   * Optional so a real backend that has not shipped the field yet degrades to
+   * `[city]` on the client.
+   */
+  cities?: Array<{ slug: string; name: Localized }>;
   region_slug: string | null;
   work_type: WorkType;
   gender: Gender;
@@ -175,6 +183,12 @@ export interface VacancyQuery {
   q?: string;
   /** posted within the last N days */
   freshness?: 1 | 3 | 7 | 14;
+  /**
+   * Whether to also include offers with NO city ("city not specified").
+   * Acts ONLY when at least one city is selected; with an empty city list the
+   * whole feed is shown and this flag is ignored. Absent === true (included).
+   */
+  no_city?: boolean;
   cursor?: string;
 }
 
@@ -191,6 +205,11 @@ export interface Subscription {
   require_meals: boolean | null;
   /** Daily digest opt-in (bot sends one summary message a day). Defaults to true. */
   digest_enabled?: boolean;
+  /**
+   * Also notify about / show offers with no city when the city filter is set.
+   * Defaults to true (optional so older payloads default to "included").
+   */
+  no_city?: boolean;
 }
 
 export interface TermsState {

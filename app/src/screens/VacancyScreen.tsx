@@ -8,7 +8,7 @@ import { feeKey, genderKey, visaKey } from '../shared/labels';
 import { useBackButton } from '../hooks/useBackButton';
 import { useSettingsStore } from '../store/settingsStore';
 import { applySaveToCaches, revertSaveInCaches } from '../store/feedStore';
-import { localized } from '../lib/localized';
+import { cityLabel } from '../lib/cities';
 import { isStale, timeAgo } from '../lib/format';
 import { AppBar } from '../components/AppBar';
 import { Loading } from '../components/Loading';
@@ -242,7 +242,10 @@ export default function VacancyScreen() {
           <>
             <div className="hero">
               <h1 className="hero__title">
-                {vacancy.city ? localized(vacancy.city.name, lang) : t('region.other')}
+                {(() => {
+                  const cs = vacancy.cities?.length ? vacancy.cities : vacancy.city ? [vacancy.city] : [];
+                  return cs.length ? cs.map((c) => cityLabel(c, lang, t)).join(' · ') : t('city.unspecified');
+                })()}
               </h1>
               <p className="hero__sub">{timeAgo(vacancy.posted_at, t)}</p>
               {isStale(vacancy.posted_at) ? (

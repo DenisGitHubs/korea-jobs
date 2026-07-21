@@ -22,6 +22,38 @@ import { sendMessage } from '../bot/telegram.js';
 import { adminRecipients } from '../admin/auth.js';
 import { recordModerationExample, decideAdModeration } from './moderation.js';
 import { parseAdInput, adModText, UUID_RE, type AdBody } from './input.js';
+import { buildCityMatcher, detectCitySlugs } from '../cities/detect.js';
+
+/** MULTI-CITY: an ad's city_ids = the DISTINCT union of the PRIMARY city (from the form/AI, cityId)
+ *  and every city detected in the free-text description (owner-approved). The main city / city_id is
+ *  ALWAYS the form pick — detection only ADDS extra cities so a "Сеул и Ансан" ad reaches both filters.
+ *  Loads aliases once per request (ads are low-volume, user-initiated). Returns a uuid[]. */
+export async function resolveAdCityIds(
+  sql: ReturnType<typeof getSql>,
+  primaryCityId: string | null,
+  description: string | null,
+): Promise<string[]> {
+  const set = new Set<string>();
+  if (primaryCityId) set.add(primaryCityId);
+  try {
+    const rows = (await sql`select id, slug, aliases from cities where is_active = true`) as unknown as {
+      id: string;
+      slug: string;
+      aliases: unknown;
+    }[];
+    const matcher = buildCityMatcher(rows.map((r) => ({ slug: r.slug, aliases: r.aliases })));
+    const idBySlug = new Map(rows.map((r) => [r.slug, r.id]));
+    for (const slug of detectCitySlugs(description ?? '', matcher)) {
+      const id = idBySlug.get(slug);
+      if (id) set.add(id);
+    }
+  } catch {
+    // Best-effort enrichment: on a cities read fault fall back to just the primary city.
+    // eslint-disable-next-line no-console
+    console.error('[ads] city_ids detection skipped');
+  }
+  return [...set];
+}
 
 /** Notify admins about a pending ad with inline Approve/Reject buttons. Recipients =
  *  env ADMIN_TELEGRAM_IDS ∪ users.role='admin'. Empty list → silent (unchanged). */
@@ -79,14 +111,16 @@ export async function adsCreate(req: ReqLike, res: ResLike): Promise<void> {
 
   try {
     const sql = getSql();
+    // MULTI-CITY: primary city (city_id) is the form pick; city_ids ADDS any city named in the text.
+    const cityIds = await resolveAdCityIds(sql, cityId, f.description);
     const rows = (await sql`
       insert into user_ads (
-        author_user_id, city_id, city_text, region_slug, work_type, visa_types, placement_fee,
+        author_user_id, city_id, city_ids, city_text, region_slug, work_type, visa_types, placement_fee,
         has_housing, has_meals, salary_text, title, description, contact_raw, contact_kind,
         housing_terms, meals_info, schedule, status, moderated_at, reject_reason, ai_confidence,
         expires_at, notify_pending
       ) values (
-        ${auth.user.id}::uuid, ${cityId}::uuid, ${cityText}, ${regionSlug}, ${f.workType}::work_type,
+        ${auth.user.id}::uuid, ${cityId}::uuid, ${cityIds}::uuid[], ${cityText}, ${regionSlug}, ${f.workType}::work_type,
         ${f.visaTypes}::visa_type[], ${f.placementFee}::placement_fee,
         ${f.hasHousing}, ${f.hasMeals}, ${f.salaryText}, ${f.title}, ${f.description}, ${f.contactRaw}, ${f.contactKind}::contact_kind,
         ${f.housingTerms}, ${f.mealsInfo}, ${f.schedule},

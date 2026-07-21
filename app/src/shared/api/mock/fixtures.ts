@@ -33,6 +33,11 @@ export const CITIES: City[] = [
   { slug: 'suwon', name: { ru: 'Сувон', ko: '수원', en: 'Suwon' }, region_slug: 'gyeonggi' },
   { slug: 'ansan', name: { ru: 'Ансан', ko: '안산', en: 'Ansan' }, region_slug: 'gyeonggi' },
   { slug: 'hwaseong', name: { ru: 'Хвасон', ko: '화성', en: 'Hwaseong' }, region_slug: 'gyeonggi' },
+  { slug: 'siheung', name: { ru: 'Сихын', ko: '시흥', en: 'Siheung' }, region_slug: 'gyeonggi' },
+  // Namesake of the metropolis (slug 'gwangju') — disambiguated by province suffix
+  // wherever it is shown out of context (see lib/cities.ts). Mirrors the real seed row
+  // (db/migrations/draft_seed.sql): slug + name kept in sync so mock == prod.
+  { slug: 'gwangju_gyeonggi', name: { ru: 'Кванджу (Кёнги)', ko: '광주 (경기)', en: 'Gwangju (Gyeonggi)' }, region_slug: 'gyeonggi' },
   { slug: 'pyeongtaek', name: { ru: 'Пхёнтхэк', ko: '평택', en: 'Pyeongtaek' }, region_slug: 'gyeonggi' },
   { slug: 'bucheon', name: { ru: 'Пучхон', ko: '부천', en: 'Bucheon' }, region_slug: 'gyeonggi' },
   { slug: 'seongnam', name: { ru: 'Соннам', ko: '성남', en: 'Seongnam' }, region_slug: 'gyeonggi' },
@@ -162,10 +167,82 @@ function hasAny(text: string, hints: string[]): boolean {
  */
 export type MockVacancy = VacancyView & { repost?: boolean };
 
+/** Look up {slug,name} tuples for a set of city slugs (main city first). */
+function citiesOf(...slugs: string[]): Array<{ slug: string; name: City['name'] }> {
+  return slugs
+    .map((s) => cityBySlug.get(s))
+    .filter((c): c is City => Boolean(c))
+    .map((c) => ({ slug: c.slug, name: c.name }));
+}
+
+/**
+ * Two hand-crafted listings exercising the multi-city contract:
+ *   - `v-multi` spans three Gyeonggi cities (main = Ansan, a "frequent" city).
+ *   - `v-nocity` has NO city at all ("Город не указан" path on the card).
+ */
+function specialVacancies(now: number): MockVacancy[] {
+  return [
+    {
+      id: 'v-multi',
+      city: { slug: 'ansan', name: cityBySlug.get('ansan')!.name },
+      cities: citiesOf('ansan', 'hwaseong', 'siheung'),
+      region_slug: 'gyeonggi',
+      work_type: 'factory',
+      gender: 'any',
+      salary_text: '시급 12,000₩, развозка по городам',
+      salary_min: 12000,
+      salary_max: null,
+      salary_period: 'hour',
+      employer: '경기 산업',
+      description:
+        'Набор на заводы в Ансане, Хвасоне и Сихыне — развозка между площадками. График 5/2, оформление по визе, общежитие рядом.',
+      posted_at: new Date(now - 15 * 60000).toISOString(),
+      has_contact: true,
+      visa_types: VISA_BY_WORK.factory,
+      placement_fee: 'free',
+      has_housing: true,
+      has_meals: null,
+      source_kind: 'scraped',
+      repost: false,
+      is_saved: false,
+      is_revealed: false,
+      source_post_url: null,
+      contact: { kind: 'phone', value: '010-3210-9876' },
+    },
+    {
+      id: 'v-nocity',
+      city: null,
+      cities: [],
+      region_slug: null,
+      work_type: 'services',
+      gender: 'any',
+      salary_text: '일당 130,000₩',
+      salary_min: 130000,
+      salary_max: null,
+      salary_period: 'day',
+      employer: null,
+      description:
+        'Разнорабочие с выездом по стране — город уточняется под конкретный объект. Оплата ежедневная, есть подработка на выходных.',
+      posted_at: new Date(now - 33 * 60000).toISOString(),
+      has_contact: true,
+      visa_types: VISA_BY_WORK.services,
+      placement_fee: 'unknown',
+      has_housing: null,
+      has_meals: null,
+      source_kind: 'scraped',
+      repost: false,
+      is_saved: false,
+      is_revealed: false,
+      source_post_url: null,
+      contact: { kind: 'telegram', value: '@korea_daywork' },
+    },
+  ];
+}
+
 /** Build view models with real timestamps, newest first. */
 export function buildVacancies(): MockVacancy[] {
   const now = Date.now();
-  return RAW.map((r, i): MockVacancy => {
+  const base = RAW.map((r, i): MockVacancy => {
     const c = cityBySlug.get(r.city) ?? null;
     const source_kind: SourceKind = USER_SOURCE.has(r.id) ? 'user' : 'scraped';
     const has_housing = hasAny(r.description + (r.salary_text ?? ''), HOUSING_HINTS)
@@ -177,6 +254,7 @@ export function buildVacancies(): MockVacancy[] {
     return {
       id: r.id,
       city: c ? { slug: c.slug, name: c.name } : null,
+      cities: c ? [{ slug: c.slug, name: c.name }] : [],
       region_slug: c?.region_slug ?? null,
       work_type: r.work_type,
       gender: r.gender,
@@ -201,7 +279,8 @@ export function buildVacancies(): MockVacancy[] {
       // Kept internally so the reveal endpoint can serve it; the feed strips it.
       contact: r.contact ?? undefined,
     };
-  }).sort((a, b) => b.posted_at.localeCompare(a.posted_at));
+  });
+  return [...base, ...specialVacancies(now)].sort((a, b) => b.posted_at.localeCompare(a.posted_at));
 }
 
 /** Unparsed listings (contacts already scrubbed) for the "Не разобрано" segment. */
@@ -277,6 +356,7 @@ export const DEFAULT_ME: Me = {
     require_housing: null,
     require_meals: null,
     digest_enabled: true,
+    no_city: true,
   },
 };
 

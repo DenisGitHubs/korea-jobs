@@ -107,6 +107,8 @@ function vacancyQuery(q: VacancyQuery): string {
     meals: q.meals ? 'true' : undefined,
     q: q.q?.trim() ? q.q.trim() : undefined,
     freshness: q.freshness,
+    // "1"/"0"; omitted when unset (server treats absent as "1" = included).
+    no_city: q.no_city === undefined ? undefined : q.no_city ? '1' : '0',
     cursor: q.cursor,
   });
 }

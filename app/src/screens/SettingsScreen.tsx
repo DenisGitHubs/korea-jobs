@@ -8,6 +8,8 @@ import { WorkTypeIcon } from '../components/icons/WorkTypeIcon';
 import { toSubscription, useSubscriptionStore } from '../store/subscriptionStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useUiStore } from '../store/uiStore';
+import { useCities } from '../hooks/useCities';
+import { citiesSummary } from '../lib/cities';
 import type { Lang } from '../i18n';
 import type { ThemeMode } from '../lib/theme';
 import { AppBar } from '../components/AppBar';
@@ -31,9 +33,11 @@ export default function SettingsScreen() {
   const themeMode = useSettingsStore((s) => s.themeMode);
   const setThemeMode = useSettingsStore((s) => s.setThemeMode);
   const setTourReplay = useUiStore((s) => s.setTourReplay);
+  const { bySlug } = useCities();
 
   const apply = useSubscriptionStore((s) => s.apply);
   const sCities = useSubscriptionStore((s) => s.citySlugs);
+  const sNoCity = useSubscriptionStore((s) => s.noCity);
   const sWork = useSubscriptionStore((s) => s.workTypes);
   const sVisa = useSubscriptionStore((s) => s.visaTypes);
   const sFee = useSubscriptionStore((s) => s.placementFee);
@@ -78,8 +82,10 @@ export default function SettingsScreen() {
     setSaving(true);
     try {
       const body = toSubscription({
-        // City selection is temporarily hidden; keep the saved cities untouched.
+        // Cities + "no city" are edited on the /settings/cities sub-screen; keep
+        // the saved values untouched here.
         citySlugs: sCities,
+        noCity: sNoCity,
         workTypes: work,
         notify,
         visaTypes: visa,
@@ -95,7 +101,9 @@ export default function SettingsScreen() {
     } finally {
       setSaving(false);
     }
-  }, [saving, sCities, work, notify, visa, paid, housing, meals, digest, apply]);
+  }, [saving, sCities, sNoCity, work, notify, visa, paid, housing, meals, digest, apply]);
+
+  const citiesLabel = citiesSummary(sCities, sNoCity, bySlug, lang, t);
 
   const workOptions = useMemo<ChipOption<WorkType>[]>(
     () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), icon: <WorkTypeIcon type={w} /> })),
@@ -138,6 +146,20 @@ export default function SettingsScreen() {
                   allows_write_to_pm, not by the notify subscription flag. */}
               <Switch checked={digest} onChange={setDigest} label={t('settings.digest')} />
             </div>
+          </div>
+        </div>
+
+        <div className="region">
+          <div className="section">
+            <button className="row row--nav" onClick={() => navigate('/settings/cities')}>
+              <div className="row__label">
+                <div>{t('settings.citiesTitle')}</div>
+                <div className="row__sub row__sub--ellipsis">{citiesLabel}</div>
+              </div>
+              <span className="row__chevron" aria-hidden>
+                ›
+              </span>
+            </button>
           </div>
         </div>
 

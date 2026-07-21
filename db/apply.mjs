@@ -159,6 +159,16 @@ const files = [
   // sent_at/sent_n/skipped_n for the delivery report. No config seed (broadcast_send_cap default
   // lives in getConfigNumber). Depends only on pgcrypto (gen_random_uuid, draft_0001_init.sql).
   'draft_0019_broadcast.sql',
+
+  // Multi-city (0020) — ADDITIVE / idempotent (ADD COLUMN IF NOT EXISTS + guarded UPDATE + CREATE
+  // INDEX IF NOT EXISTS + CREATE OR REPLACE FUNCTION). Adds vacancies.city_ids / user_ads.city_ids
+  // (uuid[]) + subscriptions.no_city, seeds city_ids from the single city_id ONLY where empty (the
+  // `cardinality=0` guard makes re-apply idempotent AND never overwrites the richer multi-city sets
+  // the parser/db/backfill_city_ids.mts write), two partial GIN indexes, and the shared immutable
+  // kj_city_match() predicate used by the feed + digest. content_hash / kj_content_hash / city_id are
+  // untouched. Run db/backfill_city_ids.mts AFTER this to enrich the existing corpus from message text.
+  // Depends on vacancies / user_ads / subscriptions / cities (draft_0001_init.sql, draft_0003_user_ads.sql).
+  'draft_0020_city_ids.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

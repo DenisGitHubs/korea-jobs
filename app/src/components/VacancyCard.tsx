@@ -2,7 +2,8 @@ import type { KeyboardEvent, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { VacancyView } from '../shared/types/api';
 import { useSettingsStore } from '../store/settingsStore';
-import { localized } from '../lib/localized';
+import { useFilterStore } from '../store/filterStore';
+import { cityLabel } from '../lib/cities';
 import { timeAgo } from '../lib/format';
 import { genderKey } from '../shared/labels';
 import { WorkTypeBadge } from './WorkTypeBadge';
@@ -42,7 +43,20 @@ export function VacancyCard({
 }) {
   const { t } = useTranslation();
   const lang = useSettingsStore((s) => s.lang);
-  const cityName = vacancy.city ? localized(vacancy.city.name, lang) : t('region.other');
+  const filterCities = useFilterStore((s) => s.value.cities);
+
+  // Multi-city display: prefer the city that matches the user's active city
+  // filter (if any), otherwise the main city (first). A "+N" badge counts the
+  // rest; the full list goes into aria-label. 0 cities → "city not specified".
+  const cities = vacancy.cities?.length ? vacancy.cities : vacancy.city ? [vacancy.city] : [];
+  const shown =
+    (cities.length > 1 && filterCities.length
+      ? cities.find((c) => filterCities.includes(c.slug))
+      : undefined) ?? cities[0];
+  const cityName = shown ? cityLabel(shown, lang, t) : t('city.unspecified');
+  const cityExtra = cities.length > 1 ? cities.length - 1 : 0;
+  const cityAria = cities.length ? cities.map((c) => cityLabel(c, lang, t)).join(', ') : t('city.unspecified');
+
   const isRepost = Boolean((vacancy as { repost?: boolean }).repost);
   const fromUser = vacancy.source_kind === 'user';
 
@@ -96,7 +110,14 @@ export function VacancyCard({
     <div className="card" role="button" tabIndex={0} onClick={open} onKeyDown={onKeyDown}>
       <div className="card__top">
         <div className="card__cityline">
-          <span className="card__city">{cityName}</span>
+          <span className="card__city" aria-label={cityAria}>
+            {cityName}
+          </span>
+          {cityExtra > 0 ? (
+            <span className="badge badge--count" aria-hidden>
+              +{cityExtra}
+            </span>
+          ) : null}
           <span className="card__time">{timeAgo(vacancy.posted_at, t)}</span>
           {/* Quiet "you already opened this contact" marker (repeat reveal is free). */}
           {vacancy.is_revealed ? (

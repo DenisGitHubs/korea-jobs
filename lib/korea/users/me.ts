@@ -25,12 +25,14 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
     // parsed) so the driver returns real JS arrays. city_ids is uuid[] — a BUILT-IN array OID
     // the driver already parses to an array (verified live), so it needs no cast.
     const subRows = (await sql`
-      select city_ids, work_types::text[] as work_types, notify,
+      select city_ids, work_types::text[] as work_types, notify, digest_enabled, no_city,
              visa_types::text[] as visa_types, placement_fee, require_housing, require_meals
       from subscriptions where user_id = ${user.id}::uuid limit 1`) as unknown as {
       city_ids: string[] | null;
       work_types: string[] | null;
       notify: boolean;
+      digest_enabled: boolean | null;
+      no_city: boolean | null;
       visa_types: string[] | null;
       placement_fee: string | null;
       require_housing: boolean | null;
@@ -40,6 +42,13 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
     let citySlugs: string[] = [];
     let workTypes: string[] = [];
     let notify = true;
+    // digest_enabled / no_city are `boolean not null default true` (draft_0017 / draft_0020) and
+    // absent (no subscription row) means "on" — mirror POST /api/subscription's absent-default AND
+    // the client's `s.no_city ?? true`, so a cold GET returns the SAME truth the client stores. When
+    // these were missing from the echo the client fell back to `?? true` and silently flipped a
+    // user's OFF toggle back ON on cold load (Censor/Olya major). `?? true` keeps null -> on too.
+    let digestEnabled = true;
+    let noCity = true;
     let visaTypes: string[] = [];
     let placementFee: string | null = null;
     let requireHousing: boolean | null = null;
@@ -48,6 +57,8 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
     const sub = subRows[0];
     if (sub) {
       notify = sub.notify === true;
+      digestEnabled = sub.digest_enabled ?? true;
+      noCity = sub.no_city ?? true;
       workTypes = Array.isArray(sub.work_types) ? sub.work_types : [];
       visaTypes = Array.isArray(sub.visa_types) ? sub.visa_types : [];
       placementFee = sub.placement_fee ?? null;
@@ -100,6 +111,8 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
         city_slugs: citySlugs,
         work_types: workTypes,
         notify,
+        digest_enabled: digestEnabled,
+        no_city: noCity,
         visa_types: visaTypes,
         placement_fee: placementFee,
         require_housing: requireHousing,

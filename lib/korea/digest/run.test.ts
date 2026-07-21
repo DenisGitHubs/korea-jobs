@@ -4,6 +4,11 @@
 // Korean morning regardless of the runner's own TZ (CI is UTC), inDigestWindow must be the exact
 // [09:00, 12:00) half-open interval, and the line must stay grammatical Russian for any N (owner:
 // plain human text, no "1 новых вакансий").
+//
+// MULTI-CITY: the digest's city predicate + the has_filters flag live in SQL (kj_city_match /
+// `or s.no_city is false`), so they are exercised by the DB, not here. What IS pure and testable is
+// the WORDING contract that has_filters drives: once no_city=false flips has_filters true, the line
+// must read "по твоим фильтрам" (not "в приложении"). The digestText cases below pin exactly that.
 
 import { describe, it, expect } from 'vitest';
 import { seoulHour, inDigestWindow, digestText, ruPluralVac, DIGEST_WINDOW_START_HOUR, DIGEST_WINDOW_END_HOUR } from './run.js';
@@ -81,5 +86,11 @@ describe('digestText — filtered vs empty-filter wording', () => {
   it('says "в приложении" when the user has no filters', () => {
     expect(digestText(3, false)).toBe('За сутки: 3 новые вакансии в приложении');
     expect(digestText(21, false)).toBe('За сутки: 21 новая вакансия в приложении');
+  });
+  it('uses the filtered wording once no_city=false makes has_filters true (multi-city)', () => {
+    // A user with NO city/work/visa filters but no_city=false still counts as "has filters" in SQL
+    // (or s.no_city is false), so the digest line must use the "по твоим фильтрам" wording.
+    expect(digestText(7, true)).toBe('За сутки: 7 новых вакансий по твоим фильтрам');
+    expect(digestText(2, true)).toBe('За сутки: 2 новые вакансии по твоим фильтрам');
   });
 });

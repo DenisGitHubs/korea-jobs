@@ -464,6 +464,149 @@ a {
   color: var(--kj-brand-ink);
 }
 
+/* ── City picker: frequent chips + "not specified" card + province fold ──── */
+/* Ellipsised state subtitle on the "Cities" nav rows (no wrap). */
+.row--nav .row__label {
+  min-width: 0;
+}
+.row__sub--ellipsis {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.citypicker__frequent {
+  margin-bottom: var(--kj-space-4);
+}
+
+/* Section header line above the province list + expand/collapse-all link. */
+.citypicker__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.citypicker__toggleall {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--kj-hint);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 4px 6px;
+}
+
+/* "City not specified" special card — muted (hint) left accent, NOT brand. */
+.nocity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-left: 3px solid var(--kj-hint);
+  background: var(--kj-section-bg);
+  color: inherit;
+  border-radius: var(--kj-radius);
+  box-shadow: var(--kj-card-highlight);
+  padding: 12px 14px;
+  margin: 0 0 var(--kj-space-4);
+}
+[data-theme='dark'] .nocity {
+  border: 1px solid var(--kj-card-border);
+  border-left: 3px solid var(--kj-hint);
+}
+.nocity__ico {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--kj-hint);
+}
+.nocity__ico svg {
+  width: 22px;
+  height: 22px;
+}
+.nocity__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nocity__t {
+  font-weight: 600;
+  font-size: 15px;
+}
+.nocity .row__sub {
+  font-weight: 500;
+}
+
+/* Foldable province (grid-template-rows 0fr→1fr; reduced-motion handled globally). */
+.citypicker__prov-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  padding: 2px 4px 6px;
+}
+.citypicker__prov-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--kj-section-header-text);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.citypicker__prov-num {
+  color: var(--kj-hint);
+  font-weight: 600;
+}
+.citypicker__prov-sel {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--kj-brand);
+  color: var(--kj-brand-ink);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+.citypicker__prov-chev {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--kj-hint);
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.citypicker__prov-chev svg {
+  width: 18px;
+  height: 18px;
+}
+.citypicker__prov.is-open .citypicker__prov-chev {
+  transform: rotate(90deg);
+}
+.citypicker__prov-fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.citypicker__prov.is-open .citypicker__prov-fold {
+  grid-template-rows: 1fr;
+}
+.citypicker__prov-fold-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
 /* ── Chips (work types) ────────────────────────────────────────────────── */
 .chips {
   display: flex;
