@@ -126,8 +126,9 @@ export interface VacancyView {
   contact?: VacancyContact;
   /**
    * Ready-made link to the original post in the source channel
-   * (`https://t.me/<channel>/<post_id>`). Present ONLY when the listing has NO
-   * direct contact AND the source channel has a public username; otherwise null.
+   * (`https://t.me/<channel>/<post_id>`). Present when the source channel has a
+   * public username AND the listing either has NO direct contact OR its city is
+   * unresolved (so the location can be clarified in the original); otherwise null.
    */
   source_post_url?: string | null;
 }

@@ -117,10 +117,11 @@ const REPOSTS = new Set(['v03', 'v11', 'v20']);
 /** Explicitly no housing (three-state false), otherwise derived from the text. */
 const NO_HOUSING = new Set(['v06', 'v08', 'v16', 'v27']);
 /**
- * Listings WITHOUT a direct contact whose source channel is public: the detail
- * screen offers "open in channel" instead of a contact. v09 has no contact and a
- * public source (button shows); v19 also has no contact but no public source
- * (falls back to "no contact"). Mirrors the backend `source_post_url` contract.
+ * Listings whose source channel is public: the detail screen offers "open in
+ * channel" (backend sends `source_post_url` when there is NO direct contact OR
+ * the city is unresolved). v09 has no contact and a public source (button shows);
+ * v19 also has no contact but no public source (falls back to "no contact").
+ * Mirrors the backend `source_post_url` contract.
  */
 const SOURCE_POST_URL: Record<string, string> = {
   v09: 'https://t.me/korea_daegu_jobs/1842',
@@ -178,7 +179,9 @@ function citiesOf(...slugs: string[]): Array<{ slug: string; name: City['name'] 
 /**
  * Two hand-crafted listings exercising the multi-city contract:
  *   - `v-multi` spans three Gyeonggi cities (main = Ansan, a "frequent" city).
- *   - `v-nocity` has NO city at all ("Город не указан" path on the card).
+ *   - `v-nocity` has NO city at all ("Город не указан" path on the card): it keeps
+ *     a direct contact AND a public source post, so the card shows both the
+ *     "no city — clarify in the channel" hint/button and the contact reveal.
  */
 function specialVacancies(now: number): MockVacancy[] {
   return [
@@ -233,7 +236,7 @@ function specialVacancies(now: number): MockVacancy[] {
       repost: false,
       is_saved: false,
       is_revealed: false,
-      source_post_url: null,
+      source_post_url: 'https://t.me/korea_all_jobs/2043',
       contact: { kind: 'telegram', value: '@korea_daywork' },
     },
   ];
@@ -274,8 +277,8 @@ export function buildVacancies(): MockVacancy[] {
       repost: REPOSTS.has(r.id),
       is_saved: INITIAL_SAVED_IDS.includes(r.id),
       is_revealed: INITIAL_REVEALED_IDS.includes(r.id),
-      // Only for listings without a direct contact (mirrors the backend rule).
-      source_post_url: r.contact === null ? (SOURCE_POST_URL[r.id] ?? null) : null,
+      // No direct contact OR unresolved city → offer the source post (mirrors the backend rule).
+      source_post_url: r.contact === null || c === null ? (SOURCE_POST_URL[r.id] ?? null) : null,
       // Kept internally so the reveal endpoint can serve it; the feed strips it.
       contact: r.contact ?? undefined,
     };

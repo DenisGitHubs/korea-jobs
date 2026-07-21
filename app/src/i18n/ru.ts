@@ -166,6 +166,7 @@ export const ru = {
     open: 'Открыть',
     openInChannel: 'Открыть объявление в канале',
     openInChannelNote: 'Откроется оригинал в канале-источнике. Это объявление мы не проверяли.',
+    openInChannelNoCity: 'Город не указан — место работы можно уточнить в исходном сообщении.',
   },
   settings: {
     title: 'Настройки',
@@ -412,6 +413,7 @@ export const ru = {
     incheon: 'Инчхон',
     daegu: 'Тэгу',
     daejeon: 'Тэджон',
+    sejong: 'Седжон',
     gwangju: 'Кванджу',
     ulsan: 'Ульсан',
     gyeonggi: 'Провинция Кёнгидо',
@@ -419,6 +421,7 @@ export const ru = {
     chungnam: 'Чхунчхон-Намдо',
     chungbuk: 'Чхунчхон-Пукто',
     jeonbuk: 'Чолла-Пукто',
+    jeonnam: 'Чолла-Намдо',
     gyeongbuk: 'Кёнсан-Пукто',
     gangwon: 'Канвондо',
     jeju: 'Чеджудо',

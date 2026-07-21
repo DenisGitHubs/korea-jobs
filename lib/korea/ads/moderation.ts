@@ -76,14 +76,26 @@ export async function classifyAdText(text: string): Promise<AdClassification> {
     // must degrade like everything else. Before this, a cities/moderation_examples DB blip
     // escaped -> adsCreate -> 500 and the ad was lost instead of being queued for review.
     const sql = getSql();
+    // TWO views over the SAME rows (mirrors parser/run.ts):
+    //   • FULL set (all 167) → cityIdBySlug, RETURNED to the ad create/edit path so a user's directory
+    //     pick of ANY active city (incl. the 136 non-canonical ones) resolves to a city_id (ads/rw.ts
+    //     citySlug/cityId). Restricting THIS map to 31 would silently drop a new-city ad's city — the
+    //     form pick would miss cityIdBySlug.has() and fall back to the AI/city_text. Do NOT filter it.
+    //   • PROMPT set (canonical 31, sort_order < 1000) → the AI enum for buildSystemPrompt.
+    // INVARIANT — the AI enum stays on the CANONICAL 31 (sort_order < 1000): city_id is the dedup
+    // anchor, and this prompt is the byte-identical shared cached prefix with parser/run.ts (SAME
+    // filter + `order by sort_order, slug`). Keep this derivation in lock-step with the parser.
+    // sort_order is NOT NULL (default 0) → this JS filter matches SQL `sort_order < 1000` exactly.
     const cityRows = await sql`
-      select id, slug, name, region_slug from cities where is_active = true order by sort_order, slug`;
-    const cities: CityRef[] = cityRows.map((r) => ({
+      select id, slug, name, region_slug, sort_order from cities where is_active = true order by sort_order, slug`;
+    const promptCityRows = cityRows.filter((r) => (r.sort_order as number) < 1000);
+    const cities: CityRef[] = promptCityRows.map((r) => ({
       slug: r.slug as string,
       name: r.name as { ru: string; ko: string; en: string },
       region_slug: (r.region_slug as string | null) ?? null,
     }));
-    const regionSlugs = [...new Set(cityRows.map((r) => r.region_slug).filter(Boolean))] as string[];
+    const regionSlugs = [...new Set(promptCityRows.map((r) => r.region_slug).filter(Boolean))] as string[];
+    // FULL map (all 167) — the ad's form city may be any active city; the AI pick is a subset of it.
     cityIdBySlug = new Map<string, string>(cityRows.map((r) => [r.slug as string, r.id as string]));
 
     // Base contract built EXACTLY like the parser (same buildSystemPrompt + same cities/regions

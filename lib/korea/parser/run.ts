@@ -373,24 +373,38 @@ export async function runParse(): Promise<ParseResult> {
   const preAiSkipped = spamIds.length + crossSkips.length + dropInBatch.size;
   if (pending.length === 0) return { processed: preAiSkipped, vacancies: 0 };
 
-  // 2) Active cities → closed enum + prompt context; slug→id + slug→city map. `aliases` (jsonb array
-  // of lowercased spellings) is pulled too so we can compile the multi-city text matcher ONCE for the
-  // whole batch (cities/detect.ts) — the additive city_ids scan complements the AI's single city_slug.
+  // 2) Active cities. TWO views over the SAME rows (one query):
+  //   • FULL set (all 167) → cityIdBySlug + the multi-city text matcher (cities/detect.ts). `aliases`
+  //     (jsonb array of lowercased spellings) is pulled for the matcher; the NEW (non-canonical)
+  //     cities MUST live here so the additive city_ids scan can tag them — owner rule: "новые города
+  //     живут только в city_ids от словаря" (draft_seed.sql).
+  //   • PROMPT set (canonical 31, sort_order < 1000) → the AI enum passed to buildSystemPrompt.
+  // INVARIANT — the AI enum stays on the CANONICAL 31 (sort_order < 1000), NEVER the full 167:
+  //   (a) city_id (the AI's single primary pick) is the ANCHOR of the dedup content_hash — widening
+  //       the enum would silently change dedup granularity across the whole corpus; and
+  //   (b) this system prompt is the SHARED, byte-identical cached prefix with ads/moderation.ts —
+  //       BOTH derive the prompt list the SAME way (filter sort_order < 1000, `order by sort_order,
+  //       slug`) so the two callers keep ONE cache entry. Keep both sides in lock-step.
+  //   sort_order is NOT NULL (default 0) → this JS filter matches SQL `sort_order < 1000` exactly.
+  //   New cities (sort_order 1000+) are reached only via detect.ts → city_ids; a future wave may add
+  //   a conditional free-text city_norm to the enum.
   const cityRows = await sql`
-    select id, slug, name, region_slug, aliases from cities where is_active = true order by sort_order, slug`;
-  const cities: CityRef[] = cityRows.map((r) => ({
+    select id, slug, name, region_slug, aliases, sort_order from cities where is_active = true order by sort_order, slug`;
+  const promptCityRows = cityRows.filter((r) => (r.sort_order as number) < 1000);
+  const cities: CityRef[] = promptCityRows.map((r) => ({
     slug: r.slug as string,
     name: r.name as { ru: string; ko: string; en: string },
     region_slug: (r.region_slug as string | null) ?? null,
   }));
-  const regionSlugs = [...new Set(cityRows.map((r) => r.region_slug).filter(Boolean))] as string[];
+  const regionSlugs = [...new Set(promptCityRows.map((r) => r.region_slug).filter(Boolean))] as string[];
+  // FULL slug→id map (all 167): resolves BOTH the AI's canonical pick AND detect.ts's new-city slugs.
   const cityIdBySlug = new Map<string, string>(cityRows.map((r) => [r.slug as string, r.id as string]));
-  // Compiled ONCE, reused for every row below (the regexes are shared → cheap per message).
+  // Compiled ONCE over the FULL set, reused for every row below (the regexes are shared → cheap per message).
   const cityMatcher = buildCityMatcher(
     cityRows.map((r) => ({ slug: r.slug as string, aliases: r.aliases })),
   );
-  // city/region are guided by the prompt (not a schema enum), so re-close the set on the
-  // server: unknown city slug -> null (cityIdBySlug.get below), unknown region -> null here.
+  // region is guided by the prompt (not a schema enum), so re-close the set on the server to the SAME
+  // canonical regions the prompt lists (the AI can only echo one of those): unknown region -> null.
   const regionSlugSet = new Set<string>(regionSlugs);
 
   // 3) Prompt + input. strict structured outputs can't compile our schema, so the required
@@ -543,11 +557,16 @@ export async function runParse(): Promise<ParseResult> {
 
     // MULTI-CITY (multi-city plan): city_ids = the DISTINCT union of the AI's primary city (cityId),
     // every city named in the ORIGINAL text (NOT cleanForAi — cleaning could drop a city), and every
-    // city the source channel's title/notes name (source hint). detect passes the hint as CONTEXT too
-    // so a bare "Кванджу" in a Gyeonggi channel resolves correctly. city_id stays the PRIMARY city.
+    // city the source channel's title, @username and notes name (source hint). The @username joins the
+    // hint with underscores rewritten to spaces (owner rule 2026-07-21: "the chat/bot name often
+    // carries the city") — so "korea_daegu_jobs" -> "korea daegu jobs" lets a city alias match on a
+    // WORD boundary ("daegu"), while a glued handle like "workansan" stays boundary-safe (no false
+    // "ansan"). detect passes the hint as CONTEXT too so a bare "Кванджу" in a Gyeonggi channel
+    // resolves correctly. city_id stays the PRIMARY city.
     const srcTitle = ((row.source_title as string | null) ?? '').trim();
+    const srcUsername = ((row.source_username as string | null) ?? '').replace(/_/g, ' ').trim();
     const srcNotes = ((row.source_notes as string | null) ?? '').trim();
-    const srcHint = [srcTitle, srcNotes].filter(Boolean).join(' — ');
+    const srcHint = [srcTitle, srcUsername, srcNotes].filter(Boolean).join(' — ');
     const cityIdSet = new Set<string>();
     if (cityId) cityIdSet.add(cityId);
     const detectedSlugs = [

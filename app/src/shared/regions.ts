@@ -9,10 +9,12 @@ export const REGION_ORDER: readonly string[] = [
   'daegu',
   'gyeongbuk',
   'daejeon',
+  'sejong',
   'chungnam',
   'chungbuk',
   'gwangju',
   'jeonbuk',
+  'jeonnam',
   'gangwon',
   'jeju',
 ];

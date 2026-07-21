@@ -7,8 +7,14 @@
 // (user ads), exactly like the parser/ads code now does for NEW rows — so already-published cards gain
 // the same multi-city coverage.
 //
-// Mirrors the runtime detection BYTE-FOR-BYTE via the SHARED lib/korea/cities/detect.ts:
-//   * vacancies: {city_id} ∪ detect(original raw text, hint=source title/notes) ∪ detect(source hint)
+// Mirrors the runtime detection via the SHARED lib/korea/cities/detect.ts:
+//   * vacancies: {city_id} ∪ detect(text, hint=source title/@username/notes) ∪ detect(source hint)
+//                text = the ORIGINAL raw_messages.text when it is still kept, else the scrubbed copy
+//                in vacancies.description. raw_messages is LEFT-joined (owner 2026-07-21), so a row
+//                whose raw source was pruned is STILL scanned; the source hint is detected ALWAYS —
+//                even for a raw-less row — so a city named only in the channel is still recovered.
+//                The @username joins the hint with underscores -> spaces ("korea_daegu_jobs" ->
+//                "korea daegu jobs") so a city alias matches on a WORD boundary, mirroring the parser.
 //   * user ads:  {city_id} ∪ detect(description)
 // city_id (the PRIMARY city) is NEVER touched. The write is ADDITIVE — the new set is the UNION of the
 // existing city_ids and the freshly computed set, so a row already enriched by the parser only grows,
@@ -70,9 +76,14 @@ try {
   const slugsToIds = (slugs: string[]): string[] =>
     slugs.map((s) => idBySlug.get(s)).filter((x): x is string => Boolean(x));
 
-  // ── Vacancies: is_active, non-duplicate, with a live raw_message for the ORIGINAL text ──────────
+  // ── Vacancies: is_active, non-duplicate. raw_messages is LEFT-joined so rows whose raw source was
+  //    pruned are STILL scanned (owner 2026-07-21: Сувон/Сихын/Кёнджу lived in `description` but the
+  //    old INNER join skipped every raw-less row). Text = raw_messages.text when kept, else the
+  //    scrubbed vacancies.description; the source hint (title/@username/notes) is detected ALWAYS. ────
   let vacScanned = 0;
   let vacUpdated = 0;
+  let vacNoRawScanned = 0; // rows with no surviving raw_messages source
+  let vacNoRawGained = 0; // ...of those, how many the backfill enriched with a city
   let lastVac = MIN_UUID;
   for (;;) {
     const rows = (
@@ -81,13 +92,17 @@ try {
         city_id: string | null;
         city_ids: string[] | null;
         text: string | null;
+        description: string | null;
+        has_raw: boolean;
         source_title: string | null;
+        source_username: string | null;
         source_notes: string | null;
       }>(
-        `select v.id, v.city_id, v.city_ids, r.text,
-                s.title as source_title, s.notes as source_notes
+        `select v.id, v.city_id, v.city_ids, r.text, v.description,
+                (r.id is not null) as has_raw,
+                s.title as source_title, s.username as source_username, s.notes as source_notes
            from vacancies v
-           join raw_messages r on r.id = v.raw_message_id
+           left join raw_messages r on r.id = v.raw_message_id
            left join sources s on s.id = v.source_id
           where v.is_active and v.duplicate_of is null and v.id > $1
           order by v.id
@@ -100,12 +115,21 @@ try {
 
     for (const row of rows) {
       vacScanned++;
-      const srcHint = [row.source_title ?? '', row.source_notes ?? '']
+      const noRaw = !row.has_raw;
+      if (noRaw) vacNoRawScanned++;
+      // Source hint mirrors the parser: title + @username (underscores -> spaces, so a handle like
+      // "korea_daegu_jobs" yields a boundary-matchable "daegu") + notes. This detection runs even
+      // when the row has no raw text, so a city named only in the channel is still recovered.
+      const srcUsername = (row.source_username ?? '').replace(/_/g, ' ').trim();
+      const srcHint = [row.source_title ?? '', srcUsername, row.source_notes ?? '']
         .map((x) => x.trim())
         .filter(Boolean)
         .join(' — ');
+      // Best available text: the ORIGINAL raw text if kept, else the scrubbed description (a copy of
+      // that same text). Hint detection ALWAYS runs; text detection uses whatever text exists.
+      const scanText = row.text ?? row.description ?? '';
       const detected = [
-        ...detectCitySlugs(row.text ?? '', matcher, { hintText: srcHint }),
+        ...detectCitySlugs(scanText, matcher, { hintText: srcHint }),
         ...detectCitySlugs(srcHint, matcher),
       ];
       const computed = [...(row.city_id ? [row.city_id] : []), ...slugsToIds(detected)];
@@ -114,6 +138,7 @@ try {
       if (sameSet(final, existing)) continue; // idempotent: nothing new
       await pool.query('update vacancies set city_ids = $1::uuid[] where id = $2::uuid', [final, row.id]);
       vacUpdated++;
+      if (noRaw) vacNoRawGained++;
     }
   }
 
@@ -182,6 +207,7 @@ try {
   console.log(`VACANCIES: scanned=${vacScanned} updated=${vacUpdated} total_active=${total(vacDist)}`);
   console.log(`  city_ids cardinality distribution -> ${fmtDist(vacDist)}`);
   console.log(`  rows with city_id=null that now have >=1 city: ${vacNullGained}`);
+  console.log(`  rows WITHOUT a raw source: scanned=${vacNoRawScanned}, gained a city=${vacNoRawGained}`);
   console.log(`USER ADS:  scanned=${adScanned} updated=${adUpdated} total_approved=${total(adDist)}`);
   console.log(`  city_ids cardinality distribution -> ${fmtDist(adDist)}`);
   console.log(`  rows with city_id=null that now have >=1 city: ${adNullGained}`);

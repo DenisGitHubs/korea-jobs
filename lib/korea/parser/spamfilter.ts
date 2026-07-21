@@ -20,6 +20,11 @@ const B = '(^|[^а-яёa-z0-9])';
 // Right boundary (cyrillic-safe): end-of-string OR a non-letter/digit char (lookahead, zero-width).
 const E = '(?![а-яёa-z0-9])';
 
+// Zero-width chars (ZWSP/ZWNJ/ZWJ/word-joiner/BOM) that adult & spam bots splice INSIDE words
+// (p‌r‌o‌f‌i‌l‌i‌m -> profilim) to dodge the matcher. Stripped in looksLikeSpam BEFORE lowercasing
+// so the patterns see clean tokens. /g is for .replace() only — never .test() (stateful lastIndex).
+const ZERO_WIDTH = /[​‌‍⁠﻿]/g;
+
 /** Boundary-anchored (left only), case-insensitive pattern from a core alternation. */
 function re(core: string): RegExp {
   return new RegExp(`${B}(?:${core})`, 'iu');
@@ -92,6 +97,92 @@ export const SPAM_PATTERNS: RegExp[] = [
   // reverse "валютный/крипто/OTC-обмен". наличк/денег kept from the existing line for parity.
   re('обмен[а-яё]*[\\s-]+(?:валют|крипт|цифров|usdt|usd|наличк|денег|капитал)'),
   re('(?:валютн[а-яё]*|крипт[оауеы][а-яё]*|otc)[-\\s]?обмен[а-яё]*'),
+
+  // --- extended 2026-07-21, data-driven from the 287-msg reject corpus; every pattern below was
+  // validated to 0 FP on 521 CONFIRMED real vacancies (Roma). Only near-certain non-jobs fire.
+  // Cyrillic tails use explicit [а-яё] classes (JS \w/\b are ASCII-only). RUBLE amounts, a bare
+  // BOM prefix, Greek-letter obfuscation and the 🔞 glyph were TRIED and DROPPED — they collide
+  // with real ads in this corpus (ruble micro-gigs; "🔞 можно с 16 лет"), so they are NOT here.
+  //
+  // g1 — "money scheme" recruiting bait. "тема" is context-bound (a real ad casually says "тема"),
+  // so only the earn-scheme phrasings match, never the bare word.
+  /(?:есть\s+тем[аку]|тем[аку]\s+(?:как|чтобы|для\s+заработ)|денежн[а-яё]*\s+тем)/iu,
+  /поднять\s+(?:денег|\d+\s*к(?![а-яё]))/iu,
+  /подъ[её]м\s+денег/iu,
+  /лутать\s+к[еэ]ш/iu,
+  /летсгоу/iu,
+  /выводим\s+\d+\s*к(?![а-яё])/iu,
+  /(^|[^а-яё])в\s+одно\s+дело/iu,
+  // minor-targeting gig recruiting ("халтура/задание/подработка для подростков") — a mule tell.
+  // The "задание для девочек" branch was dropped: it collided with a real micro-gig in the corpus.
+  /(?:халтур[а-яё]*|задани[ея]|подработк[а-яё]*)\s+для\s+подрост/iu,
+
+  // g3 — drops / money-mule / percent schemes.
+  /доставк[уаи]?\s+котиков/iu,
+  /сч[её]т(?:а|ов)?\s+в\s+аренду/iu,
+  /работа\s+производится\s+за\s*%/iu,
+
+  // g4 — visa / migration / document services. "под ключ" ALONE is dropped (construction ads say
+  // "ремонт под ключ"); it only fires when a migration/visa word sits IN THE SAME SENTENCE as
+  // "под ключ" — PROXIMITY, not two independent whole-text lookaheads. The old two-lookahead form
+  // fired whenever "под ключ" AND a visa word appeared ANYWHERE in the message, so a real
+  // construction ad ("ремонт под ключ" in one sentence + "виза F4" in another) was a false drop on
+  // an irreversible filter. Now two orders (под ключ→word, word→под ключ) with a same-sentence
+  // window [^\n.!?]{0,60}: the \n/./!/? boundary also keeps bullet-formatted construction ads
+  // (…под ключ⏎…виза E-9…) safely OUT, so a genuine visa-services post that splits the two across a
+  // bullet line is left for the model — 0 FP on the real corpus is the hard owner gate here.
+  /(^|[^a-zа-яё])k[\s\-]?eta(?![a-zа-яё])/iu,
+  // The migration-word group is guarded by a LEFT WORD BOUNDARY in both orders (Censor, gate
+  // 21.07): "виз" is a 3-letter stem that also lives inside "суперВИЗор"/"телеВИЗор", and the
+  // proximity window on its own could stop mid-word. The boundary char is required between the
+  // window and the word group, so "супервизора ... под ключ" can never fire.
+  // NB: the boundary char itself must stay inside the sentence window (no \n/./!/?), or it would
+  // re-open the bullet-line bridge the window is there to close.
+  /под\s+ключ[^\n.!?]{0,59}[^а-яёa-z0-9\n.!?](?:виз[а-яё]*|k-?eta|внж|птж|гражданств|миграц|легализ|депорт|консульск|вид\s+на\s+жительств)|(^|[^а-яёa-z0-9])(?:виз[а-яё]*|k-?eta|внж|птж|гражданств|миграц|легализ|депорт|консульск|вид\s+на\s+жительств)[^\n.!?]{0,60}под\s+ключ/iu,
+  /консульск[а-яё]*\s+сбор/iu,
+  /разные\s+диплом|водительски[ае]\s+удостоверен/iu,
+  /безлимитн[а-яё]*\s+симкарт|симкарт[а-яё]*\s+(?:для\s+нелегал|с\s+безлимит)/iu,
+
+  // g5 — tether / TRC-20 (extends the USDT coverage; latin-lookalike "Tеззер" + network tag).
+  // The left boundary wraps ALL word alternatives (тезер/тетхер/tether) — bare latin "tether" used
+  // to sit outside the barrier and could fire mid-word. TRC-20 keeps its own digit-aware boundary.
+  /(^|[^а-яёa-z])(?:[tт][еэ]з{1,2}ер|тетхер|tether)|(^|[^a-zа-яё0-9])(?:тр{1,2}к|trc)\s?20(?![a-zа-яё0-9])/iu,
+
+  // g6 — casino / bonus promo.
+  /бонус\s+сразу\s+на\s+баланс|моментальн[а-яё]*\s+бонус|мгновенн[а-яё]*\s+регистрац|укажите\s+промокод|(^|[^а-яё])промокод/iu,
+
+  // g8 — adult / dating spam (Uzbek). NB: the zero-width strip in looksLikeSpam is REQUIRED here —
+  // these bots inject ZW chars inside the words below to dodge this match.
+  /profilim(?:ga|ni)|profildagi\s+guruh/iu,
+  /faqat\s+kattalar\s+uchun|yolg['ʻ']?izmisan|afsuslanmays/iu,
+  /проститутк/iu,
+
+  // g9 — Telegram spam-ban unblock service (Uzbek).
+  /spamga\s+tushgan/iu,
+
+  // g10 — channel/folder-join promo.
+  /добав(?:ьте|ить)\s+папку\s+с\s+канал/iu,
+
+  // g11 — remote / not-in-Korea work. Ruble AMOUNTS were dropped (the corpus is full of real
+  // ruble-denominated micro-gigs); only these unambiguous phrasings stay.
+  /(^|[^а-яё])удал[её]нк/iu,
+  /городах\s+росси/iu,
+
+  // g12 — shill "they paid me instantly" reviews / paid-survey bait. "за опрос" sits INSIDE the
+  // shared left-boundary group so the barrier guards every alternative, not just the first.
+  /(^|[^а-яё])(?:скинули\s+сразу|сразу\s+скинули|за\s+даром\s+выдали|выдали\s+за\s+даром|за\s+опрос)/iu,
+
+  // g13 — high-precision one-offs from the corpus.
+  /facebook\.com\/share/iu,
+  // Shared left boundary wraps BOTH alternatives (previously only "я исключил" was guarded).
+  /(^|[^а-яё])(?:ссылк[уи]\s+без\s+разрешени|я\s+исключил)/iu,
+  // Shared left boundary wraps BOTH alternatives (previously only "so'm" was guarded; digits are
+  // allowed before, so "5 kg + 10 kg" and "1000so'm" still match).
+  /(^|[^a-zа-яё])(?:\d\s*kg\s*\+\s*\d+\s*kg|so['ʻ]m(?![a-z]))/iu,
+  /такси\s+по\s+корее/iu,
+  /нужны\s+бабки/iu,
+  /(?:напиши(?:те)?|пиши)\s*\+\s+в\s+лс/iu,
+  /oy\s+garantiya/iu,
 ];
 
 // Emoji-carpet heuristic (owner 2026-07-19): promo blasts that are almost pure emoji with a couple
@@ -114,11 +205,26 @@ export function looksLikeEmojiCarpet(text: string): boolean {
   return content < CONTENT_MAX;
 }
 
-/** True when the raw message is near-certain spam (pattern hit OR emoji carpet). */
+// Pharmacy-blast heuristic (owner draft, validated 2026-07-21): messages carpeted with the 💊 pill
+// glyph are drug ads, never manual-labour jobs. Require >= 2 pills so a single decorative 💊 cannot
+// trip it (0 FP on 521 real). The 🔞 glyph was TRIED and DROPPED — a real ad uses "🔞 можно с 16 лет".
+const PILL_MIN = 2;
+const PILL_RE = /💊/gu;
+/** True when the message is carpeted with the 💊 pill glyph (>= 2 occurrences). */
+export function looksLikePharma(text: string): boolean {
+  if (!text) return false;
+  return (text.match(PILL_RE) ?? []).length >= PILL_MIN;
+}
+
+/** True when the raw message is near-certain spam (pattern hit OR emoji carpet OR pharma blast). */
 export function looksLikeSpam(text: string | null | undefined): boolean {
   if (!text) return false;
+  // Structural heuristics run on the RAW text (they count emoji/pictographs, not letters).
   if (looksLikeEmojiCarpet(text)) return true;
+  if (looksLikePharma(text)) return true;
+  // Strip zero-width chars BEFORE lowercasing (adult/dating bots splice them inside words to hide
+  // from the g8 patterns); MUST precede toLowerCase so the boundary helpers see clean tokens.
   // No /g on the patterns, so .test() is stateless — safe to reuse the module-level array.
-  const t = text.toLowerCase();
+  const t = text.replace(ZERO_WIDTH, '').toLowerCase();
   return SPAM_PATTERNS.some((rx) => rx.test(t));
 }

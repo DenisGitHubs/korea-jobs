@@ -1513,6 +1513,29 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+/* Compact details grid: short label/value pairs pack two per row (label on top
+   in --kj-hint, value right under), tighter vertical rhythm than stacked .dl rows.
+   Long/headline fields (employer, visa) take the whole row via --wide. Halves the
+   block height without losing information. Reuses .dl__k / .dl__v tokens. */
+.dl-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 14px;
+  row-gap: 12px;
+  padding: 14px 16px;
+}
+
+.dl-grid__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0; /* let long values wrap instead of overflowing the column */
+}
+
+.dl-grid__cell--wide {
+  grid-column: 1 / -1;
+}
+
 /* ── Bottom tab bar ────────────────────────────────────────────────────── */
 .app-root {
   position: relative;

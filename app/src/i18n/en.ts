@@ -169,6 +169,7 @@ export const en: typeof ru = {
     open: 'Open',
     openInChannel: 'Open the listing in the channel',
     openInChannelNote: 'This opens the original in the source channel. We have not verified this listing.',
+    openInChannelNoCity: 'City not specified — you can check the work location in the original post.',
   },
   settings: {
     title: 'Settings',
@@ -415,6 +416,7 @@ export const en: typeof ru = {
     incheon: 'Incheon',
     daegu: 'Daegu',
     daejeon: 'Daejeon',
+    sejong: 'Sejong',
     gwangju: 'Gwangju',
     ulsan: 'Ulsan',
     gyeonggi: 'Gyeonggi Province',
@@ -422,6 +424,7 @@ export const en: typeof ru = {
     chungnam: 'South Chungcheong',
     chungbuk: 'North Chungcheong',
     jeonbuk: 'North Jeolla',
+    jeonnam: 'Jeonnam',
     gyeongbuk: 'North Gyeongsang',
     gangwon: 'Gangwon',
     jeju: 'Jeju',

@@ -21,10 +21,12 @@
 //     scrubContacts() here strips any that slip through (defense in depth).
 //   * /contact enforces a per-user daily cap (shared across scraped + user ads) and
 //     records the reveal, so one account can't scrape every employer's phone.
-//   * source_post_url (detail only): for a scraped offer with NO direct contact, fall back
-//     to the PUBLIC original-post link https://t.me/<sources.username>/<tg_message_id>. It
-//     leaks ONLY the source username (owner-approved) — never tg_chat_id / sender_id / any
-//     internal id — and is NOT gated by the reveal cap (a public post link, not a contact).
+//   * source_post_url (detail only): fall back to the PUBLIC original-post link
+//     https://t.me/<sources.username>/<tg_message_id> for a scraped offer when EITHER it has
+//     NO direct contact (the contact ladder) OR it has NO city (cardinality(city_ids)=0 — the
+//     user can't tell where the job is, so let them open the source post for context / to ask
+//     the author). It leaks ONLY the source username (owner-approved) — never tg_chat_id /
+//     sender_id / any internal id — and is NOT gated by the reveal cap (a public post link).
 // Dynamic filter fields are whitelisted; ids are validated before hitting the DB.
 //
 // Filter matching is PERMISSIVE for rare attributes (Sanya/Roma K2): a filter excludes
@@ -79,9 +81,10 @@ interface Row {
   // the saved-list cursor. Absent (undefined) on the main feed / detail rows.
   saved_at?: string;
   // Deep link to the ORIGINAL channel post, computed ONLY by the detail query
-  // (vacancyDetail, scraped branch) and ONLY when the offer has NO direct contact and its
-  // source channel has a public username. Absent (undefined) on the feed / saved / user-ad
-  // projections, where toView emits null. Never carries anything but the source username.
+  // (vacancyDetail, scraped branch) and ONLY when the offer has NO direct contact OR NO city
+  // (city_ids empty) AND its source channel has a public username. Absent (undefined) on the
+  // feed / saved / user-ad projections, where toView emits null. Never carries anything but
+  // the source username.
   source_post_url?: string | null;
 }
 
@@ -113,8 +116,9 @@ function toView(r: Row) {
     is_saved: r.is_saved === true,
     is_revealed: r.is_revealed === true,
     // Present in every projection for a stable shape; non-null ONLY on the detail endpoint
-    // for a contactless scraped offer whose source channel has a username (feed/saved/user
-    // ads leave the column unselected -> undefined -> null). Public link, no reveal gate.
+    // for a scraped offer that is contactless OR city-less and whose source channel has a
+    // username (feed/saved/user ads leave the column unselected -> undefined -> null). Public
+    // link, no reveal gate.
     source_post_url: r.source_post_url ?? null,
   };
 }
@@ -449,12 +453,19 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
                       where s.user_id = ${auth.user.id}::uuid and s.vacancy_id = v.id)) as is_saved,
              (exists (select 1 from contact_reveals r
                       where r.user_id = ${auth.user.id}::uuid and r.vacancy_id = v.id)) as is_revealed,
-             -- Fallback deep link to the original post ONLY when the offer carries no direct
-             -- contact and its source channel has a public username. Exposes the username in
-             -- the URL and nothing else (no tg_chat_id / sender_id / internal ids). tg_message_id
-             -- is NOT NULL by schema; the guard covers the LEFT JOIN miss (raw_message_id nulled).
+             -- Fallback deep link to the original post — the contact ladder (offer carries no
+             -- REVEALABLE contact) OR the "city not stated" case (cardinality(city_ids)=0: the user
+             -- can't tell where the job is, so let them open the source post for context). Either
+             -- way it is emitted ONLY when the source channel has a public username. Exposes the
+             -- username in the URL and nothing else (no tg_chat_id / sender_id / internal ids).
+             -- The contactless gate is "contact_normalized is null" — the SAME predicate as
+             -- has_contact above — so the two never disagree: a row with a raw-but-unnormalized
+             -- contact (has_contact=false) is treated as contactless and still gets the link,
+             -- instead of losing BOTH the contact button and the channel link (dead end).
+             -- tg_message_id is NOT NULL by schema; the guard covers the LEFT JOIN miss
+             -- (raw_message_id nulled). city_ids is uuid[] NOT NULL, so cardinality is null-safe.
              case
-               when (v.contact_raw is null or v.contact_raw = '')
+               when (v.contact_normalized is null or cardinality(v.city_ids) = 0)
                 and src.username is not null and src.username <> ''
                 and rm.tg_message_id is not null
                then 'https://t.me/' || src.username || '/' || rm.tg_message_id::text

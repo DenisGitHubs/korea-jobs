@@ -1,7 +1,10 @@
 // lib/korea/cities/read.ts
 //
-// GET /api/cities — the 30 seed cities for the filter screen. initData-authed like
-// every user endpoint; non-sensitive reference data (slug + localized name + region).
+// GET /api/cities — ALL active cities (full 167-city directory) for the filter/picker screen.
+// initData-authed like every user endpoint; non-sensitive reference data (slug + localized name +
+// region). This list is intentionally UNFILTERED: the picker needs every city (canonical + the new
+// dictionary rows), unlike the AI parser/moderation prompt, which is pinned to the canonical 31
+// (sort_order < 1000; see run.ts / ads/moderation.ts). Do NOT add a sort_order filter here.
 
 import { getSql } from '../core/db.js';
 import { type ReqLike, type ResLike, send, sendError } from '../core/http.js';

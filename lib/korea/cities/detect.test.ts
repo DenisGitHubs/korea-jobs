@@ -15,13 +15,29 @@ import { buildCityMatcher, detectCitySlugs, type CityAliasInput } from './detect
 const CITIES: CityAliasInput[] = [
   { slug: 'seoul', aliases: ['сеул', '서울', 'seoul', 'seul'] },
   { slug: 'busan', aliases: ['пусан', 'бусан', '부산', 'busan', 'pusan'] },
-  { slug: 'ansan', aliases: ['ансан', '안산', 'ansan'] },
-  { slug: 'incheon', aliases: ['инчхон', 'инчон', '인천', 'incheon'] },
+  // ansan / incheon carry the Ansan-cluster landmark aliases exactly as the seed does.
+  { slug: 'ansan', aliases: ['ансан', '안산', 'ansan', 'панволь', 'банволь', '반월', 'текколь', 'вонгоктон'] },
+  { slug: 'incheon', aliases: ['инчхон', 'инчон', '인천', 'incheon', 'хогупхо'] },
   { slug: 'pyeongtaek', aliases: ['пхёнтхэк', 'пёнтэк', '평택', 'pyeongtaek'] },
   { slug: 'cheongju', aliases: ['чхонджу', '청주', 'cheongju'] },
   { slug: 'jeonju', aliases: ['чонджу', '전주', 'jeonju'] },
   { slug: 'gwangju', aliases: ['кванджу', '광주', 'gwangju', 'kwangju'] },
   { slug: 'gwangju_gyeonggi', aliases: [] },
+  // Full-coverage additions exercised below (aliases copied verbatim from draft_seed.sql).
+  { slug: 'mokpo', aliases: ['мокпхо', 'мокпо', '목포', 'mokpo'] },
+  { slug: 'yesan', aliases: ['йесан', 'есан', '예산', 'yesan'] },
+  { slug: 'osan', aliases: ['осан', '오산', 'osan'] },
+  { slug: 'eumseong', aliases: ['ымсон', '음성', 'eumseong', 'тэсо'] },
+  { slug: 'gyeongsan', aliases: ['кёнсан', '경산', 'gyeongsan'] },
+  { slug: 'chuncheon', aliases: ['чхунчхон', '춘천', 'chuncheon'] },
+  // Homonym members: ru surface excluded on purpose (routed through detect.ts); hangul+latin 1:1
+  // except Goseong, whose 고성/goseong sit on BOTH rows.
+  { slug: 'yeoncheon', aliases: ['연천', 'yeoncheon'] },
+  { slug: 'yeongcheon', aliases: ['영천', 'yeongcheon'] },
+  { slug: 'goseong_gangwon', aliases: ['고성', 'goseong'] },
+  { slug: 'goseong_gyeongnam', aliases: ['고성', 'goseong'] },
+  { slug: 'geochang', aliases: ['거창', 'geochang'] },
+  { slug: 'gochang', aliases: ['고창', 'gochang'] },
   { slug: 'special', aliases: ['a.b', 'c+d'] },
 ];
 
@@ -134,5 +150,119 @@ describe('multi-city and empty input', () => {
     expect(det('')).toEqual([]);
     expect(det('   \n  ')).toEqual([]);
     expect(det('обычный текст без города')).toEqual([]);
+  });
+});
+
+// ── Full-coverage expansion (167 cities) ─────────────────────────────────────────────────────────
+
+describe('spelling variants (main + alt + hangul)', () => {
+  it('Mokpo matches both РУ spellings and hangul', () => {
+    expect(det('Работа в Мокпхо, судоверфь')).toEqual(['mokpo']); // Kontsevich
+    expect(det('город Мокпо, кафе')).toEqual(['mokpo']); // simplified
+    expect(det('목포시 물류센터')).toEqual(['mokpo']); // hangul + suffix
+  });
+  it('Есан matches the Ё/Е systematic variant, hangul, and declines', () => {
+    expect(det('📍Есан | завод')).toEqual(['yesan']); // Е- variant of Йесан
+    expect(det('работа в Есане')).toEqual(['yesan']); // ...е locative
+    expect(det('из Есана в Сеул')).toEqual(['seoul', 'yesan']); // ...а + multi-city
+    expect(det('예산 공장 구인')).toEqual(['yesan']); // hangul
+  });
+  it('a bare new-city hangul is recognized (조립 suffix glued)', () => {
+    expect(det('오산 조립 라인')).toEqual(['osan']);
+  });
+});
+
+describe('Osan does not collide with Russian look-alikes', () => {
+  it('matches Осан and its declension', () => {
+    expect(det('завод в Осане, развозка')).toEqual(['osan']);
+  });
+  it('does NOT fire inside осанка / осанку (no such alias suffix)', () => {
+    expect(det('осанка важна')).toEqual([]);
+    expect(det('следите за осанкой')).toEqual([]);
+  });
+});
+
+describe('province-tail guard (city-name prefix of a hyphenated province)', () => {
+  it('Кёнсан-Пукто / Кёнсан-Намдо does NOT map to the city Gyeongsan', () => {
+    expect(det('Локация: Сонджу, Кёнсан-Пукто')).toEqual([]);
+    expect(det('объект в Кёнсан-Намдо')).toEqual([]);
+  });
+  it('Чхунчхон-Пукто / Чхунчхон-Намдо does NOT map to the city Chuncheon', () => {
+    expect(det('провинция Чхунчхон-Намдо')).toEqual([]);
+    expect(det('Чхунчхон-Пукто, женское общежитие')).toEqual([]);
+  });
+  it('the standalone city (and its declension) still matches', () => {
+    expect(det('город Кёнсан, завод')).toEqual(['gyeongsan']);
+    expect(det('в Кёнсане набор')).toEqual(['gyeongsan']);
+    expect(det('Чхунчхон, Канвондо')).toEqual(['chuncheon']);
+  });
+});
+
+describe('province-tail guard regression (explicit, locked)', () => {
+  // Regression that was fixed but previously not pinned by a test. The province-tail guard
+  // (PROVINCE_TAIL_GUARD in detect.ts) rejects a bare CITY alias that is really the prefix of a
+  // hyphenated PROVINCE, but the tail must be a WHOLE token so a real district is not swallowed.
+  it('«Инчхон Намдонг» → [incheon] (남동 Namdong-gu district must NOT be eaten as a namdo province tail)', () => {
+    expect(det('Инчхон Намдонг, склад')).toEqual(['incheon']);
+  });
+  it('«Кёнсан-Намдо» → [] (province, not the city Gyeongsan)', () => {
+    expect(det('Кёнсан-Намдо')).toEqual([]);
+  });
+  it('«город Кёнсан» → [gyeongsan] (the standalone city still matches)', () => {
+    expect(det('город Кёнсан')).toEqual(['gyeongsan']);
+  });
+});
+
+describe('Ansan-cluster landmark aliases', () => {
+  it('local landmarks resolve to ansan / incheon / eumseong', () => {
+    expect(det('ПАНВОЛЬ‼️ сборка LED')).toEqual(['ansan']);
+    expect(det('развоз: Текколь, Вонгоктон')).toEqual(['ansan']);
+    expect(det('반월 산업단지')).toEqual(['ansan']);
+    expect(det('возле станции Хогупхо')).toEqual(['incheon']);
+    expect(det('Ымсонг (Eumseong), Тэсо')).toEqual(['eumseong']);
+  });
+});
+
+describe('Йончхон / Ёнчхон homonym (연천 Gyeonggi vs 영천 Gyeongbuk)', () => {
+  it('bare RU surface -> BOTH cities', () => {
+    expect(det('Ёнчхон, вакансия')).toEqual(['yeoncheon', 'yeongcheon']);
+    expect(det('Йончхон набор')).toEqual(['yeoncheon', 'yeongcheon']);
+  });
+  it('Gyeonggi context -> only yeoncheon; Gyeongsang context -> only yeongcheon', () => {
+    expect(det('Ёнчхон, провинция Кёнгидо')).toEqual(['yeoncheon']);
+    expect(det('Йончхон, Кёнсан-Пукто')).toEqual(['yeongcheon']);
+  });
+  it('context can arrive via the hint', () => {
+    expect(det('Ёнчхон работа', 'канал Кёнгидо')).toEqual(['yeoncheon']);
+  });
+  it('the DISTINCT hangul/latin stay 1:1 (never ambiguous)', () => {
+    expect(det('연천군 상하차')).toEqual(['yeoncheon']);
+    expect(det('영천 공장 구인')).toEqual(['yeongcheon']);
+    expect(det('Yeongcheon factory')).toEqual(['yeongcheon']);
+  });
+});
+
+describe('Косон homonym (고성 Gangwon vs Gyeongnam — identical hangul & latin)', () => {
+  it('no context -> BOTH cities (any surface)', () => {
+    expect(det('Косон, стройка')).toEqual(['goseong_gangwon', 'goseong_gyeongnam']);
+    expect(det('고성 공장 구인')).toEqual(['goseong_gangwon', 'goseong_gyeongnam']);
+    expect(det('Goseong warehouse')).toEqual(['goseong_gangwon', 'goseong_gyeongnam']);
+  });
+  it('province context narrows to one', () => {
+    expect(det('Косон, Канвондо')).toEqual(['goseong_gangwon']);
+    expect(det('Косон, Кёнсан-Намдо')).toEqual(['goseong_gyeongnam']);
+    expect(det('고성 강원 공장')).toEqual(['goseong_gangwon']);
+  });
+});
+
+describe('Кочхан homonym (거창 Gyeongnam vs 고창 Jeonbuk)', () => {
+  it('bare RU surface -> BOTH; province context narrows', () => {
+    expect(det('Кочхан, набор')).toEqual(['geochang', 'gochang']);
+    expect(det('Кочхан, Чолла-Пукто')).toEqual(['gochang']);
+    expect(det('Кочхан, Кёнсан-Намдо')).toEqual(['geochang']);
+  });
+  it('the DISTINCT hangul stays 1:1', () => {
+    expect(det('거창 공장')).toEqual(['geochang']);
+    expect(det('고창 공장')).toEqual(['gochang']);
   });
 });

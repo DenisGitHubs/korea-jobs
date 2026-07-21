@@ -12,7 +12,8 @@ import { IconGeoUnknown } from './icons/StateIcons';
 interface CityPickerProps {
   value: string[];
   onChange: (next: string[]) => void;
-  /** Radio-style single selection (used by the ad wizard) — keeps the flat list. */
+  /** Radio-style single selection (used by the ad wizard) — same province
+   *  accordion as multi, but only one city can be chosen at a time. */
   single?: boolean;
   /** Tighter vertical rhythm for embedding inside the ad wizard. */
   compact?: boolean;
@@ -31,11 +32,15 @@ function Chevron() {
 }
 
 /**
- * Region-grouped city checklist.
- *  - `single` (ad wizard): the original flat radio list, untouched.
- *  - multi (filter / settings): frequent-city chips, a "city not specified"
- *    card and a per-province accordion (single-city provinces render inline
- *    without a chevron; multi-city provinces fold via grid-template-rows).
+ * Region-grouped city picker with a per-province accordion (single-city
+ * provinces render inline without a chevron; multi-city provinces fold via
+ * grid-template-rows). Shared by both modes so 167 cities never become a flat
+ * wall:
+ *  - `single` (ad wizard): radio selection, one city, value is `[slug]` / `[]`.
+ *    No "city not specified" card (the wizard owns its own "other" option).
+ *  - multi (filter / settings): checkbox selection + a "city not specified"
+ *    card (via `onNoCityChange`).
+ * Both show the frequent-city quick-pick chips and the expand/collapse-all head.
  */
 export function CityPicker({ value, onChange, single = false, compact = false, noCity, onNoCityChange }: CityPickerProps) {
   const { t } = useTranslation();
@@ -47,10 +52,11 @@ export function CityPicker({ value, onChange, single = false, compact = false, n
 
   // Which multi-city provinces are expanded. Seeded once (when cities first load)
   // from the incoming selection: provinces with a selected city open, rest closed.
+  // Runs in both modes so the wizard opens straight to the already-picked city.
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const seeded = useRef(false);
   useEffect(() => {
-    if (seeded.current || single || grouped.length === 0) return;
+    if (seeded.current || grouped.length === 0) return;
     seeded.current = true;
     const init: Record<string, boolean> = {};
     for (const g of grouped) {
@@ -58,17 +64,14 @@ export function CityPicker({ value, onChange, single = false, compact = false, n
     }
     setOpen(init);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [grouped, single]);
+  }, [grouped]);
 
   const toggle = (slug: string): void => {
-    if (single) {
-      onChange(value[0] === slug ? [] : [slug]);
-      return;
-    }
     const isOn = value.includes(slug);
-    onChange(isOn ? value.filter((x) => x !== slug) : [...value, slug]);
-    // Turning a city ON auto-expands its (collapsed) province so the checkbox in
-    // the list stays in sync with the tapped frequent chip.
+    // single: radio (one slug or none). multi: checkbox set.
+    onChange(single ? (isOn ? [] : [slug]) : isOn ? value.filter((x) => x !== slug) : [...value, slug]);
+    // Turning a city ON auto-expands its (collapsed) province so the row in the
+    // list stays in sync with the tapped frequent chip.
     if (!isOn) {
       const region = bySlug.get(slug)?.region_slug ?? 'other';
       if (multiSet.has(region)) setOpen((o) => ({ ...o, [region]: true }));
@@ -89,21 +92,7 @@ export function CityPicker({ value, onChange, single = false, compact = false, n
     );
   };
 
-  // ── Single mode: the original flat grouped checklist (ad wizard). ─────────
-  if (single) {
-    return (
-      <div className={`citypicker ${compact ? 'citypicker--compact' : ''}`}>
-        {grouped.map((g) => (
-          <div className="region" key={g.region}>
-            <div className="region__title">{t(regionKey(g.region))}</div>
-            <div className="section">{g.items.map((c) => CityRow(c))}</div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  // ── Multi mode: frequent chips + "not specified" card + accordion. ────────
+  // ── Shared render: frequent chips + ("not specified" card in multi) + accordion. ──
   const allOpen = multiProvinces.length > 0 && multiProvinces.every((r) => open[r]);
   const toggleAll = (): void => {
     const next: Record<string, boolean> = {};
@@ -114,7 +103,7 @@ export function CityPicker({ value, onChange, single = false, compact = false, n
   const frequent = FREQUENT_CITY_SLUGS.map((s) => bySlug.get(s)).filter((c): c is City => Boolean(c));
 
   return (
-    <div className="citypicker">
+    <div className={`citypicker ${compact ? 'citypicker--compact' : ''}`}>
       {frequent.length ? (
         <div className="citypicker__frequent">
           <div className="region__title">{t('filter.frequentTitle')}</div>

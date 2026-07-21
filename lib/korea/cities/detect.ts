@@ -28,12 +28,21 @@
 //     HANGUL aliases are UNCHANGED (no case suffix): Latin keeps the plain boundary, Hangul substring.
 //   * Hangul aliases match as a plain SUBSTRING (no boundaries): Korean does not space-separate the
 //     way the boundary classes assume, so "서울시" must still yield 서울.
-//   * Gwangju is a HOMONYM — 광주 / Кванджу / Gwangju / Kwangju names TWO different cities (the
-//     Jeolla metropolitan city `gwangju` and the Gyeonggi city `gwangju_gyeonggi`). The seed gives
-//     gwangju_gyeonggi NO aliases on purpose, so a bare surface match would only ever hit the metro;
-//     here we disambiguate by nearby context (text + hint): a Gyeonggi marker -> only gwangju_gyeonggi;
-//     a Jeolla/Honam/metropolitan marker -> only the metro; neither (or both) -> BOTH slugs (owner
-//     rule: completeness beats precision — a city filter should not silently drop a real Gwangju post).
+//   * HOMONYMS — a handful of surface forms name TWO different cities. They are handled by a
+//     generalized disambiguation table (HOMONYM_GROUPS) that mirrors the original Gwangju rule:
+//     when an ambiguous surface is present in the TEXT, membership among that group's cities is
+//     decided by nearby province context (text + hint). EXACTLY ONE member's marker present ->
+//     only that city; none or several markers -> ALL members of the group (owner rule: completeness
+//     beats precision — a city filter must not silently drop a real post). The groups:
+//       - Gwangju : 광주 / Кванджу / Gwangju -> gwangju (Jeolla metro) vs gwangju_gyeonggi (Gyeonggi).
+//                   gwangju_gyeonggi has NO aliases in the seed (only this table emits it).
+//       - Goseong : 고성 / Goseong / Косон -> goseong_gangwon vs goseong_gyeongnam. The SHARED hangul
+//                   & latin sit on BOTH rows; the ambiguous RU (косон) is NOT a seed alias.
+//       - Йончхон : ру «йончхон/ёнчхон» -> yeoncheon (연천, Gyeonggi) vs yeongcheon (영천, Gyeongbuk).
+//                   Their hangul & latin DIFFER (연천/yeoncheon vs 영천/yeongcheon) so those stay 1:1
+//                   seed aliases; only the RU surface is ambiguous and routed here.
+//       - Кочхан  : ру «кочхан» -> geochang (거창, Gyeongnam) vs gochang (고창, Jeonbuk). Same shape:
+//                   hangul & latin are 1:1 aliases, only the RU surface is routed here.
 //   * Чонджу->jeonju and Чхонджу->cheongju are 1:1 by the seed aliases (NOT treated as ambiguous here).
 
 /** A single city's slug + its raw aliases (jsonb array from the DB; validated defensively). */
@@ -79,6 +88,18 @@ const CYRILLIC_CASE_SUFFIX = '(?:а|у|е|ом)?';
 // True when an alias contains any Cyrillic letter (full block) -> it earns CYRILLIC_CASE_SUFFIX.
 const CYRILLIC_RE = new RegExp('[\\u0400-\\u04FF]');
 
+// A few CITY names are also the PREFIX of a PROVINCE name that ads write hyphenated: "Кёнсан" (the
+// city Gyeongsan) vs "Кёнсан-Пукто/Намдо" (the province), "Чхунчхон" (the city Chuncheon) vs
+// "Чхунчхон-Пукто/Намдо" (the province). The hyphen otherwise reads as a right word boundary, so the
+// bare city alias would fire on the province mention. This guard, appended to a CYRILLIC city alias,
+// rejects an immediately following province tail ("[-\s]?(пукто|намдо)"). The standalone city and its
+// declensions still match ("Кёнсан завод", "в Кёнсане"). Province-context MARKERS are compiled with
+// provinceGuard=false — for them, matching that tail is exactly the intent.
+// The province tail must be a WHOLE token: "намдо" as a bare suffix is a province, but "намдо…" that
+// continues into a letter is a different word — e.g. "Инчхон Намдонг" (남동, Namdong-gu, a district of
+// Incheon) must NOT be swallowed. So require the tail to be followed by a NON-letter.
+const PROVINCE_TAIL_GUARD = '(?![-\\s]?(?:пукто|намдо)(?![а-яёa-z]))';
+
 /** Escape every regex metacharacter so a DB-sourced alias is matched LITERALLY (never as a pattern). */
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -93,32 +114,80 @@ function normalizeText(s: string): string {
  * Compile ONE normalized token into a presence tester. Hangul -> substring; latin/cyrillic ->
  * boundary regex (compiled once, reused; no 'g' flag so .test() is stateless across texts).
  */
-function compileToken(token: string): (t: string) => boolean {
+function compileToken(token: string, provinceGuard = true): (t: string) => boolean {
   if (HANGUL_RE.test(token)) {
     const needle = token;
     return (t) => t.includes(needle);
   }
   // Cyrillic aliases get an OPTIONAL closed-list case ending before the right boundary (declensions);
-  // Latin aliases keep the plain boundary. Both keep the alphabet-aware left boundary.
-  const suffix = CYRILLIC_RE.test(token) ? CYRILLIC_CASE_SUFFIX : '';
-  const re = new RegExp(BOUNDARY_L + escapeRegex(token) + suffix + BOUNDARY_R, 'iu');
+  // Latin aliases keep the plain boundary. Both keep the alphabet-aware left boundary. A Cyrillic
+  // CITY alias also gets the province-tail guard (see PROVINCE_TAIL_GUARD); markers opt out.
+  const isCyrillic = CYRILLIC_RE.test(token);
+  const suffix = isCyrillic ? CYRILLIC_CASE_SUFFIX : '';
+  const guard = isCyrillic && provinceGuard ? PROVINCE_TAIL_GUARD : '';
+  const re = new RegExp(BOUNDARY_L + escapeRegex(token) + guard + suffix + BOUNDARY_R, 'iu');
   return (t) => re.test(t);
 }
 
-// ── Gwangju homonym context (module-level, compiled once) ─────────────────────────────────────
-// Surface forms that name a "Gwangju" (either city). Presence is checked in the TEXT only.
-const GWANGJU_SURFACE = ['광주', 'кванджу', 'gwangju', 'kwangju'].map(normalizeText);
-// Context markers, checked in TEXT + HINT. Gyeonggi -> the Seoul-area city; Jeolla/Honam/metropolitan
-// -> the metro. 광역시 = "metropolitan city" (only the metro carries that title).
-const GYEONGGI_MARKERS = ['경기', 'gyeonggi'].map(normalizeText);
-const METRO_MARKERS = ['전라', '호남', '광역시'].map(normalizeText);
+// ── Homonym disambiguation table (module-level, compiled once) ─────────────────────────────────
+// A group fires when ANY of its `surfaces` is present in the TEXT. Then each member's `markers`
+// (province context) are tested against TEXT + HINT: exactly one member matched -> only that city;
+// none / several matched -> ALL members. See the header for the four groups and why.
 
-const GWANGJU_SURFACE_TESTERS = GWANGJU_SURFACE.map(compileToken);
-const GYEONGGI_TESTERS = GYEONGGI_MARKERS.map(compileToken);
-const METRO_TESTERS = METRO_MARKERS.map(compileToken);
+/** Compile a list of raw surface/marker forms into presence testers (normalized first). Homonym
+ * forms opt OUT of the province-tail guard: a province marker like "Кёнсан-Пукто" MUST be matchable. */
+function compileForms(forms: string[]): Array<(t: string) => boolean> {
+  return forms.map((f) => compileToken(normalizeText(f), false));
+}
 
-const GWANGJU_METRO = 'gwangju';
-const GWANGJU_GYEONGGI = 'gwangju_gyeonggi';
+interface HomonymMember {
+  slug: string;
+  markers: Array<(t: string) => boolean>;
+}
+interface HomonymGroup {
+  surfaces: Array<(t: string) => boolean>;
+  members: HomonymMember[];
+}
+
+// Province context markers (ru + en + ko forms). Deliberately broad; only ever consulted when an
+// ambiguous surface already fired, so a stray marker cannot add a city on its own.
+const MK_GYEONGGI = ['경기', 'gyeonggi', 'кёнги', 'кёнгидо'];
+const MK_GANGWON = ['강원', 'gangwon', 'канвон', 'канвондо', 'кангвон'];
+const MK_GYEONGNAM = ['경남', '경상', 'gyeongnam', 'gyeongsang', 'кёнсан', 'кённам'];
+const MK_GYEONGBUK = ['경북', '경상', 'gyeongbuk', 'gyeongsang', 'кёнсан', 'кёнбук'];
+const MK_JEOLLA = ['전라', '전북', '호남', '광역시', 'jeolla', 'jeonbuk', 'honam', 'чолла', 'хонам'];
+const MK_METRO = ['전라', '호남', '광역시', 'jeolla', 'honam', 'чолла', 'хонам'];
+
+const HOMONYM_GROUPS: HomonymGroup[] = [
+  {
+    surfaces: compileForms(['광주', 'кванджу', 'кванчжу', 'gwangju', 'kwangju']),
+    members: [
+      { slug: 'gwangju', markers: compileForms(MK_METRO) },
+      { slug: 'gwangju_gyeonggi', markers: compileForms(MK_GYEONGGI) },
+    ],
+  },
+  {
+    surfaces: compileForms(['고성', 'goseong', 'косон']),
+    members: [
+      { slug: 'goseong_gangwon', markers: compileForms(MK_GANGWON) },
+      { slug: 'goseong_gyeongnam', markers: compileForms(MK_GYEONGNAM) },
+    ],
+  },
+  {
+    surfaces: compileForms(['йончхон', 'ёнчхон']),
+    members: [
+      { slug: 'yeoncheon', markers: compileForms(MK_GYEONGGI) },
+      { slug: 'yeongcheon', markers: compileForms(MK_GYEONGBUK) },
+    ],
+  },
+  {
+    surfaces: compileForms(['кочхан']),
+    members: [
+      { slug: 'geochang', markers: compileForms(MK_GYEONGNAM) },
+      { slug: 'gochang', markers: compileForms(MK_JEOLLA) },
+    ],
+  },
+];
 
 /**
  * Compile a reusable matcher from the active cities' aliases. Build ONCE per batch, then call
@@ -157,21 +226,21 @@ export function detectCitySlugs(
     if (a.test(norm)) result.add(a.slug);
   }
 
-  // Gwangju disambiguation. Base matching can only ever have added the metro slug (gwangju_gyeonggi
-  // has no aliases), so when a Gwangju surface form is present in the TEXT, decide membership by the
-  // TEXT+HINT context and rewrite the metro/gyeonggi pair accordingly.
-  if (GWANGJU_SURFACE_TESTERS.some((t) => t(norm))) {
-    const ctx = normalizeText(`${text ?? ''} \n ${opts?.hintText ?? ''}`);
-    const gyeonggi = GYEONGGI_TESTERS.some((t) => t(ctx));
-    const metro = METRO_TESTERS.some((t) => t(ctx));
-    // Drop the metro slug added by base matching; re-add exactly the decided slug(s). We never DROP
-    // gwangju_gyeonggi (future-proof: were it ever given an explicit alias, that match should stand).
-    result.delete(GWANGJU_METRO);
-    let decided: string[];
-    if (gyeonggi && !metro) decided = [GWANGJU_GYEONGGI];
-    else if (metro && !gyeonggi) decided = [GWANGJU_METRO];
-    else decided = [GWANGJU_METRO, GWANGJU_GYEONGGI]; // no context OR conflicting context -> both
-    for (const s of decided) if (matcher.knownSlugs.has(s)) result.add(s);
+  // Homonym disambiguation. For every group whose ambiguous surface is present in the TEXT, decide
+  // which member cities belong by the TEXT+HINT province context, then force the result's membership
+  // for that group's slugs to EXACTLY the decided set: base matching may have added a member via an
+  // ambiguous alias (Gwangju/Goseong) — that is corrected here; members added via an UNAMBIGUOUS
+  // alias only ever coincide with the decided set for realistic inputs.
+  let ctx: string | null = null;
+  for (const group of HOMONYM_GROUPS) {
+    if (!group.surfaces.some((t) => t(norm))) continue;
+    if (ctx === null) ctx = normalizeText(`${text ?? ''} \n ${opts?.hintText ?? ''}`);
+    const matched = group.members.filter((m) => m.markers.some((t) => t(ctx as string)));
+    const decided = new Set((matched.length === 1 ? matched : group.members).map((m) => m.slug));
+    for (const m of group.members) {
+      if (decided.has(m.slug) && matcher.knownSlugs.has(m.slug)) result.add(m.slug);
+      else result.delete(m.slug);
+    }
   }
 
   return [...result];
