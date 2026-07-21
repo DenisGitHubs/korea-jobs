@@ -37,6 +37,16 @@ export interface Stats {
   aiColds24h: number;
   aiCost24h: number;
   aiCost30d: number;
+  // Reach-the-AI funnel over the last 24h (raw_messages): how many rows the parser FINISHED (M) and how
+  // many of those actually reached the model (N = M minus the pre-AI skips: spam_prefilter / too_old /
+  // duplicate / verdict-cache replays — all of which leave confidence NULL). Shows how much the free
+  // filters + verdict cache save. aiProcessed24h == 0 hides the line.
+  aiProcessed24h: number;
+  aiReached24h: number;
+  // AI-geo learning (geo_suggestions, draft_0021). Top-5 unresolved city/region names + top-5 decoded
+  // slang pairs — owner inspection, PII-free. Empty when the table is missing or has no rows.
+  unknownCities: { surface: string; n: number }[];
+  slang: { surface: string; norm: string; n: number }[];
 }
 
 /** Coerce a driver count (int4 -> number, but guard string/NULL) to a safe integer. */
@@ -127,6 +137,55 @@ export async function gatherStats(): Promise<Stats> {
     console.error('[stats] ai_usage read failed (table missing?):', err instanceof Error ? err.message : String(err));
   }
 
+  // (3b) Reach-the-AI funnel (owner rule 2026-07-21): of everything the parser FINISHED in the last 24h
+  // (M = processed_at within 24h, any terminal status), how many actually reached the model (N). The pre-AI
+  // free filters (spam_prefilter / too_old / duplicate) and verdict-cache REPLAYS all skip a row WITHOUT a
+  // model call — and crucially every one of them leaves raw_messages.confidence NULL, because confidence is
+  // written ONLY on a row the model actually judged (parser/run.ts reject/low_confidence path). So the "did
+  // NOT reach AI" bucket = skipped rows with confidence IS NULL, EXCLUDING the two POST-AI blocks
+  // (takedown / admin_hidden — those DID reach the model as a vacancy, then got blocked). N = M − that
+  // bucket. BEST-EFFORT: any fault degrades to 0/0 and renderStats simply omits the line. Approximate by
+  // design (a reject where the model omitted its confidence would fall into the pre-AI bucket — rare).
+  let aiProcessed24h = 0, aiReached24h = 0;
+  try {
+    const fRows = (await sql`
+      select
+        count(*) filter (where processed_at > now() - interval '24 hours')::int as processed_24h,
+        count(*) filter (
+          where processed_at > now() - interval '24 hours'
+            and status = 'skipped'
+            and confidence is null
+            and reject_reason is distinct from 'takedown'
+            and reject_reason is distinct from 'admin_hidden'
+        )::int as pre_ai_24h
+      from raw_messages`) as unknown as Record<string, unknown>[];
+    const f = fRows[0] ?? {};
+    aiProcessed24h = n(f.processed_24h);
+    aiReached24h = Math.max(0, aiProcessed24h - n(f.pre_ai_24h));
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[stats] AI-reach funnel read failed:', err instanceof Error ? err.message : String(err));
+  }
+
+  // (4) AI-geo learning ledger (geo_suggestions, draft_0021). BEST-EFFORT: a later migration, so a
+  // deploy-before-apply window (or simply no suggestions yet) degrades to empty lists — never breaks
+  // /stats. Two tiny top-5 reads; PII-free (place names + counts only).
+  let unknownCities: { surface: string; n: number }[] = [];
+  let slang: { surface: string; norm: string; n: number }[] = [];
+  try {
+    const cityRows = (await sql`
+      select surface, n from geo_suggestions where kind = 'city'
+      order by n desc, last_seen desc limit 5`) as unknown as Record<string, unknown>[];
+    const slangRows = (await sql`
+      select surface, norm, n from geo_suggestions where kind = 'slang'
+      order by n desc, last_seen desc limit 5`) as unknown as Record<string, unknown>[];
+    unknownCities = cityRows.map((r) => ({ surface: String(r.surface ?? ''), n: n(r.n) }));
+    slang = slangRows.map((r) => ({ surface: String(r.surface ?? ''), norm: String(r.norm ?? ''), n: n(r.n) }));
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[stats] geo_suggestions read failed (table missing?):', err instanceof Error ? err.message : String(err));
+  }
+
   return {
     usersTotal: n(u.total),
     usersNew24h: n(u.new_24h),
@@ -148,12 +207,16 @@ export async function gatherStats(): Promise<Stats> {
     aiColds24h,
     aiCost24h,
     aiCost30d,
+    aiProcessed24h,
+    aiReached24h,
+    unknownCities,
+    slang,
   };
 }
 
 /** Plain-text report for the admin. No parse_mode, no personal data — aggregates only. */
 export function renderStats(s: Stats): string {
-  return [
+  const lines = [
     'Статистика',
     `Пользователи: всего ${s.usersTotal} · новых за 24ч ${s.usersNew24h} / за 7д ${s.usersNew7d} · ` +
       `активных за 24ч ${s.usersActive24h} / за 7д ${s.usersActive7d}`,
@@ -165,5 +228,19 @@ export function renderStats(s: Stats): string {
     `ИИ за 24ч: вызовов ${s.aiCalls24h} · вход ${s.aiInput24h} · выход ${s.aiOutput24h} · ` +
       `кэш-чтение ${s.aiCacheRead24h} · остываний ${s.aiColds24h} · ≈$${s.aiCost24h.toFixed(2)}`,
     `ИИ за 30 дней: ≈$${s.aiCost30d.toFixed(2)}`,
-  ].join('\n');
+  ];
+  // Reach-the-AI funnel (owner rule 2026-07-21): of everything processed in 24h, how much actually cost a
+  // model call (the free filters + verdict cache do the rest). Only when we have a processed count to divide.
+  if (s.aiProcessed24h > 0) {
+    const pct = Math.round((s.aiReached24h / s.aiProcessed24h) * 100);
+    lines.push(`За сутки: до ИИ дошло ${s.aiReached24h} из ${s.aiProcessed24h} (${pct}%)`);
+  }
+  // AI-geo learning (only when there is something to show): unresolved city/region names + decoded slang.
+  if (s.unknownCities.length > 0) {
+    lines.push('Незнакомые города (топ-5): ' + s.unknownCities.map((c) => `${c.surface} — ${c.n}`).join(', '));
+  }
+  if (s.slang.length > 0) {
+    lines.push('Сленг (топ-5): ' + s.slang.map((x) => `${x.surface} → ${x.norm || '?'} — ${x.n}`).join(', '));
+  }
+  return lines.join('\n');
 }

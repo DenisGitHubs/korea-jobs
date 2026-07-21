@@ -23,7 +23,7 @@ import { ApiErrorCode } from '../core/errors.js';
 import { authenticate, type AuthedUser } from '../core/context.js';
 import { getConfigNumber } from '../config.js';
 import { decideAdModeration } from './moderation.js';
-import { notifyAdminsPending, resolveAdCityIds } from './rw.js';
+import { notifyAdminsPending, resolveAdCityIds, resolveAdRegionSlugs } from './rw.js';
 import { parseAdInput, adModText, UUID_RE, type AdBody } from './input.js';
 
 /** The caller's own ad, resolved once per request. Carries the columns every action needs
@@ -239,6 +239,11 @@ async function adPatch(req: ReqLike, res: ResLike): Promise<void> {
     // MULTI-CITY: recompute city_ids on edit exactly like create — primary (city_id) is the form pick,
     // plus any city named in the new description. A patch may change the text, so re-derive from scratch.
     const cityIds = await resolveAdCityIds(sql, cityId, f.description);
+    // MULTI-REGION (regions wave): recompute region_slugs on edit exactly like adsCreate — the regions of
+    // the resolved cities ∪ the singular region_slug pick ∪ every region named in the new text. A patch
+    // may change the city/text, so re-derive from scratch (symmetric with adsCreate). WITHOUT this an
+    // edited ad kept its OLD region_slugs and silently fell out of the region filter after a region change.
+    const regionSlugs = await resolveAdRegionSlugs(sql, cityIds, regionSlug, f.description);
 
     const rows = (await sql`
       update user_ads set
@@ -246,6 +251,7 @@ async function adPatch(req: ReqLike, res: ResLike): Promise<void> {
         city_ids = ${cityIds}::uuid[],
         city_text = ${cityText},
         region_slug = ${regionSlug},
+        region_slugs = ${regionSlugs}::text[],
         work_type = ${f.workType}::work_type,
         visa_types = ${f.visaTypes}::visa_type[],
         placement_fee = ${f.placementFee}::placement_fee,

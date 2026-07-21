@@ -5,7 +5,7 @@ import { useSettingsStore } from '../store/settingsStore';
 import { useFilterStore } from '../store/filterStore';
 import { cityLabel } from '../lib/cities';
 import { timeAgo } from '../lib/format';
-import { genderKey } from '../shared/labels';
+import { genderKey, regionKey } from '../shared/labels';
 import { WorkTypeBadge } from './WorkTypeBadge';
 import { IconCheck } from './icons/StateIcons';
 
@@ -47,15 +47,26 @@ export function VacancyCard({
 
   // Multi-city display: prefer the city that matches the user's active city
   // filter (if any), otherwise the main city (first). A "+N" badge counts the
-  // rest; the full list goes into aria-label. 0 cities → "city not specified".
+  // rest; the full list goes into aria-label. When there is no city but a region
+  // is known → "<Region> · region"; only with neither → "city not specified".
   const cities = vacancy.cities?.length ? vacancy.cities : vacancy.city ? [vacancy.city] : [];
+  const regions = vacancy.regions ?? [];
   const shown =
     (cities.length > 1 && filterCities.length
       ? cities.find((c) => filterCities.includes(c.slug))
       : undefined) ?? cities[0];
-  const cityName = shown ? cityLabel(shown, lang, t) : t('city.unspecified');
-  const cityExtra = cities.length > 1 ? cities.length - 1 : 0;
-  const cityAria = cities.length ? cities.map((c) => cityLabel(c, lang, t)).join(', ') : t('city.unspecified');
+  const regionSuffix = t('city.regionSuffix');
+  const cityName = shown
+    ? cityLabel(shown, lang, t)
+    : regions.length
+      ? `${t(regionKey(regions[0]))} · ${regionSuffix}`
+      : t('city.unspecified');
+  const cityExtra = cities.length > 1 ? cities.length - 1 : !cities.length && regions.length > 1 ? regions.length - 1 : 0;
+  const cityAria = cities.length
+    ? cities.map((c) => cityLabel(c, lang, t)).join(', ')
+    : regions.length
+      ? `${regions.map((r) => t(regionKey(r))).join(', ')} · ${regionSuffix}`
+      : t('city.unspecified');
 
   const isRepost = Boolean((vacancy as { repost?: boolean }).repost);
   const fromUser = vacancy.source_kind === 'user';

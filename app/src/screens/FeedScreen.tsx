@@ -443,13 +443,22 @@ function QuickFilters({
     chips.push({ key: 'housing', label: t('filter.housing'), onRemove: () => apply({ ...filter, housing: false }) });
   if (filter.meals)
     chips.push({ key: 'meals', label: t('filter.meals'), onRemove: () => apply({ ...filter, meals: false }) });
+  // "+ не указан" belongs to the geo selection as a whole; show it on the first
+  // present geo chip (cities if any, else regions).
+  const showNoCity = filter.noCity && (filter.cities.length > 0 || filter.regions.length > 0);
+  const noCityTxt = showNoCity ? ` + ${t('filter.unspecifiedShort')}` : '';
   if (filter.cities.length)
     chips.push({
       key: 'cities',
-      label: `${t('filter.citiesSection')} · ${filter.cities.length}${
-        filter.noCity ? ` + ${t('filter.unspecifiedShort')}` : ''
-      }`,
-      onRemove: () => apply({ ...filter, cities: [], noCity: true }),
+      label: `${t('filter.citiesSection')} · ${filter.cities.length}${noCityTxt}`,
+      // Keep noCity only if a region selection still remains; otherwise reset it.
+      onRemove: () => apply({ ...filter, cities: [], noCity: filter.regions.length ? filter.noCity : true }),
+    });
+  if (filter.regions.length)
+    chips.push({
+      key: 'regions',
+      label: `${t('filter.regionsSection')} · ${filter.regions.length}${filter.cities.length ? '' : noCityTxt}`,
+      onRemove: () => apply({ ...filter, regions: [], noCity: filter.cities.length ? filter.noCity : true }),
     });
 
   if (!chips.length) return null;

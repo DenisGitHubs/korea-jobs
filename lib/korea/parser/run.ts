@@ -20,15 +20,19 @@ import { scrubContacts } from '../core/scrub.js';
 import { truncateContacts } from '../core/contact-trim.js';
 import { getConfigNumber, getConfigString, getConfigBool } from '../config.js';
 import { textHash } from './texthash.js';
+import { verdictHash, shouldCacheVerdict, lookupVerdictCache, touchVerdictCache, upsertVerdictCache } from './verdict-cache.js';
 import { cleanForAi } from './text-clean.js';
 import { extractJson } from './extract-json.js';
 import { looksLikeSpam } from './spamfilter.js';
 import { recordAiUsage } from '../ai-usage.js';
 import { recordAiReject } from './reject-log.js';
 import { pickCanonical, isLiveUserHandle, normalizeHandle } from './canonical.js';
-import { buildCityMatcher, detectCitySlugs } from '../cities/detect.js';
+import { buildCityMatcher, detectCitySlugs, detectRegionSlugs } from '../cities/detect.js';
 import {
   buildSystemPrompt,
+  GEO_RESOLVE_INSTRUCTION,
+  PARSER_CLASSIFY_INSTRUCTION,
+  readAiGeoFields,
   VISA_TYPES,
   PLACEMENT_FEES,
   WORK_TYPES,
@@ -93,6 +97,36 @@ const MODEL_ALIASES: Record<string, string> = {
   sonnet: 'claude-sonnet-5',
   opus: 'claude-opus-4-8',
 };
+
+/** One row for the geo_suggestions learning ledger (Part B): an unresolved model place-name
+ *  (kind='city', norm='') or a decoded slang pair (kind='slang', norm=decoded). */
+interface GeoSuggestion {
+  kind: 'city' | 'slang';
+  surface: string;
+  norm: string;
+}
+
+/**
+ * Best-effort upsert of AI-geo learning rows (owner /stats inspection). NEVER throws — a geo_suggestions
+ * write must never break a parse (the table is a later migration, so a deploy-before-apply window just
+ * logs and moves on). Counts hits per (kind, surface, norm) and refreshes last_seen. surface/norm are
+ * already trimmed+capped by readAiGeoFields; norm='' is the null-region canon (matches the unique index).
+ */
+async function recordGeoSuggestions(sql: ReturnType<typeof getSql>, items: GeoSuggestion[]): Promise<void> {
+  if (items.length === 0) return;
+  try {
+    for (const s of items) {
+      await sql`
+        insert into geo_suggestions (kind, surface, norm, n, last_seen)
+        values (${s.kind}, ${s.surface}, ${s.norm}, 1, now())
+        on conflict (kind, surface, norm)
+          do update set n = geo_suggestions.n + 1, last_seen = now()`;
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[parser] geo_suggestions write skipped:', err instanceof Error ? err.message : String(err));
+  }
+}
 
 export interface ParseResult {
   processed: number;
@@ -368,9 +402,64 @@ export async function runParse(): Promise<ParseResult> {
     console.log(`[parser] in-batch duplicates (no AI): ${dropInBatch.size}`);
   }
 
-  // Total skipped before the model = spam + cross-time dups + in-batch dups. Only UNIQUE
-  // (or too-short) messages reach the AI below.
-  const preAiSkipped = spamIds.length + crossSkips.length + dropInBatch.size;
+  // 1c) VERDICT CACHE (owner rule 2026-07-21). After the free filters, HALF of what remains repeats a
+  // message the AI already judged a reject — often ONE short spam/chit-chat line posted many times an hour
+  // that the 40-char text_hash dedup deliberately ignores (short texts hash to null there). A SEPARATE,
+  // floor-less FUZZY letter-skeleton hash (verdict-cache.ts — lowercase, letters only, so a copy that
+  // mimics only a digit 8000→9000 or an emoji 🐠→🏝 still collapses onto the same family) lets us reuse the
+  // PRIOR verdict without paying the model again: hash every survivor, fetch all matches in ONE select,
+  // mark a hit skipped with the cached reject_reason (never sent to the AI), count the replay in the reject
+  // journal (a reused reject still counts), and bump its cache row's n/last_seen. Best-effort — a cache
+  // fault leaves the row for the model (nothing lost). Only genuine NON-vacancy rejects are ever cached
+  // (see the write-back after the AI), so a hit is always a real reject verdict — never a vacancy or a
+  // low_confidence "Не проверено" row. This hash is a DIFFERENT contour from raw_messages.text_hash
+  // (vacancy dedup), so we intentionally do NOT touch text_hash on a cache-skip.
+  const verdictHashById = new Map<string, string | null>();
+  for (const r of pending) verdictHashById.set(r.id as string, verdictHash((r.text as string | null) ?? null));
+  const cacheHashes = [
+    ...new Set([...verdictHashById.values()].filter((h): h is string => h != null)),
+  ];
+  const cachedVerdict = await lookupVerdictCache(sql, cacheHashes);
+  const cacheSkips: { rawId: string; hash: string; reason: string }[] = [];
+  pending = pending.filter((r) => {
+    const h = verdictHashById.get(r.id as string);
+    if (h != null && cachedVerdict.has(h)) {
+      cacheSkips.push({ rawId: r.id as string, hash: h, reason: cachedVerdict.get(h) as string });
+      return false;
+    }
+    return true;
+  });
+  if (cacheSkips.length > 0) {
+    for (const s of cacheSkips) {
+      await sql`
+        update raw_messages set status='skipped', processed_at=now(), reject_reason=${s.reason}
+        where id=${s.rawId}::uuid`;
+      // Reject journal parity (owner rule 2026-07-20): a cache replay IS a real AI-verdict reject being
+      // reused, so it MUST advance the day+reason counter exactly like a fresh reject — the reject-log
+      // invariant is "every AI-verdict reject counted always", and these short repeats are the single MOST
+      // common reject (without this they slipped past the counter). logSample:false — count the replay but
+      // never re-store the full text of a repeat (the first copy already sampled it; low_confidence is
+      // never cached so it never lands here). Best-effort (recordAiReject never throws). NOTE: we do NOT
+      // write raw_messages.confidence on a cache replay — that NULL is exactly how /stats separates a
+      // pre-AI skip from a real AI verdict (admin/stats.ts), so leave it untouched.
+      await recordAiReject({
+        reason: s.reason,
+        confidence: null,
+        postedAt: null,
+        text: '',
+        sourceNote: null,
+        logSample: false,
+      });
+    }
+    // Bump n/last_seen once per DISTINCT hash we served from cache (best-effort).
+    await touchVerdictCache(sql, [...new Set(cacheSkips.map((s) => s.hash))]);
+    // eslint-disable-next-line no-console
+    console.log(`[parser] verdict-cache hits (no AI): ${cacheSkips.length}`);
+  }
+
+  // Total skipped before the model = spam + cross-time dups + in-batch dups + verdict-cache hits. Only
+  // UNIQUE, un-cached (or too-short-to-dedup) messages reach the AI below.
+  const preAiSkipped = spamIds.length + crossSkips.length + dropInBatch.size + cacheSkips.length;
   if (pending.length === 0) return { processed: preAiSkipped, vacancies: 0 };
 
   // 2) Active cities. TWO views over the SAME rows (one query):
@@ -399,6 +488,13 @@ export async function runParse(): Promise<ParseResult> {
   const regionSlugs = [...new Set(promptCityRows.map((r) => r.region_slug).filter(Boolean))] as string[];
   // FULL slug→id map (all 167): resolves BOTH the AI's canonical pick AND detect.ts's new-city slugs.
   const cityIdBySlug = new Map<string, string>(cityRows.map((r) => [r.slug as string, r.id as string]));
+  // FULL city id→region_slug map (all 167): a row's region set includes the regions of its cities
+  // (regions wave, Part A). NULL region_slugs are skipped (every seed city has one, so this is rare).
+  const regionSlugByCityId = new Map<string, string>();
+  for (const r of cityRows) {
+    const rs = r.region_slug as string | null;
+    if (rs) regionSlugByCityId.set(r.id as string, rs);
+  }
   // Compiled ONCE over the FULL set, reused for every row below (the regexes are shared → cheap per message).
   const cityMatcher = buildCityMatcher(
     cityRows.map((r) => ({ slug: r.slug as string, aliases: r.aliases })),
@@ -406,6 +502,31 @@ export async function runParse(): Promise<ParseResult> {
   // region is guided by the prompt (not a schema enum), so re-close the set on the server to the SAME
   // canonical regions the prompt lists (the AI can only echo one of those): unknown region -> null.
   const regionSlugSet = new Set<string>(regionSlugs);
+
+  // MULTI-GEO precompute (regions wave): for EVERY pending row, the DICTIONARY-detected city slugs +
+  // region slugs from the text + the source hint (title/@username/notes). Computed ONCE here and reused
+  // twice: (a) to set need_geo:1 on an item where the dictionary found NOTHING (conditional AI-geo,
+  // Part B), and (b) to build city_ids / region_slugs in the apply loop. The @username joins the hint
+  // with underscores rewritten to spaces so a handle like "korea_daegu_jobs" -> "korea daegu jobs"
+  // lets a city/region alias match on a WORD boundary (owner rule 2026-07-21); a glued "workansan"
+  // stays boundary-safe. detect passes the hint as CONTEXT too (homonym disambiguation).
+  const rowGeo = pending.map((r) => {
+    const srcTitle = ((r.source_title as string | null) ?? '').trim();
+    const srcUsername = ((r.source_username as string | null) ?? '').replace(/_/g, ' ').trim();
+    const srcNotes = ((r.source_notes as string | null) ?? '').trim();
+    const srcHint = [srcTitle, srcUsername, srcNotes].filter(Boolean).join(' — ');
+    const text = (r.text as string | null) ?? '';
+    const citySlugs = [
+      ...new Set([
+        ...detectCitySlugs(text, cityMatcher, { hintText: srcHint }),
+        ...detectCitySlugs(srcHint, cityMatcher),
+      ]),
+    ];
+    const detRegions = [
+      ...new Set([...detectRegionSlugs(text, srcHint), ...detectRegionSlugs(srcHint)]),
+    ];
+    return { srcHint, citySlugs, detRegions };
+  });
 
   // 3) Prompt + input. strict structured outputs can't compile our schema, so the required
   // JSON shape + enums live in the system prompt; every field is re-validated server-side.
@@ -422,11 +543,14 @@ export async function runParse(): Promise<ParseResult> {
     // cleanForAi collapses decorative emoji noise for the MODEL INPUT ONLY (fewer tokens). The
     // ORIGINAL r.text still drives text_hash (above), description and every content hash below, so
     // this can never move a dedup bucket. See parser/text-clean.ts.
-    const item: { id: string; text: string; source_hint?: string } = {
+    const item: { id: string; text: string; source_hint?: string; need_geo?: 1 } = {
       id: String(i),
       text: cleanForAi((r.text as string | null) ?? ''),
     };
     if (sourceHint) item.source_hint = sourceHint;
+    // need_geo:1 ONLY when the dictionary found NEITHER a city NOR a region for this row (in text or
+    // hint). Then — and only then — the model is asked to resolve the place from context/slang (Part B).
+    if (rowGeo[i]!.citySlugs.length === 0 && rowGeo[i]!.detRegions.length === 0) item.need_geo = 1;
     return item;
   });
 
@@ -442,12 +566,27 @@ export async function runParse(): Promise<ParseResult> {
     const resp = await client.messages.create({
       model,
       max_tokens: 16000,
-      // The system block is the STABLE cacheable prefix (city list + extraction contract,
-      // now ≥4096 tokens so haiku actually caches it — under the min the breakpoint is a
-      // silent no-op). ttl:'1h' keeps the prefix warm across a whole cron sweep instead of
-      // the default 5m. cache_control stays on the system block ONLY; the per-batch messages
-      // below are volatile and MUST come after it so they never enter the cached prefix.
-      system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } }],
+      // TWO system blocks (regions wave, Part B):
+      //   [0] the STABLE cacheable prefix (city list + extraction contract, ≥4096 tokens so haiku
+      //       actually caches it — under the min the breakpoint is a silent no-op). It is BYTE-IDENTICAL
+      //       to ads/moderation.ts's block[0] (same buildSystemPrompt + same cities/regions derivation),
+      //       so the two callers SHARE this one cache entry — do NOT change what goes into it.
+      //   [1] the STATIC parser-only tail (Part B geo-resolution + the classification refinements). It is
+      //       placed AFTER block[0] so it never changes the shared prefix (Skills/Рома/ai-cost-haiku), and
+      //       gets its OWN cache_control: block[0]'s cached prefix is a strict PREFIX of block[1]'s, so
+      //       block[0] stays shared with moderation while block[1] (parser-only, static) warms once per
+      //       wave. ttl:'1h' on both keeps them warm across a whole cron sweep. GEO_RESOLVE_INSTRUCTION +
+      //       PARSER_CLASSIFY_INSTRUCTION are BOTH static parser-only text, joined into this one block so
+      //       there is still just a single parser-tail cache breakpoint. The per-batch messages are
+      //       volatile and come after.
+      system: [
+        { type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } },
+        {
+          type: 'text',
+          text: GEO_RESOLVE_INSTRUCTION + '\n\n' + PARSER_CLASSIFY_INSTRUCTION,
+          cache_control: { type: 'ephemeral', ttl: '1h' },
+        },
+      ],
       messages: [{ role: 'user', content: JSON.stringify({ messages: inputItems }) }],
     } as Anthropic.MessageCreateParamsNonStreaming);
 
@@ -511,6 +650,15 @@ export async function runParse(): Promise<ParseResult> {
           sourceNote: (row.source_username as string | null) ?? null,
           logSample: rejectLogEnabled,
         });
+        // VERDICT CACHE write-back (owner rule 2026-07-21): remember this reject so an EXACT repeat skips
+        // the model next time (see the pre-AI lookup at 1c). Cache ONLY a genuine NON-vacancy reject —
+        // low_confidence is already excluded here, and shouldCacheVerdict re-asserts BOTH (never a
+        // vacancy, never low_confidence) so the policy is one pure, testable gate. Best-effort.
+        // verdictHashById keyed the row before the AI, so short texts (null hash) are simply not cached.
+        if (shouldCacheVerdict(it.is_vacancy, rejectReason)) {
+          const vh = verdictHashById.get(rawId) ?? null;
+          if (vh) await upsertVerdictCache(sql, vh, rejectReason);
+        }
       }
       continue;
     }
@@ -555,29 +703,62 @@ export async function runParse(): Promise<ParseResult> {
     // inside this text). scrubContacts strips phones/@handles/t.me·wa.me·kakao links.
     const description = scrubContacts((row.text as string | null) ?? null);
 
-    // MULTI-CITY (multi-city plan): city_ids = the DISTINCT union of the AI's primary city (cityId),
-    // every city named in the ORIGINAL text (NOT cleanForAi — cleaning could drop a city), and every
-    // city the source channel's title, @username and notes name (source hint). The @username joins the
-    // hint with underscores rewritten to spaces (owner rule 2026-07-21: "the chat/bot name often
-    // carries the city") — so "korea_daegu_jobs" -> "korea daegu jobs" lets a city alias match on a
-    // WORD boundary ("daegu"), while a glued handle like "workansan" stays boundary-safe (no false
-    // "ansan"). detect passes the hint as CONTEXT too so a bare "Кванджу" in a Gyeonggi channel
-    // resolves correctly. city_id stays the PRIMARY city.
-    const srcTitle = ((row.source_title as string | null) ?? '').trim();
-    const srcUsername = ((row.source_username as string | null) ?? '').replace(/_/g, ' ').trim();
-    const srcNotes = ((row.source_notes as string | null) ?? '').trim();
-    const srcHint = [srcTitle, srcUsername, srcNotes].filter(Boolean).join(' — ');
+    // MULTI-CITY (multi-city plan): city_ids = the DISTINCT union of the AI's primary city (cityId) and
+    // every city the DICTIONARY named in the ORIGINAL text + the source hint (rowGeo[idx], precomputed
+    // above from the raw text and the title/@username/notes hint). city_id stays the PRIMARY city.
+    const geo = rowGeo[idx]!;
     const cityIdSet = new Set<string>();
     if (cityId) cityIdSet.add(cityId);
-    const detectedSlugs = [
-      ...detectCitySlugs((row.text as string | null) ?? '', cityMatcher, { hintText: srcHint }),
-      ...detectCitySlugs(srcHint, cityMatcher),
-    ];
-    for (const slug of detectedSlugs) {
+    for (const slug of geo.citySlugs) {
       const id = cityIdBySlug.get(slug);
       if (id) cityIdSet.add(id);
     }
+
+    // MULTI-REGION (regions wave, Part A): region_slugs = the regions of every city in city_ids ∪ every
+    // region the dictionary named in the text/hint ∪ the singular AI region pick (regionSlug). Built
+    // additively; region_slug (the AI's single pick) stays the PRIMARY region column.
+    const regionSet = new Set<string>();
+    for (const rs of geo.detRegions) regionSet.add(rs);
+    if (regionSlug) regionSet.add(regionSlug);
+
+    // CONDITIONAL AI-GEO (Part B, owner rule): only for a need_geo item the model MAY return city_norm /
+    // region_norm / city_slang. Resolve city_norm/region_norm through the FULL matcher (167 + provinces)
+    // into city_ids / region_slugs — NEVER into city_id (the dedup anchor stays the dictionary/AI pick).
+    // Unresolved names + every decoded slang pair are logged to geo_suggestions (best-effort, below).
+    //
+    // SERVER GATE (defense in depth, like every other model field): the Part-B geo keys are honoured ONLY
+    // for a row we actually flagged need_geo:1 — i.e. the dictionary found NEITHER a city NOR a region
+    // (the SAME condition inputItems used to set need_geo). If the model volunteers city_norm/region_norm/
+    // city_slang for a row that DID resolve from the dictionary, we ignore them, so a stray field can
+    // never pollute (or override) a dictionary-resolved row's geo.
+    const needGeo = geo.citySlugs.length === 0 && geo.detRegions.length === 0;
+    const suggestions: GeoSuggestion[] = [];
+    const aiGeo = needGeo ? readAiGeoFields(it) : { cityNorm: null, regionNorm: null, slang: [] };
+    if (aiGeo.cityNorm) {
+      const slugs = detectCitySlugs(aiGeo.cityNorm, cityMatcher);
+      if (slugs.length > 0) {
+        for (const s of slugs) {
+          const id = cityIdBySlug.get(s);
+          if (id) cityIdSet.add(id);
+        }
+      } else {
+        suggestions.push({ kind: 'city', surface: aiGeo.cityNorm, norm: '' }); // unknown city -> learn
+      }
+    }
+    if (aiGeo.regionNorm) {
+      const regions = detectRegionSlugs(aiGeo.regionNorm);
+      if (regions.length > 0) for (const rs of regions) regionSet.add(rs);
+      else suggestions.push({ kind: 'city', surface: aiGeo.regionNorm, norm: '' }); // unknown region -> learn
+    }
+    for (const p of aiGeo.slang) suggestions.push({ kind: 'slang', surface: p.slang, norm: p.norm });
+
     const cityIds = [...cityIdSet];
+    // regions of the resolved cities are folded in AFTER AI-geo (city_norm may have added a city).
+    for (const id of cityIdSet) {
+      const rs = regionSlugByCityId.get(id);
+      if (rs) regionSet.add(rs);
+    }
+    const cityRegionSlugs = [...regionSet];
 
     // Takedown / admin-hidden gate (007 CRIT + owner-hide guard). Never resurrect content taken
     // down for a ToS 5.2(i) contact violation, NOR content the admin manually hid via rep:hide.
@@ -619,13 +800,13 @@ export async function runParse(): Promise<ParseResult> {
       // description, and the complaint snippet (reports/rw.ts) already falls back title -> description.
       upserted = await sql`
         insert into vacancies (
-          city_id, city_ids, region_slug, work_type, gender, lang,
+          city_id, city_ids, region_slug, region_slugs, work_type, gender, lang,
           title, description, employer,
           contact_raw, contact_kind,
           visa_types, placement_fee, has_housing, has_meals,
           source_id, raw_message_id, posted_at, dedup_extra
         ) values (
-          ${cityId}::uuid, ${cityIds}::uuid[], ${regionSlug}, ${workType}::work_type, ${gender}::gender, ${null},
+          ${cityId}::uuid, ${cityIds}::uuid[], ${regionSlug}, ${cityRegionSlugs}::text[], ${workType}::work_type, ${gender}::gender, ${null},
           ${null}, ${description}, ${it.employer ?? null},
           ${contactRaw}, ${contactKind}::contact_kind,
           ${visaTypes}::visa_type[], ${placementFee}::placement_fee, ${hasHousing}, ${hasMeals},
@@ -640,6 +821,11 @@ export async function runParse(): Promise<ParseResult> {
           city_ids = (
             select coalesce(array_agg(distinct e), '{}'::uuid[])
             from unnest(vacancies.city_ids || excluded.city_ids) as e
+          ),
+          -- MULTI-REGION additive enrichment (twin of city_ids): UNION the region sets; never shrink.
+          region_slugs = (
+            select coalesce(array_agg(distinct e), '{}'::text[])
+            from unnest(vacancies.region_slugs || excluded.region_slugs) as e
           ),
           -- Owner rule 2026-07-19: lift posted_at to this fresh sighting (the feed sorts posted_at
           -- desc) past the same cooldown. No is_active here: this partial index only matches a live
@@ -667,6 +853,10 @@ export async function runParse(): Promise<ParseResult> {
     if (isNew) vacancies += 1;
 
     await sql`update raw_messages set status='parsed', processed_at=now(), vacancy_id=${vacancyId ?? null}::uuid, text_hash=${hash} where id=${rawId}::uuid`;
+
+    // CONDITIONAL AI-GEO learning (Part B): log any unresolved model city/region name + every decoded
+    // slang pair to geo_suggestions for owner /stats. Best-effort — never blocks or fails the parse.
+    await recordGeoSuggestions(sql, suggestions);
   }
 
   return { processed: pending.length + preAiSkipped, vacancies };

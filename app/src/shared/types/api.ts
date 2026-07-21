@@ -92,6 +92,13 @@ export interface VacancyView {
    * `[city]` on the client.
    */
   cities?: Array<{ slug: string; name: Localized }>;
+  /**
+   * Region (province/metro) slugs this offer belongs to: the regions of its cities
+   * ∪ regions detected in the text/hint. The card/screen shows "<Region> · region"
+   * when `cities` is empty but a region is known. Optional so a backend that has
+   * not shipped the field yet degrades gracefully (no region label).
+   */
+  regions?: string[];
   region_slug: string | null;
   work_type: WorkType;
   gender: Gender;
@@ -195,6 +202,8 @@ export interface VacancyQuery {
 
 export interface Subscription {
   city_slugs: string[];
+  /** Region (province) slugs to also match; empty = none. Default []. */
+  region_slugs?: string[];
   work_types: string[];
   notify: boolean;
   /** Persistent visa filter; empty = all. */

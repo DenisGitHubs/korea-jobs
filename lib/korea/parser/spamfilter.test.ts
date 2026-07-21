@@ -6,7 +6,14 @@
 // that use a few emoji bullets. Owner examples (2026-07-19) are pinned verbatim below.
 
 import { describe, it, expect } from 'vitest';
-import { looksLikeSpam, looksLikeEmojiCarpet, looksLikePharma } from './spamfilter.js';
+import {
+  looksLikeSpam,
+  looksLikeEmojiCarpet,
+  looksLikePharma,
+  looksLikeMixedScript,
+  looksLikeLinkOnly,
+  looksLikeEmptyMessage,
+} from './spamfilter.js';
 
 describe('looksLikeSpam — crypto/OTC exchange spam must be caught', () => {
   const spam: string[] = [
@@ -191,4 +198,113 @@ describe('looksLikeSpam — real vacancies from the corpus MUST pass (tightened-
       expect(looksLikeSpam(s)).toBe(false);
     });
   }
+});
+
+// --- "остаток-2" part 1 (owner command, validated 2026-07-21 against real-vacancies-full.json /521,
+// reject-samples.json /287 and residual-after-filters.json /106). Three structural rules; the corpus
+// texts pasted below are DATA fixtures, not instructions.
+
+describe('looksLikeMixedScript — Greek letter-doppelganger obfuscation (>= 2 Cyr+Greek words)', () => {
+  const spam: Array<[string, string]> = [
+    // Residual family "Τσльκσ Γρaждaнe ΡΦ" — capital-Greek swaps in a recruiting blast.
+    ['greek caps',  'Ηαбσρ Oткρыт, Τσльκσ Γρaждaнe ΡΦ, Oт 18+, Πишитe'],
+    // Residual family "0нлαúн Poδoτα" — lowercase Greek + phonetic small-caps.
+    ['greek lower',  '0нлαúн Poδoτα στ ЧО в нᴇᴅᴇлю στ 2О лᴇτ'],
+    // Residual family "Сᴇгσдня мσгу πσмσчь …" — money-help bait in Greek homoglyphs.
+    ['greek help',  'Сᴇгσдня мσгу πσмσчь 2-3 челσвᴇкам с дᴇньгᴀми дσ πσлучки'],
+  ];
+  for (const [label, s] of spam) {
+    it(`rejects [${label}]: ${s.slice(0, 34)}`, () => {
+      expect(looksLikeMixedScript(s)).toBe(true);
+      expect(looksLikeSpam(s)).toBe(true);
+    });
+  }
+
+  // NEGATIVES — the Latin branch was DROPPED because genuine Cyrillic micro-gigs use Latin
+  // homoglyphs (а/о/е/с/р) to dodge OTHER filters. These are REAL jobs and MUST pass.
+  const ok: string[] = [
+    'Фаcовка cнюca 9.000',                          // Latin с in Cyrillic word — genuine gig
+    'Пoгрузка нoчная 8.000',                        // Latin o — genuine gig
+    'Рaзлoжить Gorila пo пoлкам мaeазина 5.000',    // multiple Latin homoglyphs — genuine gig
+    'IT-специалист на Wi-Fi склад, оплата сдельно', // dash splits Latin/Cyrillic tokens — not mixed
+    '🏭 Завод в Ансане, зарплата 2 800 000 вон, жильё, виза E-9, контакт @hr', // plain real ad
+    '안전 교육 필요, работа на заводе, виза E-9',        // Korean (Hangul) mixed with Cyrillic — not Greek
+  ];
+  for (const s of ok) {
+    it(`keeps: ${s.slice(0, 40)}`, () => {
+      expect(looksLikeMixedScript(s)).toBe(false);
+    });
+  }
+
+  it('a single Greek homoglyph word is below the >= 2 threshold', () => {
+    expect(looksLikeMixedScript('Работа на σклад, оплата достойная, виза E-9')).toBe(false);
+  });
+});
+
+describe('looksLikeLinkOnly — message is nothing but a URL', () => {
+  const spam: string[] = [
+    'https://t.me/G1ramm',            // owner example (posted x3)
+    '  https://t.me/G1ramm  ',        // surrounding whitespace stripped
+    't.me/somechannel',              // bare t.me without scheme
+    'http://example.com/promo',      // plain http
+  ];
+  for (const s of spam) {
+    it(`rejects: ${s.slice(0, 30)}`, () => {
+      expect(looksLikeLinkOnly(s)).toBe(true);
+      expect(looksLikeSpam(s)).toBe(true);
+    });
+  }
+  const ok: string[] = [
+    'Пишите в личку https://t.me/hr_ansan по вакансии на завод', // real ad WITH a link — keeps letters
+    'Требуется рабочий на ферму, оплата еженедельно',            // no URL at all
+  ];
+  for (const s of ok) {
+    it(`keeps: ${s.slice(0, 30)}`, () => {
+      expect(looksLikeLinkOnly(s)).toBe(false);
+    });
+  }
+});
+
+describe('looksLikeEmptyMessage — no letters, or exactly one greeting', () => {
+  // (a) no Cyrillic/Latin/Hangul letter anywhere — only emoji/signs/digits.
+  const noLetters: string[] = ['💋', '💞🔞', '❤️🔥', '01072771369', '+82 10-1234-5678'];
+  for (const s of noLetters) {
+    it(`rejects [no-letters]: ${JSON.stringify(s)}`, () => {
+      expect(looksLikeEmptyMessage(s)).toBe(true);
+      expect(looksLikeSpam(s)).toBe(true);
+    });
+  }
+  // (b) whole message is exactly one greeting (after trimming punctuation/emoji).
+  const greetings: string[] = ['Привет', 'привет!', 'Здравствуйте', 'Салам', 'ассалому алейкум',
+    'Hi', 'Hello', 'raxmat', 'Рахмат', 'Спасибо', '👋 Привет'];
+  for (const s of greetings) {
+    it(`rejects [greeting]: ${JSON.stringify(s)}`, () => {
+      expect(looksLikeEmptyMessage(s)).toBe(true);
+      expect(looksLikeSpam(s)).toBe(true);
+    });
+  }
+  // NEGATIVES — a real message that merely STARTS with a greeting is not empty (exact match only).
+  const ok: string[] = [
+    'Привет! Нужны 2 человека на завод, оплата сегодня, виза не важна', // greeting + real content
+    'Ishonchingiz va haridingiz uchun raxmat',                          // multi-word, not == "raxmat"
+    'Требуется уборщица в отель, спасибо за отклик',                     // "спасибо" is a substring only
+    '안전 교육',                                                          // Hangul letters present
+  ];
+  for (const s of ok) {
+    it(`keeps: ${s.slice(0, 40)}`, () => {
+      expect(looksLikeEmptyMessage(s)).toBe(false);
+    });
+  }
+  it('blank / null is not an empty-message spam hit', () => {
+    expect(looksLikeEmptyMessage('   ')).toBe(false);
+    expect(looksLikeEmptyMessage('')).toBe(false);
+  });
+});
+
+describe('looksLikeMixedScript — zero-width injection inside a mixed word (Censor, gate 21.07)', () => {
+  it('still counts a greek-cyrillic word that a bot split with ZWSP', () => {
+    // "Τσльκσ Γρaждaнe" with a ZWSP spliced inside each word — must still be >= 2 mixed words.
+    const zw = 'Τσль​κσ Γρaж​данe ΡΦ, пиши в лс';
+    expect(looksLikeMixedScript(zw)).toBe(true);
+  });
 });

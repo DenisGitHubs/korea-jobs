@@ -189,6 +189,84 @@ const HOMONYM_GROUPS: HomonymGroup[] = [
   },
 ];
 
+// ── Region (province) detection ────────────────────────────────────────────────────────────────
+// The region-level twin of the city scanner (Part A of the regions wave). Cities carry a
+// region_slug (cities.region_slug); a vacancy's region set is the regions of its cities ∪ any region
+// named directly in the text/hint. This table maps the 17 region slugs of the directory to their
+// aliases so a PROVINCE-only mention ("работа по всей Кёнгидо", "전남", "Чолла-Намдо") is recovered
+// even when no specific city is named.
+//
+// MATCHING mirrors cities EXACTLY (normalizeText, alphabet-aware boundaries, Cyrillic case endings,
+// Hangul substring) — but region markers opt OUT of the city PROVINCE_TAIL_GUARD (compileForms passes
+// provinceGuard=false), because for a REGION matching the "…-пукто/-намдо" tail is precisely the intent
+// (the guard only protects the CITY scan from firing on a province mention — the two never conflict:
+// detectCitySlugs still rejects the province tail, detectRegionSlugs accepts it).
+//
+// AMBIGUITY is handled conservatively:
+//   * bare "кёнсан"/"경상", "чолла"/"전라", "чхунчхон"/"충청" are NOT mapped (they do not say buk vs nam);
+//     only the QUALIFIED forms (кёнсан-пукто, 경북, чолла-намдо, 전남, …) resolve to a specific slug.
+//   * the metro-city regions (seoul/busan/… and gwangju) are included so region_norm (Part B) resolves
+//     a metro name too; gwangju is the ONLY city↔region homonym — it is dropped when a Gyeonggi marker
+//     is present (the Gwangju-in-Gyeonggi city belongs to region gyeonggi, not the metro gwangju),
+//     mirroring the Gwangju homonym in detectCitySlugs.
+interface RegionEntry {
+  slug: string;
+  markers: Array<(t: string) => boolean>;
+}
+
+// Province markers (ru + разночтения + hangul + latin). compileForms normalizes + compiles each with
+// provinceGuard=false. Only qualified forms of the Gyeongsang/Jeolla/Chungcheong provinces are listed.
+const REGION_TABLE: RegionEntry[] = [
+  // ── Provinces (do) ──
+  { slug: 'gyeonggi', markers: compileForms(['경기', '경기도', 'gyeonggi', 'gyeonggido', 'gyeonggi-do', 'gyunggi', 'кёнги', 'кёнгидо', 'кёнги-до']) },
+  { slug: 'gangwon', markers: compileForms(['강원', '강원도', 'gangwon', 'gangwondo', 'gangwon-do', 'канвон', 'канвондо', 'канвон-до', 'кангвон', 'кангвондо']) },
+  { slug: 'chungbuk', markers: compileForms(['충북', '충청북도', 'chungbuk', 'chungcheongbuk', 'chungcheongbuk-do', 'чхунбук', 'чунбук', 'чхунчхон-пукто', 'чхунчхон пукто', 'чхунчхонбукто']) },
+  { slug: 'chungnam', markers: compileForms(['충남', '충청남도', 'chungnam', 'chungcheongnam', 'chungcheongnam-do', 'чхуннам', 'чуннам', 'чхунчхон-намдо', 'чхунчхон намдо', 'чхунчхоннамдо']) },
+  { slug: 'jeonbuk', markers: compileForms(['전북', '전라북도', 'jeonbuk', 'jeollabuk', 'jeollabuk-do', 'чонбук', 'чолла-пукто', 'чолла пукто', 'чоллапукто']) },
+  { slug: 'jeonnam', markers: compileForms(['전남', '전라남도', 'jeonnam', 'jeollanam', 'jeollanam-do', 'чоннам', 'чолла-намдо', 'чолла намдо', 'чолланамдо']) },
+  { slug: 'gyeongbuk', markers: compileForms(['경북', '경상북도', 'gyeongbuk', 'gyeongsangbuk', 'gyeongsangbuk-do', 'кёнбук', 'кёнсан-пукто', 'кёнсан пукто', 'кёнсанпукто']) },
+  { slug: 'gyeongnam', markers: compileForms(['경남', '경상남도', 'gyeongnam', 'gyeongsangnam', 'gyeongsangnam-do', 'кённам', 'кёнсан-намдо', 'кёнсан намдо', 'кёнсаннамдо']) },
+  { slug: 'jeju', markers: compileForms(['제주', '제주도', '제주특별자치도', 'jeju', 'jejudo', 'jeju-do', 'чеджу', 'чеджудо', 'чеджу-до']) },
+  { slug: 'sejong', markers: compileForms(['세종', '세종시', '세종특별자치시', 'sejong', 'седжон', 'сечжон', 'седжонг']) },
+  // ── Metropolitan cities that are their own region (region == city; used mostly by region_norm) ──
+  { slug: 'seoul', markers: compileForms(['서울', '서울특별시', 'seoul', 'сеул']) },
+  { slug: 'busan', markers: compileForms(['부산', '부산광역시', 'busan', 'pusan', 'пусан', 'бусан']) },
+  { slug: 'daegu', markers: compileForms(['대구', '대구광역시', 'daegu', 'taegu', 'тэгу', 'дэгу']) },
+  { slug: 'daejeon', markers: compileForms(['대전', '대전광역시', 'daejeon', 'taejon', 'тэджон', 'дэджон', 'тэчжон']) },
+  { slug: 'incheon', markers: compileForms(['인천', '인천광역시', 'incheon', 'инчхон', 'инчон']) },
+  { slug: 'ulsan', markers: compileForms(['울산', '울산광역시', 'ulsan', 'ульсан']) },
+  { slug: 'gwangju', markers: compileForms(['광주', '광주광역시', 'gwangju', 'kwangju', 'кванджу', 'кванчжу']) },
+];
+
+// Gyeonggi-context testers, reused to drop the metro gwangju region when the mention is really the
+// Gwangju-in-Gyeonggi city (region gyeonggi), mirroring the Gwangju homonym in detectCitySlugs.
+const GYEONGGI_MARKERS = compileForms(MK_GYEONGGI);
+
+/**
+ * Detect every REGION slug named directly in `text` (province or metro). `hintText` (the source
+ * channel title/notes) is extra CONTEXT for the gwangju metro↔gyeonggi homonym only. De-duplicated.
+ * DB-free — the region alias table is static (the 17 directory region slugs). Used by the parser,
+ * the ads path, the backfill, and Part-B region_norm resolution.
+ */
+export function detectRegionSlugs(text: string, hintText?: string): string[] {
+  const norm = normalizeText(text);
+  const result = new Set<string>();
+  for (const r of REGION_TABLE) {
+    if (r.markers.some((t) => t(norm))) result.add(r.slug);
+  }
+  // Metro gwangju vs Gwangju-in-Gyeonggi: with a Gyeonggi marker in TEXT+HINT the place is the
+  // Gwangju-in-Gyeonggi city, whose region is gyeonggi — so swap the metro region for gyeonggi (mirrors
+  // the Gwangju homonym in detectCitySlugs, where the same context picks gwangju_gyeonggi -> gyeonggi).
+  if (result.has('gwangju')) {
+    const ctx = normalizeText(`${text ?? ''} \n ${hintText ?? ''}`);
+    if (GYEONGGI_MARKERS.some((t) => t(ctx))) {
+      result.delete('gwangju');
+      result.add('gyeonggi');
+    }
+  }
+  return [...result];
+}
+
 /**
  * Compile a reusable matcher from the active cities' aliases. Build ONCE per batch, then call
  * detectCitySlugs for every message — the regexes are shared, so this is cheap per row.

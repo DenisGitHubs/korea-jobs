@@ -22,11 +22,12 @@
 // necessity (the notify version matches ONE vacancy against MANY subs; this matches ONE sub against
 // MANY vacancies — same semantics, inverted direction). Keep the two lists in lockstep.
 //
-// MULTI-CITY: the CITY predicate here is the SHARED kj_city_match(s.city_ids, v.city_ids, s.no_city)
-// (draft_0020) — the EXACT same rule the feed applies (vacancies/read.ts), so the digest count can
-// never drift from what the feed shows. This is why the digest is the no_city-aware surface while
-// notify (realtime) is deliberately narrower and ignores no_city (see notify/run.ts). `no_city=false`
-// is itself a filter, so it also flips has_filters -> "по твоим фильтрам" wording.
+// MULTI-GEO: the geo predicate here is the SHARED kj_geo_match(s.city_ids, v.city_ids, s.region_slugs,
+// v.region_slugs, s.no_city) (draft_0021) — the EXACT same rule the feed applies (vacancies/read.ts),
+// so the digest count can never drift from what the feed shows. City and region are OR-combined by the
+// function. This is why the digest is the no_city-aware surface while notify (realtime) is deliberately
+// narrower and ignores no_city (see notify/run.ts). A region filter (cardinality(region_slugs)>0) and
+// `no_city=false` are each filters, so either flips has_filters -> "по твоим фильтрам" wording.
 //
 // Caps/pacing mirror notify: at most digest_send_cap DMs per run, 40ms between sends. A 403 flips
 // users.is_blocked; a 429 sleeps and stops the run (the rest roll into tomorrow's digest); a
@@ -145,6 +146,7 @@ export async function runDigest(now: Date = new Date()): Promise<DigestResult> {
       select u.id as user_id, u.telegram_id,
         (
           cardinality(s.city_ids) > 0
+          or cardinality(s.region_slugs) > 0
           or (s.work_types is not null and cardinality(s.work_types) > 0)
           or cardinality(s.visa_types) > 0
           or s.placement_fee is not null
@@ -156,7 +158,7 @@ export async function runDigest(now: Date = new Date()): Promise<DigestResult> {
           select count(*) from vacancies v
           where v.is_active and v.duplicate_of is null
             and v.first_seen_at > now() - interval '24 hours'
-            and kj_city_match(s.city_ids, v.city_ids, s.no_city)
+            and kj_geo_match(s.city_ids, v.city_ids, s.region_slugs, v.region_slugs, s.no_city)
             and (s.work_types is null or cardinality(s.work_types) = 0 or v.work_type = any(s.work_types))
             and (
               cardinality(s.visa_types) = 0

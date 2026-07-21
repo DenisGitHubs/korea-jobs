@@ -169,6 +169,28 @@ const files = [
   // untouched. Run db/backfill_city_ids.mts AFTER this to enrich the existing corpus from message text.
   // Depends on vacancies / user_ads / subscriptions / cities (draft_0001_init.sql, draft_0003_user_ads.sql).
   'draft_0020_city_ids.sql',
+
+  // Regions + conditional AI-geo (0021) — ADDITIVE / idempotent (ADD COLUMN IF NOT EXISTS + guarded
+  // UPDATE + CREATE INDEX IF NOT EXISTS + CREATE OR REPLACE FUNCTION + CREATE TABLE IF NOT EXISTS).
+  // Adds vacancies.region_slugs / user_ads.region_slugs / subscriptions.region_slugs (text[]), seeds
+  // them from the row's cities' regions ∪ the singular region_slug ONLY where empty (idempotent guard),
+  // two partial GIN indexes + a subscriptions GIN, the shared immutable kj_geo_match() predicate used by
+  // the feed + digest (supersedes kj_city_match there; kj_city_match kept for compat), and the
+  // geo_suggestions learning ledger (owner-only, read by admin /stats, written best-effort by the parser).
+  // content_hash / kj_content_hash / city_id / city_ids untouched. Run db/backfill_city_ids.mts AFTER this
+  // to enrich the existing corpus's region_slugs (it fills BOTH city_ids and region_slugs). Depends on
+  // vacancies / user_ads / subscriptions / cities (draft_0001_init.sql, draft_0003_user_ads.sql) + the
+  // city_ids columns (draft_0020_city_ids.sql) + pgcrypto (gen_random_uuid, draft_0001_init.sql).
+  'draft_0021_regions.sql',
+
+  // AI verdict cache (0022) — ADDITIVE / idempotent (CREATE TABLE IF NOT EXISTS). Adds ai_verdict_cache
+  // (text_hash pk, reject_reason, n, last_seen) + an index on last_seen. Lets the parser
+  // (lib/korea/parser/run.ts, via lib/korea/parser/verdict-cache.ts) skip the model for an EXACT repeat of
+  // a message it already judged a NON-vacancy reject — using a floor-less hash so SHORT spam/chit-chat
+  // lines (which the 40-char raw_messages.text_hash dedup ignores) collapse here. Never caches
+  // low_confidence or a vacancy. Written/read best-effort (a fault never breaks a parse), purged > 7 days
+  // by lib/korea/cleanup/run.ts. INTERNAL — no API/bot surface reads it. Depends only on stock Postgres.
+  'draft_0022_verdict_cache.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

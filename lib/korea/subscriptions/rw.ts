@@ -22,6 +22,7 @@ const PLACEMENT_FEE_SET = new Set<string>(PLACEMENT_FEES);
 
 interface Body {
   city_slugs?: unknown;
+  region_slugs?: unknown;
   work_types?: unknown;
   notify?: unknown;
   digest_enabled?: unknown;
@@ -47,6 +48,7 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
 
   const body = (await readJsonBody(req)) as Body | null;
   const inSlugs = stringArray(body?.city_slugs);
+  const inRegions = stringArray(body?.region_slugs);
   const workTypes = stringArray(body?.work_types).filter((w) => WORK_TYPE_SET.has(w));
   const notify = body?.notify === undefined ? true : body?.notify === true;
   // digest_enabled: the once-a-day summary opt-in (separate from realtime `notify`). Mirrors
@@ -75,17 +77,26 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
     const cityIds = cityRows.map((r) => r.id);
     const validSlugs = cityRows.map((r) => r.slug);
 
+    // Keep only REAL region slugs (those that exist on some active city) — the DB whitelist for regions,
+    // mirroring the city-slug validation above. An unknown region is silently dropped (never stored).
+    const regionRows = (await sql`
+      select distinct region_slug from cities
+      where region_slug = any(${inRegions}::text[]) and is_active = true and region_slug is not null
+      order by region_slug`) as unknown as { region_slug: string }[];
+    const validRegions = regionRows.map((r) => r.region_slug);
+
     await sql`
       insert into subscriptions (
-        user_id, city_ids, work_types, notify, digest_enabled, no_city,
+        user_id, city_ids, region_slugs, work_types, notify, digest_enabled, no_city,
         visa_types, placement_fee, require_housing, require_meals
       )
       values (
-        ${user.id}::uuid, ${cityIds}::uuid[], ${workTypes}::work_type[], ${notify}, ${digestEnabled}, ${noCity},
+        ${user.id}::uuid, ${cityIds}::uuid[], ${validRegions}::text[], ${workTypes}::work_type[], ${notify}, ${digestEnabled}, ${noCity},
         ${visaTypes}::visa_type[], ${placementFee}::placement_fee, ${requireHousing}, ${requireMeals}
       )
       on conflict (user_id) do update set
         city_ids = excluded.city_ids,
+        region_slugs = excluded.region_slugs,
         work_types = excluded.work_types,
         notify = excluded.notify,
         digest_enabled = excluded.digest_enabled,
@@ -98,6 +109,7 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
 
     send(res, 200, {
       city_slugs: validSlugs,
+      region_slugs: validRegions,
       work_types: workTypes,
       notify,
       digest_enabled: digestEnabled,

@@ -79,6 +79,42 @@ function csv(sp: URLSearchParams, key: string): string[] {
     .filter(Boolean);
 }
 
+/** Region of each city slug (mirrors cities.region_slug). */
+const CITY_REGION = new Map(CITIES.map((c) => [c.slug, c.region_slug]));
+
+/** Regions a vacancy belongs to: regions of its cities ∪ its region_slug ∪ detected `regions`. */
+function vacancyRegions(v: MockVacancy): Set<string> {
+  const set = new Set<string>();
+  const vc = v.cities ?? (v.city ? [v.city] : []);
+  for (const c of vc) {
+    const r = CITY_REGION.get(c.slug);
+    if (r) set.add(r);
+  }
+  if (v.region_slug) set.add(v.region_slug);
+  for (const r of v.regions ?? []) set.add(r);
+  return set;
+}
+
+/**
+ * Single geo predicate mirroring the backend kj_geo_match:
+ *   - nothing selected (cities AND regions empty) → all
+ *   - OR city intersection
+ *   - OR region intersection (vacancy regions = regions of its cities ∪ detect)
+ *   - OR (vacancy has NO cities AND includeNoCity) — the "not specified" bucket is
+ *     decided ONLY by cities; a region label never removes an offer from it.
+ */
+function geoMatch(v: MockVacancy, cities: string[], regions: string[], includeNoCity: boolean): boolean {
+  if (cities.length === 0 && regions.length === 0) return true;
+  const vc = v.cities ?? (v.city ? [v.city] : []);
+  if (cities.length && vc.some((c) => cities.includes(c.slug))) return true;
+  if (regions.length) {
+    const vr = vacancyRegions(v);
+    if (regions.some((r) => vr.has(r))) return true;
+  }
+  if (vc.length === 0 && includeNoCity) return true;
+  return false;
+}
+
 /** websearch-ish AND match: every token (split on dots/spaces) must appear. */
 function matchesQuery(v: MockVacancy, q: string): boolean {
   const tokens = q
@@ -108,19 +144,15 @@ function filterFeed(sp: URLSearchParams): MockVacancy[] {
   const meals = sp.get('meals') === 'true';
   const q = sp.get('q') ?? '';
   const freshness = Number.parseInt(sp.get('freshness') ?? '', 10);
-  // Absent === included; "0" excludes offers with no city. Only acts below when a
-  // city is selected — with no city filter the whole feed is shown.
+  // Absent === included; "0" excludes offers with no city. Only acts when a city
+  // OR region is selected — with no geo selected the whole feed is shown.
   const includeNoCity = sp.get('no_city') !== '0';
 
   let items = ALL;
-  if (cities.length) {
-    items = items.filter((v) => {
-      const vc = v.cities ?? (v.city ? [v.city] : []);
-      if (vc.length === 0) return includeNoCity;
-      return vc.some((c) => cities.includes(c.slug));
-    });
+  // Unified geo match (cities ∪ regions ∪ "not specified" bucket) — see geoMatch.
+  if (cities.length || regions.length) {
+    items = items.filter((v) => geoMatch(v, cities, regions, includeNoCity));
   }
-  if (regions.length) items = items.filter((v) => v.region_slug != null && regions.includes(v.region_slug));
   if (workTypes.length) items = items.filter((v) => workTypes.includes(v.work_type));
 
   if (visa.length) {
@@ -330,6 +362,7 @@ export async function handleMock(method: string, path: string, body?: unknown): 
     const b = (body ?? {}) as Partial<Subscription>;
     const next: Subscription = {
       city_slugs: Array.isArray(b.city_slugs) ? b.city_slugs.map(String) : [],
+      region_slugs: Array.isArray(b.region_slugs) ? b.region_slugs.map(String) : [],
       work_types: Array.isArray(b.work_types) ? b.work_types.map(String) : [],
       notify: typeof b.notify === 'boolean' ? b.notify : true,
       visa_types: Array.isArray(b.visa_types) ? (b.visa_types as VisaType[]) : [],

@@ -21,6 +21,11 @@ interface CityPickerProps {
    *  turns on the special card + frequent chips + province accordion. */
   noCity?: boolean;
   onNoCityChange?: (b: boolean) => void;
+  /** Selected province/region slugs. Providing `onRegionsChange` (filter /
+   *  settings, multi mode only) turns on the per-province "whole region" checkbox
+   *  — an independent selection that never ticks the province's cities. */
+  regions?: string[];
+  onRegionsChange?: (next: string[]) => void;
 }
 
 function Chevron() {
@@ -42,10 +47,27 @@ function Chevron() {
  *    card (via `onNoCityChange`).
  * Both show the frequent-city quick-pick chips and the expand/collapse-all head.
  */
-export function CityPicker({ value, onChange, single = false, compact = false, noCity, onNoCityChange }: CityPickerProps) {
+export function CityPicker({
+  value,
+  onChange,
+  single = false,
+  compact = false,
+  noCity,
+  onNoCityChange,
+  regions,
+  onRegionsChange,
+}: CityPickerProps) {
   const { t } = useTranslation();
   const lang = useSettingsStore((s) => s.lang);
   const { grouped, bySlug, loading } = useCities();
+  // Whole-region selection is a multi-mode (filter/settings) feature only; the
+  // single ad-wizard form never shows it.
+  const selectedRegions = regions ?? [];
+  const toggleRegion = (region: string): void => {
+    if (!onRegionsChange) return;
+    const on = selectedRegions.includes(region);
+    onRegionsChange(on ? selectedRegions.filter((r) => r !== region) : [...selectedRegions, region]);
+  };
 
   const multiProvinces = useMemo(() => grouped.filter((g) => g.items.length > 1).map((g) => g.region), [grouped]);
   const multiSet = useMemo(() => new Set(multiProvinces), [multiProvinces]);
@@ -168,22 +190,45 @@ export function CityPicker({ value, onChange, single = false, compact = false, n
         }
         const isOpen = Boolean(open[g.region]);
         const selCount = g.items.reduce((n, c) => n + (value.includes(c.slug) ? 1 : 0), 0);
+        // "Whole region" checkbox: multi mode (onRegionsChange) only, and never for
+        // the "other" (region_slug null) bucket, which is not a real province.
+        const regionSelectable = Boolean(onRegionsChange) && g.region !== 'other';
+        const regionOn = selectedRegions.includes(g.region);
         return (
           <div className={`region citypicker__prov ${isOpen ? 'is-open' : ''}`} key={g.region}>
-            <button
-              type="button"
-              className="citypicker__prov-head"
-              aria-expanded={isOpen}
-              onClick={() => setOpen((o) => ({ ...o, [g.region]: !o[g.region] }))}
-            >
-              <span className="citypicker__prov-title">
-                {regionName} <span className="citypicker__prov-num">({g.items.length})</span>
-              </span>
-              {selCount > 0 ? <span className="citypicker__prov-sel">{selCount}</span> : null}
-              <span className="citypicker__prov-chev" aria-hidden>
-                <Chevron />
-              </span>
-            </button>
+            {/* Header row: region checkbox (independent) + accordion toggle. The
+                checkbox is a SEPARATE button so a tap on it never expands/folds. */}
+            <div className="citypicker__prov-head">
+              {regionSelectable ? (
+                <button
+                  type="button"
+                  className="citypicker__prov-check"
+                  aria-pressed={regionOn}
+                  aria-label={t('filter.wholeRegion', { region: regionName })}
+                  onClick={() => toggleRegion(g.region)}
+                >
+                  <span className={`check check--region ${regionOn ? 'check--on' : ''}`} aria-hidden>
+                    ✓
+                  </span>
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="citypicker__prov-toggle"
+                aria-expanded={isOpen}
+                onClick={() => setOpen((o) => ({ ...o, [g.region]: !o[g.region] }))}
+              >
+                <span className="citypicker__prov-title">
+                  {regionName} <span className="citypicker__prov-num">({g.items.length})</span>
+                  {/* Collapsed-visible "whole region" marker. */}
+                  {regionOn ? <span className="citypicker__prov-tag">{t('filter.wholeRegionShort')}</span> : null}
+                </span>
+                {selCount > 0 ? <span className="citypicker__prov-sel">{selCount}</span> : null}
+                <span className="citypicker__prov-chev" aria-hidden>
+                  <Chevron />
+                </span>
+              </button>
+            </div>
             <div className="citypicker__prov-fold">
               <div className="citypicker__prov-fold-inner">
                 <div className="section">{g.items.map((c) => CityRow(c))}</div>

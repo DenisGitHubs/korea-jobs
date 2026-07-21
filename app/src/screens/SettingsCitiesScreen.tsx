@@ -26,20 +26,24 @@ export default function SettingsCitiesScreen() {
 
   const apply = useSubscriptionStore((s) => s.apply);
   const sCities = useSubscriptionStore((s) => s.citySlugs);
+  const sRegions = useSubscriptionStore((s) => s.regionSlugs);
   const sNoCity = useSubscriptionStore((s) => s.noCity);
 
   const [cities, setCities] = useState<string[]>(() => sCities);
+  const [regions, setRegions] = useState<string[]>(() => sRegions);
   const [noCity, setNoCity] = useState<boolean>(() => sNoCity);
   const [saving, setSaving] = useState(false);
 
-  const dirty = !sameSet(cities, sCities) || noCity !== sNoCity;
+  const dirty = !sameSet(cities, sCities) || !sameSet(regions, sRegions) || noCity !== sNoCity;
 
   const save = useCallback(async () => {
     if (saving || !dirty) return;
     setSaving(true);
     try {
       const base = subscriptionValue(useSubscriptionStore.getState());
-      const saved = await api.saveSubscription(toSubscription({ ...base, citySlugs: cities, noCity }));
+      const saved = await api.saveSubscription(
+        toSubscription({ ...base, citySlugs: cities, regionSlugs: regions, noCity }),
+      );
       apply(saved);
       navigate('/settings');
     } catch {
@@ -47,12 +51,13 @@ export default function SettingsCitiesScreen() {
     } finally {
       setSaving(false);
     }
-  }, [saving, dirty, cities, noCity, apply, navigate]);
+  }, [saving, dirty, cities, regions, noCity, apply, navigate]);
 
+  const geoCount = cities.length + regions.length;
   const label = saving
     ? t('common.saving')
-    : cities.length
-      ? t('settings.saveCitiesCount', { count: cities.length })
+    : geoCount
+      ? t('settings.saveCitiesCount', { count: geoCount })
       : t('settings.saveCities');
 
   useMainButton({ text: label, visible: dirty || saving, enabled: !saving, loading: saving, onClick: save });
@@ -66,7 +71,14 @@ export default function SettingsCitiesScreen() {
           <p className="hero__sub">{t('settings.citiesLead')}</p>
         </div>
 
-        <CityPicker value={cities} onChange={setCities} noCity={noCity} onNoCityChange={setNoCity} />
+        <CityPicker
+          value={cities}
+          onChange={setCities}
+          noCity={noCity}
+          onNoCityChange={setNoCity}
+          regions={regions}
+          onRegionsChange={setRegions}
+        />
 
         {!isReal ? (
           <button

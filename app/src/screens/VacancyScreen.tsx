@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { postEvent } from '@telegram-apps/sdk-react';
 import { api, ApiError } from '../shared/api/client';
 import type { VacancyContact, VacancyView } from '../shared/types/api';
-import { feeKey, genderKey, visaKey } from '../shared/labels';
+import { feeKey, genderKey, regionKey, visaKey } from '../shared/labels';
 import { useBackButton } from '../hooks/useBackButton';
 import { useSettingsStore } from '../store/settingsStore';
 import { applySaveToCaches, revertSaveInCaches } from '../store/feedStore';
@@ -223,6 +223,10 @@ export default function VacancyScreen() {
         ? [vacancy.city]
         : []
     : [];
+  // Region-level fallback when the offer has no city. `noCity` (drives the
+  // "open in channel — clarify location" hint) is decided by cities ONLY, so a
+  // region label never suppresses that hint.
+  const regionList = vacancy?.regions ?? [];
   const noCity = cityList.length === 0;
 
   return (
@@ -254,7 +258,9 @@ export default function VacancyScreen() {
               <h1 className="hero__title">
                 {cityList.length
                   ? cityList.map((c) => cityLabel(c, lang, t)).join(' · ')
-                  : t('city.unspecified')}
+                  : regionList.length
+                    ? `${regionList.map((r) => t(regionKey(r))).join(' · ')} · ${t('city.regionSuffix')}`
+                    : t('city.unspecified')}
               </h1>
               <p className="hero__sub">{timeAgo(vacancy.posted_at, t)}</p>
               {isStale(vacancy.posted_at) ? (

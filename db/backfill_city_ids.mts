@@ -20,6 +20,11 @@
 // existing city_ids and the freshly computed set, so a row already enriched by the parser only grows,
 // never shrinks, and a re-run that computes the same set writes nothing (idempotent).
 //
+// REGIONS WAVE: the same pass ALSO fills region_slugs (draft_0021) additively = regions of the row's
+// final city_ids (cities.region_slug) ∪ regions named in the text/hint (detectRegionSlugs) ∪ the
+// singular region_slug. Same union/idempotency rules; region_slug (the primary) is never touched. The
+// report prints how many CITY-LESS rows gained a region (so the region filter reaches them).
+//
 // Run from the project root (tsx is a devDependency), AFTER applying draft_0020:
 //   npx tsx db/backfill_city_ids.mts
 //
@@ -29,14 +34,14 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Pool } from '@neondatabase/serverless';
-import { buildCityMatcher, detectCitySlugs } from '../lib/korea/cities/detect.js';
+import { buildCityMatcher, detectCitySlugs, detectRegionSlugs } from '../lib/korea/cities/detect.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ENV_PATH = join(ROOT, '.env');
 
 function envVal(text: string, key: string): string | null {
   const m = text.match(new RegExp('^' + key + '=(.*)$', 'm'));
-  return m ? m[1].trim() : null;
+  return m ? (m[1] ?? '').trim() : null;
 }
 
 const envText = readFileSync(ENV_PATH, 'utf8');
@@ -67,14 +72,17 @@ try {
 
   // Compile the matcher ONCE from the active cities' aliases (shared with the runtime code).
   const cityRows = (
-    await pool.query<{ id: string; slug: string; aliases: unknown }>(
-      'select id, slug, aliases from cities where is_active = true',
+    await pool.query<{ id: string; slug: string; aliases: unknown; region_slug: string | null }>(
+      'select id, slug, aliases, region_slug from cities where is_active = true',
     )
   ).rows;
   const matcher = buildCityMatcher(cityRows.map((r) => ({ slug: r.slug, aliases: r.aliases })));
   const idBySlug = new Map(cityRows.map((r) => [r.slug, r.id]));
   const slugsToIds = (slugs: string[]): string[] =>
     slugs.map((s) => idBySlug.get(s)).filter((x): x is string => Boolean(x));
+  // FULL city id -> region_slug map (regions wave): a row's region set folds in the regions of its cities.
+  const regionByCityId = new Map<string, string>();
+  for (const r of cityRows) if (r.region_slug) regionByCityId.set(r.id, r.region_slug);
 
   // ── Vacancies: is_active, non-duplicate. raw_messages is LEFT-joined so rows whose raw source was
   //    pruned are STILL scanned (owner 2026-07-21: Сувон/Сихын/Кёнджу lived in `description` but the
@@ -84,6 +92,7 @@ try {
   let vacUpdated = 0;
   let vacNoRawScanned = 0; // rows with no surviving raw_messages source
   let vacNoRawGained = 0; // ...of those, how many the backfill enriched with a city
+  let vacNoCityGainedRegion = 0; // city-LESS rows (final city_ids empty) that gained >=1 region
   let lastVac = MIN_UUID;
   for (;;) {
     const rows = (
@@ -91,6 +100,8 @@ try {
         id: string;
         city_id: string | null;
         city_ids: string[] | null;
+        region_slug: string | null;
+        region_slugs: string[] | null;
         text: string | null;
         description: string | null;
         has_raw: boolean;
@@ -98,7 +109,7 @@ try {
         source_username: string | null;
         source_notes: string | null;
       }>(
-        `select v.id, v.city_id, v.city_ids, r.text, v.description,
+        `select v.id, v.city_id, v.city_ids, v.region_slug, v.region_slugs, r.text, v.description,
                 (r.id is not null) as has_raw,
                 s.title as source_title, s.username as source_username, s.notes as source_notes
            from vacancies v
@@ -134,22 +145,46 @@ try {
       ];
       const computed = [...(row.city_id ? [row.city_id] : []), ...slugsToIds(detected)];
       const existing = Array.isArray(row.city_ids) ? row.city_ids : [];
-      const final = unionSorted(existing, computed);
-      if (sameSet(final, existing)) continue; // idempotent: nothing new
-      await pool.query('update vacancies set city_ids = $1::uuid[] where id = $2::uuid', [final, row.id]);
+      const finalCities = unionSorted(existing, computed);
+
+      // MULTI-REGION (regions wave): region_slugs = regions of finalCities ∪ regions named in the
+      // text/hint ∪ the singular region_slug. Same ADDITIVE union as city_ids (never shrinks; a re-run
+      // that computes the same set writes nothing).
+      const detRegions = [...detectRegionSlugs(scanText, srcHint), ...detectRegionSlugs(srcHint)];
+      const cityRegions = finalCities.map((id) => regionByCityId.get(id)).filter((x): x is string => Boolean(x));
+      const computedRegions = [...cityRegions, ...detRegions, ...(row.region_slug ? [row.region_slug] : [])];
+      const existingRegions = Array.isArray(row.region_slugs) ? row.region_slugs : [];
+      const finalRegions = unionSorted(existingRegions, computedRegions);
+
+      const citiesChanged = !sameSet(finalCities, existing);
+      const regionsChanged = !sameSet(finalRegions, existingRegions);
+      if (!citiesChanged && !regionsChanged) continue; // idempotent: nothing new for either
+      await pool.query(
+        'update vacancies set city_ids = $1::uuid[], region_slugs = $2::text[] where id = $3::uuid',
+        [finalCities, finalRegions, row.id],
+      );
       vacUpdated++;
-      if (noRaw) vacNoRawGained++;
+      if (noRaw && citiesChanged) vacNoRawGained++;
+      if (finalCities.length === 0 && finalRegions.length > 0 && existingRegions.length === 0) vacNoCityGainedRegion++;
     }
   }
 
   // ── User ads: approved; cities come from the description only ────────────────────────────────
   let adScanned = 0;
   let adUpdated = 0;
+  let adNoCityGainedRegion = 0; // city-LESS ads that gained >=1 region
   let lastAd = MIN_UUID;
   for (;;) {
     const rows = (
-      await pool.query<{ id: string; city_id: string | null; city_ids: string[] | null; description: string | null }>(
-        `select a.id, a.city_id, a.city_ids, a.description
+      await pool.query<{
+        id: string;
+        city_id: string | null;
+        city_ids: string[] | null;
+        region_slug: string | null;
+        region_slugs: string[] | null;
+        description: string | null;
+      }>(
+        `select a.id, a.city_id, a.city_ids, a.region_slug, a.region_slugs, a.description
            from user_ads a
           where a.status = 'approved' and a.id > $1
           order by a.id
@@ -165,10 +200,24 @@ try {
       const detected = detectCitySlugs(row.description ?? '', matcher);
       const computed = [...(row.city_id ? [row.city_id] : []), ...slugsToIds(detected)];
       const existing = Array.isArray(row.city_ids) ? row.city_ids : [];
-      const final = unionSorted(existing, computed);
-      if (sameSet(final, existing)) continue;
-      await pool.query('update user_ads set city_ids = $1::uuid[] where id = $2::uuid', [final, row.id]);
+      const finalCities = unionSorted(existing, computed);
+
+      // MULTI-REGION: region_slugs = regions of finalCities ∪ regions named in the description ∪ region_slug.
+      const detRegions = detectRegionSlugs(row.description ?? '');
+      const cityRegions = finalCities.map((id) => regionByCityId.get(id)).filter((x): x is string => Boolean(x));
+      const computedRegions = [...cityRegions, ...detRegions, ...(row.region_slug ? [row.region_slug] : [])];
+      const existingRegions = Array.isArray(row.region_slugs) ? row.region_slugs : [];
+      const finalRegions = unionSorted(existingRegions, computedRegions);
+
+      const citiesChanged = !sameSet(finalCities, existing);
+      const regionsChanged = !sameSet(finalRegions, existingRegions);
+      if (!citiesChanged && !regionsChanged) continue;
+      await pool.query(
+        'update user_ads set city_ids = $1::uuid[], region_slugs = $2::text[] where id = $3::uuid',
+        [finalCities, finalRegions, row.id],
+      );
       adUpdated++;
+      if (finalCities.length === 0 && finalRegions.length > 0 && existingRegions.length === 0) adNoCityGainedRegion++;
     }
   }
 
@@ -204,13 +253,46 @@ try {
     rows.map((r) => `${r.k}:${r.n}`).join(' ') || '(none)';
   const total = (rows: { k: number; n: number }[]): number => rows.reduce((s, r) => s + r.n, 0);
 
+  // Region enrichment stats (regions wave): how many city-LESS rows now carry a region (so the region
+  // filter reaches them) + the region_slugs cardinality distribution over the live sets.
+  const vacRegionDist = (
+    await pool.query<{ k: number; n: number }>(
+      `select cardinality(region_slugs) as k, count(*)::int as n
+         from vacancies where is_active and duplicate_of is null
+        group by 1 order by 1`,
+    )
+  ).rows;
+  const adRegionDist = (
+    await pool.query<{ k: number; n: number }>(
+      `select cardinality(region_slugs) as k, count(*)::int as n
+         from user_ads where status = 'approved'
+        group by 1 order by 1`,
+    )
+  ).rows;
+  const vacCitylessWithRegion = (
+    await pool.query<{ n: number }>(
+      `select count(*)::int as n from vacancies
+        where is_active and duplicate_of is null and cardinality(city_ids) = 0 and cardinality(region_slugs) >= 1`,
+    )
+  ).rows[0]!.n;
+  const adCitylessWithRegion = (
+    await pool.query<{ n: number }>(
+      `select count(*)::int as n from user_ads
+        where status = 'approved' and cardinality(city_ids) = 0 and cardinality(region_slugs) >= 1`,
+    )
+  ).rows[0]!.n;
+
   console.log(`VACANCIES: scanned=${vacScanned} updated=${vacUpdated} total_active=${total(vacDist)}`);
   console.log(`  city_ids cardinality distribution -> ${fmtDist(vacDist)}`);
   console.log(`  rows with city_id=null that now have >=1 city: ${vacNullGained}`);
   console.log(`  rows WITHOUT a raw source: scanned=${vacNoRawScanned}, gained a city=${vacNoRawGained}`);
+  console.log(`  region_slugs cardinality distribution -> ${fmtDist(vacRegionDist)}`);
+  console.log(`  city-less rows that gained a region THIS run: ${vacNoCityGainedRegion} · city-less-with-region total: ${vacCitylessWithRegion}`);
   console.log(`USER ADS:  scanned=${adScanned} updated=${adUpdated} total_approved=${total(adDist)}`);
   console.log(`  city_ids cardinality distribution -> ${fmtDist(adDist)}`);
   console.log(`  rows with city_id=null that now have >=1 city: ${adNullGained}`);
+  console.log(`  region_slugs cardinality distribution -> ${fmtDist(adRegionDist)}`);
+  console.log(`  city-less ads that gained a region THIS run: ${adNoCityGainedRegion} · city-less-with-region total: ${adCitylessWithRegion}`);
   console.log('BACKFILL DONE');
 } catch (e) {
   console.error('BACKFILL FAILED:', e && (e as Error).message ? (e as Error).message : e);

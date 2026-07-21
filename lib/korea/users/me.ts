@@ -25,10 +25,11 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
     // parsed) so the driver returns real JS arrays. city_ids is uuid[] — a BUILT-IN array OID
     // the driver already parses to an array (verified live), so it needs no cast.
     const subRows = (await sql`
-      select city_ids, work_types::text[] as work_types, notify, digest_enabled, no_city,
+      select city_ids, region_slugs, work_types::text[] as work_types, notify, digest_enabled, no_city,
              visa_types::text[] as visa_types, placement_fee, require_housing, require_meals
       from subscriptions where user_id = ${user.id}::uuid limit 1`) as unknown as {
       city_ids: string[] | null;
+      region_slugs: string[] | null;
       work_types: string[] | null;
       notify: boolean;
       digest_enabled: boolean | null;
@@ -40,6 +41,7 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
     }[];
 
     let citySlugs: string[] = [];
+    let regionSlugs: string[] = [];
     let workTypes: string[] = [];
     let notify = true;
     // digest_enabled / no_city are `boolean not null default true` (draft_0017 / draft_0020) and
@@ -59,6 +61,8 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
       notify = sub.notify === true;
       digestEnabled = sub.digest_enabled ?? true;
       noCity = sub.no_city ?? true;
+      // region_slugs is text[] (built-in OID, driver-parsed): stored slugs, echoed straight back.
+      regionSlugs = Array.isArray(sub.region_slugs) ? sub.region_slugs : [];
       workTypes = Array.isArray(sub.work_types) ? sub.work_types : [];
       visaTypes = Array.isArray(sub.visa_types) ? sub.visa_types : [];
       placementFee = sub.placement_fee ?? null;
@@ -109,6 +113,7 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
       onboarded,
       subscription: {
         city_slugs: citySlugs,
+        region_slugs: regionSlugs,
         work_types: workTypes,
         notify,
         digest_enabled: digestEnabled,

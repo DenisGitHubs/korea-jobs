@@ -5,6 +5,8 @@ import type { SubscriptionValue } from './subscriptionStore';
 /** Temporary feed filter. Defaults from the subscription; resets on app reload. */
 export interface FilterValue {
   cities: string[];
+  /** Selected province/region slugs (independent of the city selection). */
+  regions: string[];
   workTypes: WorkType[];
   visa: VisaType[];
   paid: PlacementFee | null; // 'free' | 'paid' | null(=all); 'unknown' never used as a filter value
@@ -29,6 +31,7 @@ interface FilterState {
 
 export const EMPTY_FILTER: FilterValue = {
   cities: [],
+  regions: [],
   workTypes: [],
   visa: [],
   paid: null,
@@ -42,8 +45,9 @@ export const EMPTY_FILTER: FilterValue = {
 export function filterFromSubscription(s: SubscriptionValue): FilterValue {
   return {
     // Seed the temporary feed filter from the persistent subscription: the feed
-    // opens from the saved cities (and the "no city" preference) by default.
+    // opens from the saved cities/regions (and the "no city" preference) by default.
     cities: [...s.citySlugs],
+    regions: [...s.regionSlugs],
     workTypes: [...s.workTypes],
     visa: [...s.visaTypes],
     paid: s.placementFee === 'free' || s.placementFee === 'paid' ? s.placementFee : null,
@@ -59,6 +63,7 @@ export function filterFromSubscription(s: SubscriptionValue): FilterValue {
 export function isFilterActive(v: FilterValue): boolean {
   return (
     v.cities.length > 0 ||
+    v.regions.length > 0 ||
     v.workTypes.length > 0 ||
     v.visa.length > 0 ||
     v.paid !== null ||
@@ -73,6 +78,7 @@ export function isFilterActive(v: FilterValue): boolean {
 export function filterSignature(v: FilterValue): string {
   return JSON.stringify({
     c: [...v.cities].sort(),
+    r: [...v.regions].sort(),
     w: [...v.workTypes].sort(),
     vi: [...v.visa].sort(),
     p: v.paid,
@@ -80,9 +86,9 @@ export function filterSignature(v: FilterValue): string {
     m: v.meals,
     q: v.keywords.trim().toLowerCase(),
     f: v.freshness,
-    // no_city only affects results while a city is selected — keep it out of the
-    // signature otherwise, so toggling it with no cities never churns the cache.
-    nc: v.cities.length ? v.noCity : true,
+    // no_city only affects results while a city OR region is selected — keep it out
+    // of the signature otherwise, so toggling it with no geo never churns the cache.
+    nc: v.cities.length || v.regions.length ? v.noCity : true,
   });
 }
 
@@ -90,6 +96,7 @@ export function filterSignature(v: FilterValue): string {
 export function filterToQuery(v: FilterValue): VacancyQuery {
   return {
     cities: v.cities.length ? v.cities : undefined,
+    regions: v.regions.length ? v.regions : undefined,
     work_types: v.workTypes.length ? v.workTypes : undefined,
     visa: v.visa.length ? v.visa : undefined,
     paid: v.paid === 'free' || v.paid === 'paid' ? v.paid : undefined,
@@ -97,8 +104,8 @@ export function filterToQuery(v: FilterValue): VacancyQuery {
     meals: v.meals || undefined,
     q: v.keywords.trim() ? v.keywords.trim() : undefined,
     freshness: v.freshness ?? undefined,
-    // Only meaningful with a city selected (server ignores it otherwise).
-    no_city: v.cities.length ? v.noCity : undefined,
+    // Only meaningful with a city OR region selected (server ignores it otherwise).
+    no_city: v.cities.length || v.regions.length ? v.noCity : undefined,
   };
 }
 

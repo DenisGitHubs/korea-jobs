@@ -3,7 +3,11 @@
 // Reject journal (owner rule 2026-07-20): so we can look at WHAT the AI throws away, every
 // AI-VERDICT reject (not_vacancy / chitchat / resume / agency_promo / … — but NOT 'low_confidence',
 // which is the visible "Не проверено" tab, and NOT spam_prefilter, which never reaches the AI) is:
-//   (a) counted per day+reason in ai_reject_stats — always, tiny;
+//   (a) counted per day+reason in ai_reject_stats — ALWAYS, tiny. This INCLUDES verdict-cache replays
+//       (parser/run.ts step 1c): a reject reused from cache is still a reject that happened, so it advances
+//       the counter too (called with logSample:false — counted, but the repeat's full text is not
+//       re-stored). Invariant: EVERY AI-verdict reject is counted, whether freshly judged or replayed from
+//       cache — the most frequent repeats no longer slip past the counter.
 //   (b) sampled in FULL (the whole original text) into ai_reject_samples — ONLY while the owner has
 //       flipped reject_log_enabled on, for a day's collection window (cleanup purges >7d).
 //

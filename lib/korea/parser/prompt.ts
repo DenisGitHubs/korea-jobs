@@ -65,6 +65,13 @@ export interface CityRef {
   region_slug?: string | null;
 }
 
+/** One decoded place-slang pair the model returns for a need_geo item: how the ad wrote the place
+ *  vs the normal place name (Part B). Data for the geo_suggestions learning ledger. */
+export interface CitySlangPair {
+  slang: string;
+  norm: string;
+}
+
 /** One parsed message the model must return (keyed by the input `id`). */
 export interface ParsedVacancy {
   id: string;
@@ -88,6 +95,64 @@ export interface ParsedVacancy {
   placement_fee: PlacementFee;
   has_housing: boolean | null;
   has_meals: boolean | null;
+  // Conditional AI-geo (Part B) — present ONLY for an input item that carried need_geo:1 (our
+  // dictionary found no city/region) AND the model classified as a vacancy. All optional; the model
+  // OMITS them otherwise. Resolved server-side by the FULL matcher (never touches city_id). See
+  // GEO_RESOLVE_INSTRUCTION + readAiGeoFields.
+  city_norm?: string | null;
+  region_norm?: string | null;
+  city_slang?: CitySlangPair[] | null;
+}
+
+// GEO RESOLUTION instruction (Part B). Kept as a SEPARATE system block placed AFTER the shared,
+// byte-identical buildSystemPrompt() prefix — so the parser↔moderation cache prefix is NOT changed
+// (Skills/Рома/ai-cost-haiku). Unlike moderation's VOLATILE few-shot (uncached), this text is STATIC,
+// so run.ts gives it its OWN cache_control breakpoint: it warms once per wave and never touches the
+// shared baseSystem cache entry (which is a strict prefix of it, still shared with moderation).
+// The model resolves a place ONLY for a need_geo:1 item (owner rule: dictionary first, AI only as a
+// fallback), and ONLY when it is a real vacancy — so the reject "diet" (4 keys) is untouched.
+export const GEO_RESOLVE_INSTRUCTION = `GEO RESOLUTION — applies ONLY to an input item carrying need_geo:1 that you classify as a real vacancy (is_vacancy:true). Our dictionary found NO city and NO region for it; help place it. This EXTENDS the OUTPUT FORMAT above with OPTIONAL keys you MAY add for such an item (and for NO other item — never for a non-vacancy, never for an item without need_geo:1). These are the ONLY keys allowed beyond the contract:
+- city_norm: the normal Russian name of the city you infer from context — decode a slang/abbreviation, a district/neighbourhood, a subway station, an industrial zone (산단/공단), a landmark. Return the STANDARD city name (a district of Seoul -> "Сеул"; the 미금 area -> "Соннам"). OMIT if you cannot tell the city.
+- region_norm: the province/region when you can tell only that (not the exact city). Use the normal Russian province name ("Кёнгидо", "Чолла-Намдо", "Чхунчхон-Намдо"). OMIT if unknown.
+- city_slang: an array of {"slang","norm"} pairs — for EACH slang / abbreviation / district / station / local nickname of a PLACE you decoded in this message, map it "as written in the ad" -> "the normal place name" (e.g. {"slang":"미금","norm":"Соннам"}). OMIT when there is nothing to decode.
+Never invent a place you cannot justify from the text. Do not add these keys to any item without need_geo:1. Do not translate other fields.`;
+
+// PARSER-ONLY classification refinements (owner rule 2026-07-21). Kept in this SEPARATE parser system
+// block (placed AFTER the shared, byte-identical buildSystemPrompt prefix, alongside GEO_RESOLVE_INSTRUCTION)
+// so the parser↔moderation cached prefix is NOT changed (Skills/Рома/ai-cost-haiku) — only the parser's
+// own static tail grows, warming once per wave. These REFINE the CLASSIFICATION rules above; they do NOT
+// add or change any OUTPUT FORMAT key. Two owner cases: (a) route brief hiring gigs to the "unverified"
+// review lane via LOW confidence instead of discarding them as unclear; (b) do not mistake an employer's
+// terse conditions+phone posting for a job-seeker's resume.
+export const PARSER_CLASSIFY_INSTRUCTION = `PARSER CLASSIFICATION REFINEMENTS — these REFINE the CLASSIFICATION rules above; they do NOT add or change any OUTPUT FORMAT key.
+- BRIEF HIRING GIGS: a SHORT post from an EMPLOYER offering work or short-term gig work but WITHOUT details (no clear task, no city, no conditions) — e.g. "Возьму пару человек на свободную вакансию", "Есть халтурка на сегодня, 3 часа — 8000", "Ищу пару людей на работу 5–10к". These ARE hiring (someone offering work / looking for workers), so DO NOT reject them as unclear. Set is_vacancy=true with a LOW confidence (about 0.3–0.5) so they surface in the unverified review lane instead of being discarded. Reserve reject_reason=unclear for text you genuinely cannot tell is a job at all.
+- EMPLOYER vs JOB-SEEKER: a post that STATES work conditions (who is wanted, when, where, a shift/night) together with an employer contact is a HIRING offer (is_vacancy=true), NOT a resume. Example: "Арбайт девушка с опытом на сачуль, сегодня в ночь. 010-XXXX-XXXX" — this is an EMPLOYER listing requirements (a woman with experience, restaurant/сачуль work, night shift) and a phone to call, so it is a vacancy (restaurant), NOT resume_seeking_job. Use resume_seeking_job ONLY when the AUTHOR offers THEMSELVES for work — "ищу работу", "ищу подработку для себя", a CV of the author's own skills — i.e. they seek a job, not workers, and typically give no hiring contact. Tell them apart by DIRECTION: "ищу людей / работников / пару человек" = hiring; "ищу работу / подработку [для себя]" = seeking.`;
+
+// Tolerant reader of the Part-B geo fields off a parsed model item. Pure, DB-free, DEFENSIVE: a
+// missing key, a wrong type, or a malformed city_slang entry is silently dropped (never throws) — the
+// model output is untrusted DATA. Returns trimmed strings (or null) + a clean {slang,norm} list.
+export function readAiGeoFields(it: unknown): {
+  cityNorm: string | null;
+  regionNorm: string | null;
+  slang: CitySlangPair[];
+} {
+  const o = (it ?? {}) as Record<string, unknown>;
+  const str = (v: unknown): string | null => {
+    if (typeof v !== 'string') return null;
+    const s = v.trim();
+    return s.length > 0 ? s.slice(0, 200) : null;
+  };
+  const slang: CitySlangPair[] = [];
+  if (Array.isArray(o.city_slang)) {
+    for (const p of o.city_slang) {
+      if (!p || typeof p !== 'object') continue;
+      const rec = p as Record<string, unknown>;
+      const s = str(rec.slang);
+      if (!s) continue; // a pair with no readable surface is useless
+      slang.push({ slang: s, norm: str(rec.norm) ?? '' });
+    }
+  }
+  return { cityNorm: str(o.city_norm), regionNorm: str(o.region_norm), slang };
 }
 
 /**

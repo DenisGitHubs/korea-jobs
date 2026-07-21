@@ -28,7 +28,10 @@
 //      contain a phone number, so it must not grow unbounded (007 minor);
 //   9. purge ai_reject_samples older than 7 days (owner rule 2026-07-20) — the reject-inspection
 //      buffer holds full raw text (third-party PII), so it is time-boxed; the tiny per-day
-//      ai_reject_stats counters are kept (not purged).
+//      ai_reject_stats counters are kept (not purged);
+//  10. purge ai_verdict_cache older than 7 days by last_seen (owner rule 2026-07-21) — the reject-verdict
+//      reuse cache (parser/verdict-cache.ts) is a rolling, self-refreshing memory: a hash not seen again
+//      within 7 days ages out. Best-effort (deploy-before-migrate window may lack the table).
 //
 // NOTE FK: vacancies.raw_message_id -> raw_messages(id) ON DELETE SET NULL (draft_0001_init.sql
 // line 322). Deleting a raw row never cascades to a vacancy: the card keeps living, its
@@ -48,6 +51,7 @@ export interface CleanupResult {
   deletedVacancies: number;
   moderationExamplesPurged: number;
   rejectSamplesPurged: number;
+  verdictCachePurged: number;
 }
 
 export async function runCleanup(): Promise<CleanupResult> {
@@ -134,6 +138,21 @@ export async function runCleanup(): Promise<CleanupResult> {
     console.error('[cleanup] ai_reject_samples purge failed (table missing?):', err instanceof Error ? err.message : String(err));
   }
 
+  // AI verdict cache (owner rule 2026-07-21): the reject-verdict reuse cache (parser/verdict-cache.ts) is
+  // a rolling memory keyed by last_seen — every hit refreshes it, so a hash not seen for 7 days ages out.
+  // Best-effort like the reject-samples purge above: in the deploy-before-migrate window the table may not
+  // exist yet — swallow so the other cleanup steps still return their counts.
+  let verdictCachePurged: unknown[] = [];
+  try {
+    verdictCachePurged = await sql`
+      delete from ai_verdict_cache
+      where last_seen < now() - interval '7 days'
+      returning text_hash`;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[cleanup] ai_verdict_cache purge failed (table missing?):', err instanceof Error ? err.message : String(err));
+  }
+
   return {
     deactivated: deact.length,
     takedownEnforced: takedown.length,
@@ -144,5 +163,6 @@ export async function runCleanup(): Promise<CleanupResult> {
     deletedVacancies: deleted.length,
     moderationExamplesPurged: modPurged.length,
     rejectSamplesPurged: rejectSamplesPurged.length,
+    verdictCachePurged: verdictCachePurged.length,
   };
 }

@@ -5,10 +5,11 @@
 // [09:00, 12:00) half-open interval, and the line must stay grammatical Russian for any N (owner:
 // plain human text, no "1 новых вакансий").
 //
-// MULTI-CITY: the digest's city predicate + the has_filters flag live in SQL (kj_city_match /
-// `or s.no_city is false`), so they are exercised by the DB, not here. What IS pure and testable is
-// the WORDING contract that has_filters drives: once no_city=false flips has_filters true, the line
-// must read "по твоим фильтрам" (not "в приложении"). The digestText cases below pin exactly that.
+// MULTI-GEO: the digest's geo predicate + the has_filters flag live in SQL (kj_geo_match /
+// `cardinality(s.region_slugs)>0` / `or s.no_city is false`), so they are exercised by the DB, not here.
+// What IS pure and testable is the WORDING contract that has_filters drives: once a region filter (or
+// no_city=false) flips has_filters true, the line must read "по твоим фильтрам" (not "в приложении").
+// The digestText cases below pin exactly that.
 
 import { describe, it, expect } from 'vitest';
 import { seoulHour, inDigestWindow, digestText, ruPluralVac, DIGEST_WINDOW_START_HOUR, DIGEST_WINDOW_END_HOUR } from './run.js';
@@ -92,5 +93,11 @@ describe('digestText — filtered vs empty-filter wording', () => {
     // (or s.no_city is false), so the digest line must use the "по твоим фильтрам" wording.
     expect(digestText(7, true)).toBe('За сутки: 7 новых вакансий по твоим фильтрам');
     expect(digestText(2, true)).toBe('За сутки: 2 новые вакансии по твоим фильтрам');
+  });
+  it('uses the filtered wording when only a REGION filter is set (regions wave)', () => {
+    // A user who picked ONLY a province (region_slugs non-empty, no city) still counts as "has filters"
+    // in SQL (cardinality(s.region_slugs) > 0), so the digest line must read "по твоим фильтрам".
+    expect(digestText(4, true)).toBe('За сутки: 4 новые вакансии по твоим фильтрам');
+    expect(digestText(11, true)).toBe('За сутки: 11 новых вакансий по твоим фильтрам');
   });
 });

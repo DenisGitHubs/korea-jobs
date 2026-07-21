@@ -8,7 +8,7 @@
 //   * multi-city (3+) extraction and the empty-text no-op.
 
 import { describe, it, expect } from 'vitest';
-import { buildCityMatcher, detectCitySlugs, type CityAliasInput } from './detect.js';
+import { buildCityMatcher, detectCitySlugs, detectRegionSlugs, type CityAliasInput } from './detect.js';
 
 // A representative slice of the real seed (aliases copied verbatim), plus gwangju_gyeonggi with NO
 // aliases (as the seed keeps it) and a synthetic `special` city whose aliases carry regex metachars.
@@ -264,5 +264,81 @@ describe('Кочхан homonym (거창 Gyeongnam vs 고창 Jeonbuk)', () => {
   it('the DISTINCT hangul stays 1:1', () => {
     expect(det('거창 공장')).toEqual(['geochang']);
     expect(det('고창 공장')).toEqual(['gochang']);
+  });
+});
+
+// ── Region (province) detection — detectRegionSlugs (regions wave) ────────────────────────────────
+
+const reg = (text: string, hint?: string): string[] => detectRegionSlugs(text, hint).sort();
+
+describe('detectRegionSlugs — provinces (ru / разночтения / hangul / latin)', () => {
+  it('maps Russian province names + разночтения', () => {
+    expect(reg('работа по всей Кёнгидо')).toEqual(['gyeonggi']);
+    expect(reg('вакансии в Канвондо')).toEqual(['gangwon']);
+    expect(reg('Чолла-Намдо, стройка')).toEqual(['jeonnam']);
+    expect(reg('Кёнсан-Пукто завод')).toEqual(['gyeongbuk']);
+    expect(reg('Чхунчхон-Намдо, ферма')).toEqual(['chungnam']);
+  });
+  it('maps Hangul province forms', () => {
+    expect(reg('경기 지역 채용')).toEqual(['gyeonggi']);
+    expect(reg('전남 물류')).toEqual(['jeonnam']);
+    expect(reg('강원도 공장')).toEqual(['gangwon']);
+    expect(reg('제주 호텔 구인')).toEqual(['jeju']);
+  });
+  it('maps Latin province forms with or without -do', () => {
+    expect(reg('a job in Gyeonggi-do')).toEqual(['gyeonggi']);
+    expect(reg('Chungnam factory line')).toEqual(['chungnam']);
+    expect(reg('gyeongbuk hiring')).toEqual(['gyeongbuk']);
+  });
+  it('tolerates a Russian case ending on a province name', () => {
+    expect(reg('переезд по Кёнгидо')).toEqual(['gyeonggi']);
+    expect(reg('из Канвондо в Сеул').sort()).toEqual(['gangwon', 'seoul']);
+  });
+});
+
+describe('detectRegionSlugs — does NOT map ambiguous bare province surfaces', () => {
+  it('bare "кёнсан" / "경상" / "чолла" / "충청" (no buk/nam) resolve to no region', () => {
+    expect(reg('경상 지역')).toEqual([]); // Gyeongsang without buk/nam is ambiguous
+    expect(reg('где-то в Чолла')).toEqual([]); // Jeolla without buk/nam is ambiguous
+    expect(reg('충청 어딘가')).toEqual([]); // Chungcheong without buk/nam is ambiguous
+  });
+  it('a non-place text yields nothing', () => {
+    expect(reg('')).toEqual([]);
+    expect(reg('обычный текст без региона')).toEqual([]);
+  });
+});
+
+describe('detectRegionSlugs — gwangju metro vs Gwangju-in-Gyeonggi homonym', () => {
+  it('a bare Gwangju surface -> the metro region gwangju', () => {
+    expect(reg('광주광역시 채용')).toEqual(['gwangju']);
+    expect(reg('работа в Кванджу')).toEqual(['gwangju']);
+  });
+  it('a Gyeonggi marker drops the metro gwangju (it is the Gyeonggi city -> region gyeonggi)', () => {
+    expect(reg('광주 경기도 물류센터')).toEqual(['gyeonggi']);
+    expect(reg('Кванджу (Кёнги)')).toEqual(['gyeonggi']);
+  });
+  it('Gyeonggi context via the HINT also drops the metro gwangju', () => {
+    expect(reg('광주 공장 구인', '경기 지역 채널')).toEqual(['gyeonggi']);
+  });
+});
+
+describe('detectRegionSlugs — does not break the city province-tail guard', () => {
+  // The city scan (detectCitySlugs) must still REJECT a province tail as a city, while the region scan
+  // ACCEPTS it as a region — the two are independent and never conflict (regions wave contract).
+  it('«Кёнсан-Пукто»: NO city gyeongsan, YES region gyeongbuk', () => {
+    expect(det('объект в Кёнсан-Пукто')).toEqual([]); // city scan rejects the province tail
+    expect(reg('объект в Кёнсан-Пукто')).toEqual(['gyeongbuk']); // region scan accepts it
+  });
+  it('«город Кёнсан»: YES city gyeongsan, NO region (bare Gyeongsang is ambiguous)', () => {
+    expect(det('город Кёнсан, завод')).toEqual(['gyeongsan']);
+    expect(reg('город Кёнсан, завод')).toEqual([]);
+  });
+});
+
+describe('detectRegionSlugs — metro-city regions (used by region_norm resolution)', () => {
+  it('resolves a metropolitan name to its own region slug', () => {
+    expect(reg('Сеул')).toEqual(['seoul']);
+    expect(reg('부산 공장')).toEqual(['busan']);
+    expect(reg('Тэгу')).toEqual(['daegu']);
   });
 });

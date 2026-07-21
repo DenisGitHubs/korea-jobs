@@ -22,7 +22,7 @@ import { sendMessage } from '../bot/telegram.js';
 import { adminRecipients } from '../admin/auth.js';
 import { recordModerationExample, decideAdModeration } from './moderation.js';
 import { parseAdInput, adModText, UUID_RE, type AdBody } from './input.js';
-import { buildCityMatcher, detectCitySlugs } from '../cities/detect.js';
+import { buildCityMatcher, detectCitySlugs, detectRegionSlugs } from '../cities/detect.js';
 
 /** MULTI-CITY: an ad's city_ids = the DISTINCT union of the PRIMARY city (from the form/AI, cityId)
  *  and every city detected in the free-text description (owner-approved). The main city / city_id is
@@ -51,6 +51,33 @@ export async function resolveAdCityIds(
     // Best-effort enrichment: on a cities read fault fall back to just the primary city.
     // eslint-disable-next-line no-console
     console.error('[ads] city_ids detection skipped');
+  }
+  return [...set];
+}
+
+/** MULTI-REGION (regions wave): an ad's region_slugs = the regions of its resolved cities (cityIds)
+ *  ∪ the singular region_slug (form/AI pick) ∪ every region named in the free-text description. Twin of
+ *  resolveAdCityIds; kept SEPARATE so resolveAdCityIds's signature stays stable for ads/manage.ts (edit
+ *  path, out of this wave's scope). Best-effort — a cities read fault falls back to region_slug ∪ detect. */
+export async function resolveAdRegionSlugs(
+  sql: ReturnType<typeof getSql>,
+  cityIds: string[],
+  regionSlug: string | null,
+  description: string | null,
+): Promise<string[]> {
+  const set = new Set<string>();
+  if (regionSlug) set.add(regionSlug);
+  for (const slug of detectRegionSlugs(description ?? '')) set.add(slug);
+  try {
+    if (cityIds.length > 0) {
+      const rows = (await sql`
+        select distinct region_slug from cities
+        where id = any(${cityIds}::uuid[]) and region_slug is not null`) as unknown as { region_slug: string }[];
+      for (const r of rows) set.add(r.region_slug);
+    }
+  } catch {
+    // eslint-disable-next-line no-console
+    console.error('[ads] region_slugs detection skipped');
   }
   return [...set];
 }
@@ -113,14 +140,16 @@ export async function adsCreate(req: ReqLike, res: ResLike): Promise<void> {
     const sql = getSql();
     // MULTI-CITY: primary city (city_id) is the form pick; city_ids ADDS any city named in the text.
     const cityIds = await resolveAdCityIds(sql, cityId, f.description);
+    // MULTI-REGION (regions wave): region_slugs = regions of those cities ∪ region_slug ∪ detect(desc).
+    const regionSlugs = await resolveAdRegionSlugs(sql, cityIds, regionSlug, f.description);
     const rows = (await sql`
       insert into user_ads (
-        author_user_id, city_id, city_ids, city_text, region_slug, work_type, visa_types, placement_fee,
+        author_user_id, city_id, city_ids, city_text, region_slug, region_slugs, work_type, visa_types, placement_fee,
         has_housing, has_meals, salary_text, title, description, contact_raw, contact_kind,
         housing_terms, meals_info, schedule, status, moderated_at, reject_reason, ai_confidence,
         expires_at, notify_pending
       ) values (
-        ${auth.user.id}::uuid, ${cityId}::uuid, ${cityIds}::uuid[], ${cityText}, ${regionSlug}, ${f.workType}::work_type,
+        ${auth.user.id}::uuid, ${cityId}::uuid, ${cityIds}::uuid[], ${cityText}, ${regionSlug}, ${regionSlugs}::text[], ${f.workType}::work_type,
         ${f.visaTypes}::visa_type[], ${f.placementFee}::placement_fee,
         ${f.hasHousing}, ${f.hasMeals}, ${f.salaryText}, ${f.title}, ${f.description}, ${f.contactRaw}, ${f.contactKind}::contact_kind,
         ${f.housingTerms}, ${f.mealsInfo}, ${f.schedule},

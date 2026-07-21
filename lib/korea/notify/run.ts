@@ -19,12 +19,13 @@
 // Only city-scoped items are pushed; city-less ones have their pending flag cleared up front. The
 // per-run cap counts MESSAGES (the Bot API ceiling is per message); a 40ms gap paces the sends.
 //
-// MULTI-CITY (multi-city plan): the app-wide city rule lives in kj_city_match (draft_0020) and is
-// used by the feed + digest. notify is DELIBERATELY NARROWER: it pushes ONLY localized offers (those
-// with ≥1 city) and matches a subscriber by ARRAY OVERLAP of s.city_ids && the offer's city_ids (a
-// no-city subscriber, cardinality 0, still gets everything). The subscription `no_city` toggle does
-// NOT affect realtime pushes — it governs only the passive feed/digest surface, where a user browses
-// city-less offers on purpose; a realtime DM about a city-less offer would be noise, so it is skipped.
+// MULTI-GEO (regions wave): the app-wide geo rule lives in kj_geo_match (draft_0021) and is used by
+// the feed + digest. notify is DELIBERATELY NARROWER and does NOT use the no_city (u) toggle: it
+// pushes an offer that has SOME geo (≥1 city OR ≥1 region) and matches a subscriber by ARRAY OVERLAP —
+// s.city_ids && offer.city_ids OR s.region_slugs && offer.region_slugs (a subscriber with NO city AND
+// NO region, both cardinality 0, still gets everything). An offer with NO geo at all is never pushed
+// (its pending flag is cleared up front). The `no_city` toggle governs only the passive feed/digest
+// surface, where a user browses city-less offers on purpose; a realtime DM about one would be noise.
 
 import { getSql } from '../core/db.js';
 import { getConfigBool, getConfigNumber } from '../config.js';
@@ -88,6 +89,7 @@ interface VacRow extends Displayable {
   id: string;
   city_id: string | null; // PRIMARY city (may be null on a repost-only card); display via coalesce
   city_ids: string[]; // MULTI-CITY: the full city set, matched against subscribers by array overlap
+  region_slugs: string[]; // MULTI-REGION: the full region set, matched against subscribers by overlap
   visa_types: string[];
   placement_fee: string;
   has_housing: boolean | null;
@@ -98,6 +100,7 @@ interface AdRow extends Displayable {
   id: string;
   city_id: string | null;
   city_ids: string[];
+  region_slugs: string[];
   visa_types: string[];
   placement_fee: string;
   has_housing: boolean | null;
@@ -118,18 +121,21 @@ interface Recipient {
 // salary_text goes through scrubContacts (007): on user ads the author controls the field and
 // could smuggle a phone/@handle into subscribers' DMs, bypassing the paid contact-reveal gate.
 // Scrubbing the scraped-vacancy path too keeps the two texts symmetric (defense in depth).
+// MULTI-REGION: a region-only offer (no city) now gets pushed — its city_name is null, so the city
+// part is DROPPED gracefully (the user opens the card to see the region) instead of rendering a stray
+// "· " separator with an empty location.
 function buildVacText(v: VacRow): string {
-  const city = v.city_name?.ru ?? '';
+  const parts = [v.city_name?.ru ?? '', workTypeLabelRu(v.work_type)].filter((s) => s.length > 0);
   const clean = scrubContacts(v.salary_text);
   const salary = clean ? ` · ${clean}` : '';
-  return `Новая вакансия: ${city} · ${workTypeLabelRu(v.work_type)}${salary}`; // plain text — no parse_mode
+  return `Новая вакансия: ${parts.join(' · ')}${salary}`; // plain text — no parse_mode
 }
 
 function buildAdText(a: AdRow): string {
-  const city = a.city_name?.ru ?? '';
+  const parts = [a.city_name?.ru ?? '', workTypeLabelRu(a.work_type)].filter((s) => s.length > 0);
   const clean = scrubContacts(a.salary_text);
   const salary = clean ? ` · ${clean}` : '';
-  return `Новое объявление: ${city} · ${workTypeLabelRu(a.work_type)}${salary}`; // plain text — no parse_mode
+  return `Новое объявление: ${parts.join(' · ')}${salary}`; // plain text — no parse_mode
 }
 
 /** Header line for a grouped DM (>1 item): distinguishes vacancy-only / ad-only / mixed batches. */
@@ -188,7 +194,11 @@ function vacSubs(sql: Sql, v: VacRow): Promise<{ user_id: string; telegram_id: s
     select u.id as user_id, u.telegram_id
     from subscriptions s join users u on u.id = s.user_id
     where s.notify and u.allows_write_to_pm and not u.is_blocked
-      and (cardinality(s.city_ids) = 0 or s.city_ids && ${v.city_ids}::uuid[])
+      and (
+        (cardinality(s.city_ids) = 0 and cardinality(s.region_slugs) = 0)
+        or s.city_ids && ${v.city_ids}::uuid[]
+        or s.region_slugs && ${v.region_slugs}::text[]
+      )
       and (s.work_types is null or cardinality(s.work_types) = 0 or ${v.work_type}::work_type = any(s.work_types))
       and (
         cardinality(s.visa_types) = 0
@@ -215,7 +225,11 @@ function adSubs(sql: Sql, a: AdRow): Promise<{ user_id: string; telegram_id: str
     from subscriptions s join users u on u.id = s.user_id
     where s.notify and u.allows_write_to_pm and not u.is_blocked
       and u.id is distinct from ${a.author_user_id}::uuid
-      and (cardinality(s.city_ids) = 0 or s.city_ids && ${a.city_ids}::uuid[])
+      and (
+        (cardinality(s.city_ids) = 0 and cardinality(s.region_slugs) = 0)
+        or s.city_ids && ${a.city_ids}::uuid[]
+        or s.region_slugs && ${a.region_slugs}::text[]
+      )
       and (s.work_types is null or cardinality(s.work_types) = 0 or ${a.work_type}::work_type = any(s.work_types))
       and (
         cardinality(s.visa_types) = 0
@@ -277,12 +291,12 @@ export async function runNotify(): Promise<NotifyResult> {
 
   const sql = getSql();
 
-  // City-less items are never pushed (subscriptions are city-scoped) — clear their pending flag
-  // so they aren't rescanned every tick. Same rule for vacancies and approved ads. MULTI-CITY: the
-  // "has a city" test is now cardinality(city_ids)=0 (was city_id is null) — an offer with ANY city
-  // in its set is pushable, matched by array overlap below.
-  await sql`update vacancies set notify_pending = false where notify_pending and cardinality(city_ids) = 0`;
-  await sql`update user_ads set notify_pending = false where notify_pending and cardinality(city_ids) = 0`;
+  // GEO-less items are never pushed — clear their pending flag so they aren't rescanned every tick.
+  // MULTI-GEO (regions wave): the guard softens from "no city" to "no geo AT ALL" — an offer with ANY
+  // city OR ANY region is now pushable (matched below by city overlap OR region overlap), so we only
+  // clear pending on rows with EMPTY city_ids AND EMPTY region_slugs.
+  await sql`update vacancies set notify_pending = false where notify_pending and cardinality(city_ids) = 0 and cardinality(region_slugs) = 0`;
+  await sql`update user_ads set notify_pending = false where notify_pending and cardinality(city_ids) = 0 and cardinality(region_slugs) = 0`;
 
   const batch = await getConfigNumber('notify_vacancy_batch', 10);
   const sendCap = await getConfigNumber('notify_send_cap', 200); // messages per run
@@ -295,7 +309,7 @@ export async function runNotify(): Promise<NotifyResult> {
   // city_ids (coalesce(city_id, city_ids[1])); the join is LEFT so a row is never dropped for a
   // null primary. The gard above already cleared pending on city-less (cardinality=0) rows.
   const vacs = (await sql`
-    select v.id, v.work_type, v.city_id, v.city_ids, c.name as city_name, v.salary_text,
+    select v.id, v.work_type, v.city_id, v.city_ids, v.region_slugs, c.name as city_name, v.salary_text,
            v.visa_types, v.placement_fee, v.has_housing, v.has_meals
     from vacancies v left join cities c on c.id = coalesce(v.city_id, v.city_ids[1])
     where v.notify_pending and v.is_active and v.duplicate_of is null
@@ -303,7 +317,7 @@ export async function runNotify(): Promise<NotifyResult> {
     limit ${batch}`) as unknown as VacRow[];
 
   const ads = (await sql`
-    select a.id, a.work_type, a.city_id, a.city_ids, c.name as city_name, a.salary_text,
+    select a.id, a.work_type, a.city_id, a.city_ids, a.region_slugs, c.name as city_name, a.salary_text,
            a.visa_types, a.placement_fee, a.has_housing, a.has_meals, a.author_user_id
     from user_ads a left join cities c on c.id = coalesce(a.city_id, a.city_ids[1])
     where a.notify_pending and a.status = 'approved'

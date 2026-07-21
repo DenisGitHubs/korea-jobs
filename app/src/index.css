@@ -541,16 +541,57 @@ a {
 }
 
 /* Foldable province (grid-template-rows 0fr→1fr; reduced-motion handled globally). */
+/* Header row: an optional "whole region" checkbox + the accordion toggle. They are
+   two SEPARATE buttons so tapping the checkbox never expands/folds the province. */
 .citypicker__prov-head {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
+  padding: 2px 4px 6px;
+}
+.citypicker__prov-check {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: inherit;
+  /* Negative margin grows the tap target (~34px) without shifting the checkmark. */
+  padding: 6px;
+  margin: -6px 0 -6px -2px;
+  cursor: pointer;
+}
+.citypicker__prov-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
   border: none;
   background: transparent;
   color: inherit;
   text-align: left;
-  padding: 2px 4px 6px;
+  padding: 0;
+}
+/* Rounded-square variant of the round city checkbox, to read as "region" not "city". */
+.check--region {
+  border-radius: 7px;
+}
+/* Collapsed-visible "whole region" pill next to the province title. */
+.citypicker__prov-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--kj-brand);
+  color: var(--kj-brand-ink);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: none;
+  vertical-align: middle;
 }
 .citypicker__prov-title {
   flex: 1 1 auto;

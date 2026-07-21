@@ -124,7 +124,7 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
     </button>
   );
 
-  const citiesLabel = citiesSummary(draft.cities, draft.noCity, bySlug, lang, t);
+  const citiesLabel = citiesSummary(draft.cities, draft.regions, draft.noCity, bySlug, lang, t);
 
   return (
     <>
@@ -230,6 +230,8 @@ export function FilterSheet({ open, onClose }: FilterSheetProps) {
         onChange={(next) => patch({ cities: next })}
         noCity={draft.noCity}
         onNoCityChange={(b) => patch({ noCity: b })}
+        regions={draft.regions}
+        onRegionsChange={(next) => patch({ regions: next })}
       />
     </Sheet>
     </>

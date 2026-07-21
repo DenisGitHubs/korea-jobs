@@ -177,11 +177,14 @@ function citiesOf(...slugs: string[]): Array<{ slug: string; name: City['name'] 
 }
 
 /**
- * Two hand-crafted listings exercising the multi-city contract:
+ * Hand-crafted listings exercising the multi-city + region contracts:
  *   - `v-multi` spans three Gyeonggi cities (main = Ansan, a "frequent" city).
  *   - `v-nocity` has NO city at all ("Город не указан" path on the card): it keeps
  *     a direct contact AND a public source post, so the card shows both the
  *     "no city — clarify in the channel" hint/button and the contact reveal.
+ *   - `v-region` has NO city but a region label (`regions: ['gyeonggi']`): the card
+ *     / screen show "<Region> · регион" instead of "Город не указан", while still
+ *     offering the "open in channel" hint (location is region-level, not precise).
  */
 function specialVacancies(now: number): MockVacancy[] {
   return [
@@ -238,6 +241,37 @@ function specialVacancies(now: number): MockVacancy[] {
       is_revealed: false,
       source_post_url: 'https://t.me/korea_all_jobs/2043',
       contact: { kind: 'telegram', value: '@korea_daywork' },
+    },
+    {
+      id: 'v-region',
+      city: null,
+      cities: [],
+      // No precise city, but the offer is known to be in Gyeonggi province → the
+      // card/screen render "Провинция Кёнгидо · регион". A region filter of
+      // `gyeonggi` matches it; with no geo selected it lands in the "no city" bucket.
+      region_slug: null,
+      regions: ['gyeonggi'],
+      work_type: 'factory',
+      gender: 'any',
+      salary_text: '시급 11,800₩',
+      salary_min: 11800,
+      salary_max: null,
+      salary_period: 'hour',
+      employer: '경기 채용',
+      description:
+        'Набор рабочих по провинции Кёнгидо — конкретный город и завод подберём под вас. Развозка от станции, оформление по визе, общежитие.',
+      posted_at: new Date(now - 21 * 60000).toISOString(),
+      has_contact: true,
+      visa_types: VISA_BY_WORK.factory,
+      placement_fee: 'free',
+      has_housing: true,
+      has_meals: null,
+      source_kind: 'scraped',
+      repost: false,
+      is_saved: false,
+      is_revealed: false,
+      source_post_url: 'https://t.me/korea_gyeonggi_jobs/512',
+      contact: { kind: 'kakao', value: 'gyeonggi_hr' },
     },
   ];
 }
@@ -352,6 +386,7 @@ export const DEFAULT_ME: Me = {
   onboarded: false,
   subscription: {
     city_slugs: [],
+    region_slugs: [],
     work_types: [],
     notify: true,
     visa_types: [],

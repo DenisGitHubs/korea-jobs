@@ -37,6 +37,7 @@ export default function SettingsScreen() {
 
   const apply = useSubscriptionStore((s) => s.apply);
   const sCities = useSubscriptionStore((s) => s.citySlugs);
+  const sRegions = useSubscriptionStore((s) => s.regionSlugs);
   const sNoCity = useSubscriptionStore((s) => s.noCity);
   const sWork = useSubscriptionStore((s) => s.workTypes);
   const sVisa = useSubscriptionStore((s) => s.visaTypes);
@@ -82,9 +83,10 @@ export default function SettingsScreen() {
     setSaving(true);
     try {
       const body = toSubscription({
-        // Cities + "no city" are edited on the /settings/cities sub-screen; keep
-        // the saved values untouched here.
+        // Cities + regions + "no city" are edited on the /settings/cities
+        // sub-screen; keep the saved values untouched here.
         citySlugs: sCities,
+        regionSlugs: sRegions,
         noCity: sNoCity,
         workTypes: work,
         notify,
@@ -103,7 +105,7 @@ export default function SettingsScreen() {
     }
   }, [saving, sCities, sNoCity, work, notify, visa, paid, housing, meals, digest, apply]);
 
-  const citiesLabel = citiesSummary(sCities, sNoCity, bySlug, lang, t);
+  const citiesLabel = citiesSummary(sCities, sRegions, sNoCity, bySlug, lang, t);
 
   const workOptions = useMemo<ChipOption<WorkType>[]>(
     () => WORK_TYPES.map((w) => ({ value: w, label: t(workTypeKey(w)), icon: <WorkTypeIcon type={w} /> })),

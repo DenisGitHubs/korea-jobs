@@ -4,6 +4,8 @@ import type { Me, PlacementFee, Subscription, VisaType, WorkType } from '../shar
 /** The persistent subscription (drives the bot notifications + the feed default). */
 export interface SubscriptionValue {
   citySlugs: string[];
+  /** Selected province/region slugs (independent of the city selection). */
+  regionSlugs: string[];
   workTypes: WorkType[];
   notify: boolean;
   visaTypes: VisaType[];
@@ -33,6 +35,7 @@ interface SubscriptionState extends SubscriptionValue {
 
 const EMPTY: SubscriptionValue = {
   citySlugs: [],
+  regionSlugs: [],
   workTypes: [],
   notify: true,
   visaTypes: [],
@@ -46,6 +49,7 @@ const EMPTY: SubscriptionValue = {
 function fromSubscription(s: Subscription): SubscriptionValue {
   return {
     citySlugs: s.city_slugs,
+    regionSlugs: s.region_slugs ?? [],
     workTypes: s.work_types as WorkType[],
     notify: s.notify,
     visaTypes: s.visa_types ?? [],
@@ -61,6 +65,7 @@ function fromSubscription(s: Subscription): SubscriptionValue {
 export function subscriptionValue(s: SubscriptionState): SubscriptionValue {
   return {
     citySlugs: s.citySlugs,
+    regionSlugs: s.regionSlugs,
     workTypes: s.workTypes,
     notify: s.notify,
     visaTypes: s.visaTypes,
@@ -76,6 +81,7 @@ export function subscriptionValue(s: SubscriptionState): SubscriptionValue {
 export function toSubscription(v: SubscriptionValue): Subscription {
   return {
     city_slugs: v.citySlugs,
+    region_slugs: v.regionSlugs,
     work_types: v.workTypes,
     notify: v.notify,
     visa_types: v.visaTypes,

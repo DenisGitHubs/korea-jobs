@@ -216,12 +216,109 @@ export function looksLikePharma(text: string): boolean {
   return (text.match(PILL_RE) ?? []).length >= PILL_MIN;
 }
 
-/** True when the raw message is near-certain spam (pattern hit OR emoji carpet OR pharma blast). */
+// --- Letter-doppelganger obfuscation (owner "остаток-2", validated 2026-07-21, ~23 catches). The
+// worker-recruiting mule blasts disguise Russian words by swapping letters for GREEK look-alikes
+// (α σ π ρ δ τ κ Η Ρ Γ Β Μ Τ Ο Φ) that render almost identically: "0нлαúн Poδoτα",
+// "Τσльκσ Γρaждaнe ΡΦ", "Сᴇгσдня мσгу πσмσчь с дᴇньгᴀми". Per-WORD, not per-char: split the raw text
+// into letter tokens (\p{L}\p{M} runs, so digits/spaces/dashes break tokens), call a token "mixed"
+// only when it holds Cyrillic AND Greek inside the SAME word, and demand at least two such words.
+//
+// GREEK-ONLY, DROPPED THE LATIN BRANCH (hard 0-FP gate, durable lesson). The owner draft said
+// "Cyrillic + (Greek OR Latin)", but validation on 521 confirmed real vacancies proved the Latin
+// branch false-fires on GENUINE Korea micro-gigs: real posters type Latin look-alikes а/о/е/с/р/х to
+// dodge OTHER keyword filters, so real ads DO carry Cyrillic+Latin words ("Фаcовка cнюca 9.000",
+// "Пoгрузка нoчная 8.000", "Рaзлoжить Gorila пo пoлкам мaeазина"). Greek look-alikes, by contrast,
+// essentially never appear in a genuine Cyrillic ad. Requiring Greek keeps every residual catch
+// (all 24 residual blasts contain Greek) and drops all 9 genuine-gig false positives. This is the
+// SAME class of lesson as why the per-character version was dropped: Latin/Cyrillic homoglyphs are
+// legitimately mixed by humans; Greek is the reliable spam signal.
+//
+// Why >= 2 same-word Greek: "IT-специалист"/"Wi-Fi" split on the dash into pure-script tokens (never
+// mixed); a Korean word is Hangul-only (hasCyr false). Structural, on the RAW text (case is
+// irrelevant to script identity), same as the emoji-carpet heuristic.
+const SCRIPT_CYR = /\p{Script=Cyrillic}/u;
+const SCRIPT_GREEK = /\p{Script=Greek}/u;
+// /gu so String.match returns EVERY token; .match() is stateless (no lastIndex) — safe to reuse.
+// [\p{L}\p{M}]+ keeps combining marks attached to their base letter, so a decomposed "ú" (u + U+0301)
+// stays inside one token instead of splitting the word.
+const WORD_TOKEN_RE = /[\p{L}\p{M}]+/gu;
+const MIXED_WORD_MIN = 2;
+
+/** True when >= 2 words each mix Cyrillic with Greek look-alike letters (see block above). */
+export function looksLikeMixedScript(text: string): boolean {
+  if (!text) return false;
+  // Strip zero-width chars BEFORE tokenizing (Censor, gate 21.07): the same bots that mix
+  // scripts also splice ZWSP inside words — an unstripped ZW would split the token and let a
+  // greek-cyrillic word slip through. Mirrors looksLikeLinkOnly/looksLikeEmptyMessage.
+  const tokens = text.replace(ZERO_WIDTH, '').match(WORD_TOKEN_RE);
+  if (!tokens) return false;
+  let mixed = 0;
+  for (const t of tokens) {
+    if (SCRIPT_CYR.test(t) && SCRIPT_GREEK.test(t)) {
+      if (++mixed >= MIXED_WORD_MIN) return true;
+    }
+  }
+  return false;
+}
+
+// A "real letter" for the link-only / empty heuristics below: Cyrillic, Latin (incl. the phonetic
+// small-caps, all Latin script) or Hangul. Greek is deliberately NOT a letter here — a pure-Greek
+// blast is caught by looksLikeMixedScript, and treating Greek as "no letters" is per the owner spec.
+const LETTER_RE = /[\p{Script=Cyrillic}\p{Script=Latin}\p{Script=Hangul}]/u;
+
+// --- Link-only messages (owner "остаток-2", validated 2026-07-21). After stripping spaces and
+// zero-width chars the message is nothing but a URL (t.me / http / https) with no other letters —
+// a bare channel-drop, e.g. "https://t.me/G1ramm" posted three times. We remove the URLs and, if
+// no real letter survives while at least one URL was present, it is link-only spam. A real ad that
+// merely CONTAINS a contact link ("Пишите https://t.me/hr_ansan") keeps its other letters and never
+// trips this. /\S+/ is safe: URLs are stripped before the whitespace check, not after collapsing.
+export function looksLikeLinkOnly(text: string): boolean {
+  if (!text) return false;
+  const t = text.replace(ZERO_WIDTH, '');
+  const hasUrl = /https?:\/\//i.test(t) || /\bt\.me\//i.test(t);
+  if (!hasUrl) return false;
+  const stripped = t
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/\bt\.me\/\S+/gi, ' ');
+  return !LETTER_RE.test(stripped);
+}
+
+// --- Empty / greeting-only messages (owner "остаток-2", validated 2026-07-21). Two shapes:
+// (a) the message carries NO letter at all (Cyrillic/Latin/Hangul) — only emoji/signs/digits, e.g.
+//     "💋", "💞🔞", "01072771369", "来做" (Han is not one of the three scripts, so it counts as none);
+// (b) the WHOLE message, once emoji/punctuation/digits are trimmed, is EXACTLY one greeting from the
+//     fixed list below — a bare "Привет" with nothing else. EXACT full-message match, never a
+//     substring: "Привет! Нужны 2 человека на завод…" is multi-word and stays for the model, and
+//     "…uchun raxmat🤗" is not equal to "raxmat" so it also stays.
+const GREETINGS = new Set([
+  'привет', 'здравствуйте', 'салам', 'ассалому алейкум',
+  'hi', 'hello', 'raxmat', 'рахмат', 'спасибо',
+]);
+
+export function looksLikeEmptyMessage(text: string): boolean {
+  if (!text) return false;
+  const stripped = text.replace(ZERO_WIDTH, '');
+  // (a) non-blank but no real letter anywhere.
+  if (stripped.trim() !== '' && !LETTER_RE.test(stripped)) return true;
+  // (b) exact single-greeting message (drop emoji/punctuation/digits, collapse spaces, lowercase).
+  const bare = stripped
+    .toLowerCase()
+    .replace(/[^\p{L}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return GREETINGS.has(bare);
+}
+
+/** True when the raw message is near-certain spam (pattern hit OR emoji carpet OR pharma blast OR
+ *  mixed-script obfuscation OR link-only drop OR empty/greeting-only message). */
 export function looksLikeSpam(text: string | null | undefined): boolean {
   if (!text) return false;
-  // Structural heuristics run on the RAW text (they count emoji/pictographs, not letters).
+  // Structural heuristics run on the RAW text (they inspect scripts/emoji/URLs, not lowercased words).
   if (looksLikeEmojiCarpet(text)) return true;
   if (looksLikePharma(text)) return true;
+  if (looksLikeMixedScript(text)) return true;
+  if (looksLikeLinkOnly(text)) return true;
+  if (looksLikeEmptyMessage(text)) return true;
   // Strip zero-width chars BEFORE lowercasing (adult/dating bots splice them inside words to hide
   // from the g8 patterns); MUST precede toLowerCase so the boundary helpers see clean tokens.
   // No /g on the patterns, so .test() is stateless — safe to reuse the module-level array.
