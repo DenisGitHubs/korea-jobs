@@ -11,6 +11,11 @@ import { type ReqLike, tmaInitData } from './http.js';
 import { getConfigNumber } from '../config.js';
 import { bumpVisitStreakBestEffort } from '../streaks/update.js';
 import { seoulDate, normalizeDbDate } from './time.js';
+import { normalizeRefCode } from './start-param.js';
+
+// Re-exported so existing importers (bot webhook `/start`) keep resolving these from
+// core/context.js. The parsing itself lives in the shared, pure start-param module.
+export { normalizeRefCode, parseStartParam, type StartParam } from './start-param.js';
 
 export interface AuthedUser {
   id: string;
@@ -23,19 +28,10 @@ export interface AuthedUser {
 
 export type AuthResult = { ok: true; user: AuthedUser } | { ok: false };
 
-/**
- * A referral code is a `users.public_id`: exactly 16 hex chars
- * (encode(gen_random_bytes(8),'hex') is lowercase). Normalize to lowercase and reject
- * anything else — including null/empty — so a malformed or absent start_param resolves
- * to "no referrer" (null), never to a partial/injected match. Shared by the Mini App
- * (start_param) and the bot `/start <code>` attribution paths.
- */
-const REF_CODE_RE = /^[0-9a-f]{16}$/i;
-export function normalizeRefCode(raw: string | null | undefined): string | null {
-  if (typeof raw !== 'string') return null;
-  const s = raw.trim();
-  return REF_CODE_RE.test(s) ? s.toLowerCase() : null;
-}
+// Referral-code extraction (`normalizeRefCode`) now lives in the shared start-param parser
+// (./start-param.js), imported + re-exported above. It still yields a 16-hex public_id or
+// null — so the attribution branch below is byte-for-byte unchanged — but additionally
+// pulls the inviter code out of a "Поделиться вакансией" combined link (v<vacancy>r<ref>).
 
 /** Verify `Authorization: tma <initData>` and upsert the user. Fail-closed. */
 export async function authenticate(req: ReqLike): Promise<AuthResult> {

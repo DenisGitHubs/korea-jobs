@@ -1,6 +1,8 @@
-import { useEffect, useLayoutEffect } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { useEffect, useLayoutEffect, useRef } from 'react';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { retrieveLaunchParams } from '@telegram-apps/sdk-react';
 import { api, USE_MOCK } from './shared/api/client';
+import { parseShareStartParam } from './lib/shareLink';
 import { useSubscriptionStore } from './store/subscriptionStore';
 import { Splash } from './components/Splash';
 import { Layout } from './components/Layout';
@@ -34,6 +36,43 @@ function ScrollToTop() {
       el.scrollTop = 0;
     });
   }, [pathname]);
+  return null;
+}
+
+/** The launch `startapp`, from the Telegram host launch params. '' outside Telegram. */
+function readStartParam(): string {
+  try {
+    const lp = retrieveLaunchParams() as {
+      tgWebAppStartParam?: string;
+      tgWebAppData?: { start_param?: string };
+    };
+    return lp.tgWebAppStartParam ?? lp.tgWebAppData?.start_param ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * On cold start, if the launch `startapp` carries a vacancy id (a shared vacancy
+ * link), deep-navigate straight to that card — the same effect a push deep link has.
+ * Referral binding of any embedded code is done SERVER-SIDE from initData's
+ * start_param, never here. Runs exactly once; a bare referral code / no param is a
+ * silent no-op (the app stays on the feed). `state.deepLink` lets the card degrade a
+ * dead link to the feed without an error screen.
+ */
+function DeepLink() {
+  const navigate = useNavigate();
+  const done = useRef(false);
+  useEffect(() => {
+    if (done.current) return;
+    done.current = true;
+    try {
+      const { vacancyId } = parseShareStartParam(readStartParam());
+      if (vacancyId) navigate(`/feed/${vacancyId}`, { replace: true, state: { deepLink: true } });
+    } catch {
+      /* a deep link must never break app entry */
+    }
+  }, [navigate]);
   return null;
 }
 
@@ -81,6 +120,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <ScrollToTop />
+      <DeepLink />
       {/* Order matters: consent must be granted before onboarding collects any
           preferences; onboarding (guarded by !termsRequired) then runs before the app. */}
       <ConsentGate />

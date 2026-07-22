@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { postEvent } from '@telegram-apps/sdk-react';
 import { api, ApiError } from '../shared/api/client';
 import type { VacancyContact, VacancyView } from '../shared/types/api';
-import { feeKey, genderKey, regionKey, visaKey } from '../shared/labels';
+import { feeKey, genderKey, regionKey, visaKey, workTypeKey } from '../shared/labels';
 import { useBackButton } from '../hooks/useBackButton';
 import { useSettingsStore } from '../store/settingsStore';
 import { useSubscriptionStore } from '../store/subscriptionStore';
 import { applySaveToCaches, revertSaveInCaches } from '../store/feedStore';
 import { cityLabel } from '../lib/cities';
+import { buildShareStartParam, buildVacancyShareLink, loadReferral } from '../lib/shareLink';
 import { isStale, timeAgo } from '../lib/format';
 import { AppBar } from '../components/AppBar';
 import { Loading } from '../components/Loading';
@@ -25,6 +26,17 @@ function ShieldIcon() {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
       <path d="m9 12 2 2 4-4" />
+    </svg>
+  );
+}
+
+function ShareIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="18" cy="5" r="3" />
+      <circle cx="6" cy="12" r="3" />
+      <circle cx="18" cy="19" r="3" />
+      <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" />
     </svg>
   );
 }
@@ -63,7 +75,11 @@ function isTelegramContact(c: VacancyContact): boolean {
 export default function VacancyScreen() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
   const { id = '' } = useParams();
+  // True when this card was opened from a shared/push deep link (App sets it). Used to
+  // degrade a dead link (hidden/deleted vacancy) silently to the feed, with no error.
+  const deepLinkEntry = Boolean((location.state as { deepLink?: boolean } | null)?.deepLink);
   const lang = useSettingsStore((s) => s.lang);
   const isReal = useSettingsStore((s) => s.isReal);
   // Remaining daily contact reveals (from /me, refreshed by each reveal response).
@@ -78,6 +94,21 @@ export default function VacancyScreen() {
   const [copied, setCopied] = useState(false);
   const [reported, setReported] = useState(false);
   const [saved, setSaved] = useState(false);
+  // Transient banner for the browser/mock share fallback ("link copied"). Null = hidden.
+  const [shareToast, setShareToast] = useState<string | null>(null);
+
+  // Warm the referral code/link once (memoized) so the Share tap opens the native
+  // sheet instantly instead of waiting on a first GET /referral round-trip.
+  useEffect(() => {
+    void loadReferral();
+  }, []);
+
+  // Auto-dismiss the share toast.
+  useEffect(() => {
+    if (shareToast == null) return;
+    const tid = window.setTimeout(() => setShareToast(null), 2200);
+    return () => window.clearTimeout(tid);
+  }, [shareToast]);
 
   useEffect(() => {
     let alive = true;
@@ -163,6 +194,47 @@ export default function VacancyScreen() {
       /* best effort */
     });
   }, [id]);
+
+  // Share THIS vacancy. Reuses the exact ReferralScreen mechanism: real client opens
+  // Telegram's native "share to a chat" sheet via `web_app_open_tg_link` on
+  // /share/url?url=…&text=…; browser/mock (or a failed postEvent) copies the link so
+  // the preview still works. The link carries a combined startapp (vacancy id + my
+  // referral code) — the app deep-navigates to the card, the backend binds the referral.
+  const shareVacancy = useCallback(async () => {
+    const v = vacancy;
+    if (!v) return;
+    const ref = await loadReferral();
+    const startParam = buildShareStartParam(v.id, ref?.code);
+    // Targeted combined link when we have both a UUID id and the server link base;
+    // otherwise fall back to the plain personal referral link (still useful, e.g. mock).
+    const link = startParam && ref?.link ? buildVacancyShareLink(ref.link, startParam) : (ref?.link ?? null);
+    if (!link) {
+      setShareToast(t('vacancy.shareUnavailable'));
+      return;
+    }
+
+    // Short human subject for the pitch: "City · Work".
+    const cities = v.cities?.length ? v.cities : v.city ? [v.city] : [];
+    const cityStr = cities.map((c) => cityLabel(c, lang, t)).join(' · ');
+    const subject = [cityStr, t(workTypeKey(v.work_type))].filter(Boolean).join(' · ');
+    const text = t('vacancy.shareText', { subject });
+
+    const pathFull = `/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
+    if (isReal) {
+      try {
+        postEvent('web_app_open_tg_link', { path_full: pathFull });
+        return;
+      } catch {
+        /* fall through to copy */
+      }
+    }
+    try {
+      await navigator.clipboard?.writeText(link);
+      setShareToast(t('vacancy.shareCopied'));
+    } catch {
+      setShareToast(link);
+    }
+  }, [vacancy, isReal, lang, t]);
 
   // Open the source-channel post for listings with no direct contact. Reuses the
   // exact same relative-path mechanism as writeTelegram: raw `web_app_open_tg_link`
@@ -256,20 +328,39 @@ export default function VacancyScreen() {
         onBack={goBack}
         right={
           vacancy ? (
-            <button
-              className={`appbar__btn appbar__btn--icon ${saved ? 'appbar__btn--fav' : ''}`}
-              onClick={toggleSave}
-              aria-pressed={saved}
-              aria-label={t(saved ? 'feed.unsave' : 'feed.save')}
-            >
-              <HeartIcon filled={saved} />
-            </button>
+            <>
+              <button
+                className="appbar__btn appbar__btn--icon"
+                onClick={shareVacancy}
+                title={t('vacancy.share')}
+                aria-label={t('vacancy.shareAria')}
+              >
+                <ShareIcon />
+              </button>
+              <button
+                className={`appbar__btn appbar__btn--icon ${saved ? 'appbar__btn--fav' : ''}`}
+                onClick={toggleSave}
+                aria-pressed={saved}
+                aria-label={t(saved ? 'feed.unsave' : 'feed.save')}
+              >
+                <HeartIcon filled={saved} />
+              </button>
+            </>
           ) : undefined
         }
       />
       <div className="screen">
+        {shareToast != null ? (
+          <div className="ref-toast" role="status">
+            {shareToast}
+          </div>
+        ) : null}
         {loading ? (
           <Loading text={t('common.loading')} />
+        ) : notFound && deepLinkEntry ? (
+          // Dead shared/push link (vacancy hidden or deleted) → slip back to the feed
+          // silently, no error screen.
+          <Navigate to="/feed" replace />
         ) : notFound || !vacancy ? (
           <EmptyState icon={<IconSearch />} title={t('common.error')} actionLabel={t('nav.feed')} onAction={goBack} />
         ) : (

@@ -179,6 +179,11 @@ export const en: typeof ru = {
     openInChannel: 'Open the listing in the channel',
     openInChannelNote: 'This opens the original in the source channel. We have not verified this listing.',
     openInChannelNoCity: 'City not specified — you can check the work location in the original post.',
+    share: 'Share',
+    shareAria: 'Share this vacancy',
+    shareText: 'A job in Korea — take a look: {{subject}} 👇',
+    shareCopied: 'Link copied',
+    shareUnavailable: 'Could not prepare the link. Please try again.',
   },
   settings: {
     title: 'Settings',
