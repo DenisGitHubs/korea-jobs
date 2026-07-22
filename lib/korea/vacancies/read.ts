@@ -129,10 +129,10 @@ function toView(r: Row) {
   };
 }
 
-function encodeCursor(postedAt: string, id: string): string {
+export function encodeCursor(postedAt: string, id: string): string {
   return Buffer.from(JSON.stringify({ p: postedAt, i: id }), 'utf8').toString('base64url');
 }
-function decodeCursor(c: string | undefined): { p: string; i: string } | null {
+export function decodeCursor(c: string | undefined): { p: string; i: string } | null {
   if (!c) return null;
   try {
     const o = JSON.parse(Buffer.from(c, 'base64url').toString('utf8')) as { p?: unknown; i?: unknown };
@@ -164,7 +164,7 @@ interface FeedFilters {
 }
 
 /** Parse the shared VacancyQuery filters from the request (identical for feed + count). */
-function parseFeedFilters(req: ReqLike): FeedFilters {
+export function parseFeedFilters(req: ReqLike): FeedFilters {
   const csv = (name: string): string[] =>
     (queryParam(req, name) ?? '').split(',').map((x) => x.trim()).filter(Boolean);
   const paidRaw = queryParam(req, 'paid');
@@ -321,7 +321,7 @@ function savedUnionSql(userPh: string): string {
  * show ONLY rows that EXPLICITLY state housing/meals (has_* is true); "not stated" (null) is
  * excluded. This applies to both the feed and the /count so they stay 1:1.
  */
-function buildFilterWhere(f: FeedFilters): { where: string; params: unknown[] } {
+export function buildFilterWhere(f: FeedFilters): { where: string; params: unknown[] } {
   const params: unknown[] = [];
   const ph = (v: unknown): string => {
     params.push(v);
