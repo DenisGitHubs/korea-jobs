@@ -157,7 +157,8 @@ export const en: typeof ru = {
     loadingContact: 'Loading…',
     noContact: 'No contact provided',
     revealed: 'Contact opened',
-    errorLimit: 'Daily contact-reveal limit reached. Please try again tomorrow.',
+    revealsLeft: 'Reveals left today: {{count}}',
+    errorLimit: 'You have used all contact reveals for today (50 per day). Try again tomorrow.',
     errorGeneric: 'Could not reveal the contact. Please try again.',
     employer: 'Employer',
     gender: 'Who is needed',
@@ -471,7 +472,7 @@ export const en: typeof ru = {
     loading: 'Loading…',
     warning:
       '⚠️ This listing is unverified — the details may be inaccurate. Never send money upfront; verify the employer.',
-    errorLimit: 'Daily contact-reveal limit reached. Please try again tomorrow.',
+    errorLimit: 'You have used all contact reveals for today (50 per day). Try again tomorrow.',
     errorGone: 'This listing is no longer available.',
     errorGeneric: 'Could not reveal the contact. Please try again.',
   },

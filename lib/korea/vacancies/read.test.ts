@@ -29,6 +29,8 @@ import { authenticate } from '../core/context.js';
 import {
   reveals24h,
   vacancyContact,
+  countVacancies,
+  vacanciesFeed,
   parseFeedFilters,
   buildFilterWhere,
   encodeCursor,
@@ -125,7 +127,8 @@ describe('vacancyContact — daily cap shared across tables, free repeat, race-s
     await vacancyContact(makeReq({ id: VID }), res as unknown as ResLike);
 
     expect(res.statusCode).toBe(200);
-    expect(bodyOf(res)).toEqual({ contact: { kind: 'phone', value: '010-1234-5678' } });
+    // reveals_left = cap(50) − (revealCount 0 + this reveal) = 49.
+    expect(bodyOf(res)).toEqual({ contact: { kind: 'phone', value: '010-1234-5678' }, reveals_left: 49 });
 
     const budget = calls.find((c) => /\)::int as c/.test(c.text));
     expect(budget).toBeTruthy();
@@ -137,16 +140,17 @@ describe('vacancyContact — daily cap shared across tables, free repeat, race-s
     expect(insert!.text).toContain('on conflict (user_id, vacancy_id) do nothing');
   });
 
-  it('repeat reveal is FREE: budget is never consulted and nothing is inserted (even when over cap)', async () => {
-    // revealCount 999 is way over the cap — but the already-revealed short-circuit must fire first.
+  it('repeat reveal is FREE: no new row is inserted and it is never rate-limited (even over cap)', async () => {
+    // revealCount 999 is way over the cap — but the already-revealed short-circuit must skip the insert
+    // and the cap gate. The budget IS read now (to echo reveals_left), but it is never CHARGED (no insert).
     const { fn, calls } = makeSql({ vacancyRow: { contact_raw: 'x', contact_kind: 'phone' }, alreadyRevealed: true, revealCount: 999 });
     vi.mocked(getSql).mockReturnValue(fn);
     const res = makeRes();
     await vacancyContact(makeReq({ id: VID }), res as unknown as ResLike);
 
-    expect(res.statusCode).toBe(200);
-    expect(calls.some((c) => /\)::int as c/.test(c.text))).toBe(false); // budget NOT burned
-    expect(calls.some((c) => /insert into contact_reveals/.test(c.text))).toBe(false); // no new row
+    expect(res.statusCode).toBe(200); // never 429 for a repeat, even over cap
+    expect(bodyOf(res)).toEqual({ contact: { kind: 'phone', value: 'x' }, reveals_left: 0 }); // max(0, 50−999)
+    expect(calls.some((c) => /insert into contact_reveals/.test(c.text))).toBe(false); // no new row charged
   });
 
   it('at the cap: 429 rate_limited and NO reveal recorded', async () => {
@@ -166,22 +170,32 @@ describe('vacancyContact — daily cap shared across tables, free repeat, race-s
     await vacancyContact(makeReq({ id: VID }), res as unknown as ResLike);
 
     expect(res.statusCode).toBe(200);
-    expect(bodyOf(res)).toEqual({ contact: { kind: 'telegram', value: '@handle' } });
+    expect(bodyOf(res)).toEqual({ contact: { kind: 'telegram', value: '@handle' }, reveals_left: 49 });
     expect(calls.some((c) => /\)::int as c/.test(c.text))).toBe(true); // same reveals24h gate
     const insert = calls.find((c) => /insert into ad_contact_reveals/.test(c.text));
     expect(insert!.text).toContain('on conflict (user_id, user_ad_id) do nothing');
   });
 
-  it('CHARACTERIZATION: a contactless row still burns a reveal — insert happens, body is {contact:null}', async () => {
+  it('contactless row does NOT burn a reveal (owner fix 2026-07-22): no insert, body {contact:null} + reveals_left', async () => {
     const { fn, calls } = makeSql({ vacancyRow: { contact_raw: null, contact_kind: null }, revealCount: 0 });
     vi.mocked(getSql).mockReturnValue(fn);
     const res = makeRes();
     await vacancyContact(makeReq({ id: VID }), res as unknown as ResLike);
 
     expect(res.statusCode).toBe(200);
-    expect(bodyOf(res)).toEqual({ contact: null });
-    // The reveal is recorded BEFORE contact_raw is inspected, so a null-contact reveal still costs budget.
-    expect(calls.some((c) => /insert into contact_reveals/.test(c.text))).toBe(true);
+    // Budget untouched: reveals_left == full cap (50 − 0). The guard runs BEFORE any insert.
+    expect(bodyOf(res)).toEqual({ contact: null, reveals_left: 50 });
+    expect(calls.some((c) => /insert into contact_reveals/.test(c.text))).toBe(false); // NO reveal recorded
+  });
+
+  it('reveals_left = cap − reveals24h; a fresh reveal decrements the remaining by one', async () => {
+    // 10 already used today → after THIS reveal 11 are used → 50 − 11 = 39 left.
+    const { fn } = makeSql({ vacancyRow: { contact_raw: '010-0000-0000', contact_kind: 'phone' }, revealCount: 10 });
+    vi.mocked(getSql).mockReturnValue(fn);
+    const res = makeRes();
+    await vacancyContact(makeReq({ id: VID }), res as unknown as ResLike);
+    expect(res.statusCode).toBe(200);
+    expect(bodyOf(res).reveals_left).toBe(39);
   });
 
   it('404 when the id matches neither a visible vacancy nor an approved ad', async () => {
@@ -212,6 +226,53 @@ describe('vacancyContact — daily cap shared across tables, free repeat, race-s
     const res = makeRes();
     await vacancyContact(makeReq({ id: VID }), res as unknown as ResLike);
     expect(res.statusCode).toBe(401);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (1) HIDE UNREACHABLE + persisted source_post_url (owner rule 2026-07-22, draft_0023)
+//     Structural assertions on the generated UNION SQL — the fake `sql` records the query text.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const HIDE = 'not (v.contact_normalized is null and v.source_post_url is null)';
+
+describe('feed + count hide dead-end scraped offers and project the persisted link', () => {
+  it('countVacancies: the counter SQL drops offers with neither a contact nor a stored link', async () => {
+    const { fn, calls } = makeSql();
+    const n = await countVacancies(fn, parseFeedFilters(makeReq({})));
+    expect(n).toBe(0);
+    const q = calls[0]!.text;
+    expect(q).toContain('count(*)::int as c');
+    expect(q).toContain(HIDE); // unreachable scraped rows excluded from the count
+  });
+
+  it('vacanciesFeed: the feed SQL hides dead ends AND projects source_post_url (scraped) / null (user ads)', async () => {
+    const { fn, calls } = makeSql();
+    vi.mocked(getSql).mockReturnValue(fn);
+    const res = makeRes();
+    await vacanciesFeed(makeReq({}), res as unknown as ResLike);
+
+    expect(res.statusCode).toBe(200);
+    const feedCall = calls.find((c) => /order by f\.posted_at desc/.test(c.text));
+    expect(feedCall).toBeTruthy();
+    const q = feedCall!.text;
+    // Dead ends dropped from the feed union (scraped branch only).
+    expect(q).toContain(HIDE);
+    // Persisted column projected with the contact-less/city-less visibility gate...
+    expect(q).toContain('then v.source_post_url else null end as source_post_url');
+    // ...user ads carry null (no such column) so the UNION shapes line up...
+    expect(q).toContain('null::text as source_post_url');
+    // ...and the outer projection carries it out to the client.
+    expect(q).toContain('f.source_post_url');
+  });
+
+  it('the hide applies ONLY to the scraped branch — a user ad is never gated on source_post_url', async () => {
+    const { fn, calls } = makeSql();
+    await countVacancies(fn, parseFeedFilters(makeReq({})));
+    const q = calls[0]!.text;
+    // The predicate references v.* (vacancies alias) only; the user_ads branch (alias a) is untouched.
+    expect(q).toContain(HIDE);
+    expect(q).not.toContain('not (a.contact_raw is null and a.source_post_url is null)');
   });
 });
 

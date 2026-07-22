@@ -25,12 +25,19 @@ interface SubscriptionState extends SubscriptionValue {
   termsVersion: string;
   /** First-run onboarding completed (from /me; server-persisted). */
   onboarded: boolean;
+  /**
+   * Remaining daily contact reveals (from /me, refreshed by each reveal response).
+   * `null` = unknown (backend has not shipped the field) → the UI hides the hint.
+   */
+  revealsLeft: number | null;
   hydrate: (m: Me) => void;
   apply: (s: Subscription) => void;
   setNotify: (b: boolean) => void;
   acceptTerms: () => void;
   /** Mark onboarding done locally (after POST /onboarded) so the overlay closes. */
   setOnboarded: () => void;
+  /** Update the remaining-reveals counter from a reveal response (ignores undefined). */
+  setRevealsLeft: (n: number | undefined) => void;
 }
 
 const EMPTY: SubscriptionValue = {
@@ -102,6 +109,7 @@ export const useSubscriptionStore = create<SubscriptionState>((set) => ({
   // Safe default: assume onboarded until /me says otherwise, so the overlay never
   // flashes before hydrate and a failed /me does not trap the user in onboarding.
   onboarded: true,
+  revealsLeft: null,
   hydrate: (m) =>
     set({
       ...fromSubscription(m.subscription),
@@ -109,10 +117,14 @@ export const useSubscriptionStore = create<SubscriptionState>((set) => ({
       termsRequired: m.terms?.required ?? false,
       termsVersion: m.terms?.version ?? '',
       onboarded: m.onboarded ?? true,
+      revealsLeft: typeof m.reveals_left === 'number' ? m.reveals_left : null,
       loaded: true,
     }),
   apply: (s) => set({ ...fromSubscription(s), loaded: true }),
   setNotify: (b) => set({ notify: b }),
   acceptTerms: () => set({ termsRequired: false }),
   setOnboarded: () => set({ onboarded: true }),
+  setRevealsLeft: (n) => {
+    if (typeof n === 'number') set({ revealsLeft: n });
+  },
 }));

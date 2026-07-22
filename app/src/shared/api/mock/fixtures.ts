@@ -384,6 +384,9 @@ export const DEFAULT_ME: Me = {
   terms: { required: true, version: '2026-07-01' },
   points_total: 87,
   onboarded: false,
+  // Remaining contact reveals for today (out of a 50/day budget). Drives the thin
+  // "reveals left" hint on the vacancy screen; the mock decrements it per reveal.
+  reveals_left: 47,
   subscription: {
     city_slugs: [],
     region_slugs: [],

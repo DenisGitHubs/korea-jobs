@@ -7,6 +7,7 @@ import type { VacancyContact, VacancyView } from '../shared/types/api';
 import { feeKey, genderKey, regionKey, visaKey } from '../shared/labels';
 import { useBackButton } from '../hooks/useBackButton';
 import { useSettingsStore } from '../store/settingsStore';
+import { useSubscriptionStore } from '../store/subscriptionStore';
 import { applySaveToCaches, revertSaveInCaches } from '../store/feedStore';
 import { cityLabel } from '../lib/cities';
 import { isStale, timeAgo } from '../lib/format';
@@ -65,6 +66,10 @@ export default function VacancyScreen() {
   const { id = '' } = useParams();
   const lang = useSettingsStore((s) => s.lang);
   const isReal = useSettingsStore((s) => s.isReal);
+  // Remaining daily contact reveals (from /me, refreshed by each reveal response).
+  // null = backend has not shipped the field → hide the hint entirely.
+  const revealsLeft = useSubscriptionStore((s) => s.revealsLeft);
+  const setRevealsLeft = useSubscriptionStore((s) => s.setRevealsLeft);
 
   const [vacancy, setVacancy] = useState<VacancyView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -123,15 +128,22 @@ export default function VacancyScreen() {
     setContact({ status: 'loading' });
     api
       .vacancyContact(id)
-      .then((r) => setContact({ status: 'done', contact: r.contact }))
+      .then((r) => {
+        setContact({ status: 'done', contact: r.contact });
+        // Keep the shared counter in sync with the server's post-reveal budget.
+        setRevealsLeft(r.reveals_left);
+      })
       .catch((e: unknown) => {
         const http = e instanceof ApiError ? e.http : 0;
+        // 429 = the daily budget is spent; reflect it locally so the soft limit
+        // notice replaces the button on the next render.
+        if (http === 429) setRevealsLeft(0);
         setContact({
           status: 'error',
           message: http === 429 ? t('vacancy.errorLimit') : t('vacancy.errorGeneric'),
         });
       });
-  }, [id, t]);
+  }, [id, t, setRevealsLeft]);
 
   const copy = useCallback((value: string) => {
     void navigator.clipboard
@@ -228,6 +240,14 @@ export default function VacancyScreen() {
   // region label never suppresses that hint.
   const regionList = vacancy?.regions ?? [];
   const noCity = cityList.length === 0;
+
+  // Daily reveal budget. Show the thin "reveals left" hint only when the backend
+  // gave us a positive number. The soft "limit reached" notice replaces the button
+  // when the budget is spent AND this offer was never revealed (repeat reveals are
+  // free, so an already-revealed contact stays openable even at zero).
+  const alreadyRevealed = Boolean(vacancy?.is_revealed);
+  const revealHintVisible = typeof revealsLeft === 'number' && revealsLeft > 0;
+  const limitReached = typeof revealsLeft === 'number' && revealsLeft <= 0 && !alreadyRevealed;
 
   return (
     <div className="app">
@@ -351,17 +371,27 @@ export default function VacancyScreen() {
 
               {vacancy.has_contact ? (
                 contact.status === 'idle' || contact.status === 'error' ? (
-                  <>
-                    <button className="btn btn--primary btn--block" onClick={revealContact}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                        <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
-                      </svg>
-                      {/* Already revealed before → the button reads "contact opened"; a
-                          repeat reveal is free (backend serves it again). */}
-                      {vacancy.is_revealed ? t('vacancy.revealed') : t('vacancy.showContact')}
-                    </button>
-                    {contact.status === 'error' ? <div className="reveal-error">{contact.message}</div> : null}
-                  </>
+                  limitReached ? (
+                    // Budget spent and never revealed → a gentle, non-error notice
+                    // (soft --kj-hint styling) instead of the button.
+                    <div className="reveal-limit">{t('vacancy.errorLimit')}</div>
+                  ) : (
+                    <>
+                      <button className="btn btn--primary btn--block" onClick={revealContact}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                          <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
+                        </svg>
+                        {/* Already revealed before → the button reads "contact opened"; a
+                            repeat reveal is free (backend serves it again). */}
+                        {vacancy.is_revealed ? t('vacancy.revealed') : t('vacancy.showContact')}
+                      </button>
+                      {/* Thin, non-shouting hint: how many reveals are left today. */}
+                      {revealHintVisible ? (
+                        <div className="reveal-hint">{t('vacancy.revealsLeft', { count: revealsLeft as number })}</div>
+                      ) : null}
+                      {contact.status === 'error' ? <div className="reveal-error">{contact.message}</div> : null}
+                    </>
+                  )
                 ) : contact.status === 'loading' ? (
                   <Loading text={t('vacancy.loadingContact')} />
                 ) : contact.contact ? (

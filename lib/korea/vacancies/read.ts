@@ -21,12 +21,17 @@
 //     scrubContacts() here strips any that slip through (defense in depth).
 //   * /contact enforces a per-user daily cap (shared across scraped + user ads) and
 //     records the reveal, so one account can't scrape every employer's phone.
-//   * source_post_url (detail only): fall back to the PUBLIC original-post link
-//     https://t.me/<sources.username>/<tg_message_id> for a scraped offer when EITHER it has
-//     NO direct contact (the contact ladder) OR it has NO city (cardinality(city_ids)=0 — the
-//     user can't tell where the job is, so let them open the source post for context / to ask
-//     the author). It leaks ONLY the source username (owner-approved) — never tg_chat_id /
-//     sender_id / any internal id — and is NOT gated by the reveal cap (a public post link).
+//   * source_post_url (feed / detail / saved): the PUBLIC original-post link
+//     https://t.me/<sources.username>/<tg_message_id> for a scraped offer, now read from the
+//     PERSISTED vacancies.source_post_url column (draft_0023, filled by the parser) — NOT recomputed
+//     from a raw_messages join, which the 24h purge deletes. Projected only when the offer has NO
+//     direct contact (the contact ladder) OR NO city (cardinality(city_ids)=0 — the user can't tell
+//     where the job is, so let them open the source post for context / to ask the author). It leaks
+//     ONLY the source username (owner-approved) — never tg_chat_id / sender_id / any internal id — and
+//     is NOT gated by the reveal cap (a public post link).
+//   * HIDE UNREACHABLE (feed + /count): a scraped offer with NEITHER a contact NOR a stored link is a
+//     dead end and is dropped from the feed and its counter (feedUnionSql scraped-branch WHERE). Saved
+//     and detail are NOT hidden (an explicit bookmark / deep link still resolves).
 // Dynamic filter fields are whitelisted; ids are validated before hitting the DB.
 //
 // Filter matching is PERMISSIVE for rare attributes (Sanya/Roma K2): a filter excludes
@@ -83,11 +88,10 @@ interface Row {
   // Only populated by the saved feed (savedUnionSql) — the bookmark's created_at, used as
   // the saved-list cursor. Absent (undefined) on the main feed / detail rows.
   saved_at?: string;
-  // Deep link to the ORIGINAL channel post, computed ONLY by the detail query
-  // (vacancyDetail, scraped branch) and ONLY when the offer has NO direct contact OR NO city
-  // (city_ids empty) AND its source channel has a public username. Absent (undefined) on the
-  // feed / saved / user-ad projections, where toView emits null. Never carries anything but
-  // the source username.
+  // Deep link to the ORIGINAL channel post, read from the PERSISTED vacancies.source_post_url column
+  // (draft_0023) by the feed / detail / saved scraped projections, gated to when the offer has NO direct
+  // contact OR NO city (city_ids empty). null on user-ad rows (no such column) and on scraped rows that
+  // fail the visibility gate. Never carries anything but the source username.
   source_post_url?: string | null;
 }
 
@@ -121,10 +125,9 @@ function toView(r: Row) {
     repost: r.repost === true,
     is_saved: r.is_saved === true,
     is_revealed: r.is_revealed === true,
-    // Present in every projection for a stable shape; non-null ONLY on the detail endpoint
-    // for a scraped offer that is contactless OR city-less and whose source channel has a
-    // username (feed/saved/user ads leave the column unselected -> undefined -> null). Public
-    // link, no reveal gate.
+    // Present in every projection for a stable shape; non-null on feed / detail / saved for a scraped
+    // offer that is contactless OR city-less and has a PERSISTED link (draft_0023). Public link, no
+    // reveal gate; user ads and gate-failing rows emit null.
     source_post_url: r.source_post_url ?? null,
   };
 }
@@ -242,12 +245,23 @@ function feedUnionSql(savedUserPh: string | null): string {
          (v.contact_normalized is not null) as has_contact,
          v.visa_types, v.placement_fee::text as placement_fee, v.has_housing, v.has_meals,
          'scraped'::text as source_kind, (v.repost_count > 0) as repost, ${svSel} as is_saved,
-         ${crSel} as is_revealed, v.search_tsv
+         ${crSel} as is_revealed,
+         -- PERSISTED link (draft_0023), projected with the SAME visibility rule as detail: emit it only
+         -- when the offer has NO direct contact OR NO city (so the user can open the source post for
+         -- context / to ask the author); otherwise NULL. Reads the STORED column — no raw_messages join.
+         case when (v.contact_normalized is null or cardinality(v.city_ids) = 0)
+              then v.source_post_url else null end as source_post_url,
+         v.search_tsv
   from vacancies v
   left join cities c on c.id = v.city_id
   ${svJoin}
   ${crJoin}
+  -- HIDE UNREACHABLE (owner rule 2026-07-22): a scraped offer with NEITHER a revealable contact NOR a
+  -- stored source link is a dead end (nothing the user can act on) — drop it from the feed AND /count
+  -- (both wrap this union). A contact OR a link keeps it visible; user ads are never touched (they always
+  -- carry a form contact and have no source_post_url column).
   where v.is_active and v.duplicate_of is null
+    and not (v.contact_normalized is null and v.source_post_url is null)
   union all
   select a.id, c.slug as city_slug, c.name as city_name, a.city_id as city_id, a.city_ids as city_ids,
          a.region_slug, a.region_slugs,
@@ -258,7 +272,7 @@ function feedUnionSql(savedUserPh: string | null): string {
          (a.contact_raw is not null) as has_contact,
          a.visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
          'user'::text as source_kind, false as repost, ${saSel} as is_saved,
-         ${arSel} as is_revealed, a.search_tsv
+         ${arSel} as is_revealed, null::text as source_post_url, a.search_tsv
   from user_ads a
   left join cities c on c.id = a.city_id
   ${saJoin}
@@ -285,6 +299,10 @@ function savedUnionSql(userPh: string): string {
          v.visa_types, v.placement_fee::text as placement_fee, v.has_housing, v.has_meals,
          'scraped'::text as source_kind, (v.repost_count > 0) as repost, true as is_saved,
          (cr.user_id is not null) as is_revealed,
+         -- Same visibility rule as the feed/detail projection (contact-less OR city-less). The saved list
+         -- intentionally does NOT hide unreachable offers: a bookmark the user made stays visible.
+         case when (v.contact_normalized is null or cardinality(v.city_ids) = 0)
+              then v.source_post_url else null end as source_post_url,
          s.created_at as saved_at
   from saved_vacancies s
   join vacancies v on v.id = s.vacancy_id and v.is_active and v.duplicate_of is null
@@ -302,6 +320,7 @@ function savedUnionSql(userPh: string): string {
          a.visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
          'user'::text as source_kind, false as repost, true as is_saved,
          (ar.user_id is not null) as is_revealed,
+         null::text as source_post_url,
          s.created_at as saved_at
   from saved_ads s
   join user_ads a on a.id = s.ad_id and a.status = 'approved' and (a.expires_at is null or a.expires_at > now())
@@ -390,7 +409,7 @@ export async function vacanciesFeed(req: ReqLike, res: ResLike): Promise<void> {
              f.region_slug, f.region_slugs, f.work_type, f.gender,
              f.salary_text, f.salary_min, f.salary_max, f.salary_period, f.employer,
              f.description, f.posted_at, f.has_contact, f.visa_types::text[] as visa_types, f.placement_fee,
-             f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.is_revealed
+             f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.is_revealed, f.source_post_url
       from (${feedUnionSql(savedUserPh)}) f
       ${where}
       ${cursorClause}
@@ -468,28 +487,21 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
                       where s.user_id = ${auth.user.id}::uuid and s.vacancy_id = v.id)) as is_saved,
              (exists (select 1 from contact_reveals r
                       where r.user_id = ${auth.user.id}::uuid and r.vacancy_id = v.id)) as is_revealed,
-             -- Fallback deep link to the original post — the contact ladder (offer carries no
-             -- REVEALABLE contact) OR the "city not stated" case (cardinality(city_ids)=0: the user
-             -- can't tell where the job is, so let them open the source post for context). Either
-             -- way it is emitted ONLY when the source channel has a public username. Exposes the
-             -- username in the URL and nothing else (no tg_chat_id / sender_id / internal ids).
-             -- The contactless gate is "contact_normalized is null" — the SAME predicate as
-             -- has_contact above — so the two never disagree: a row with a raw-but-unnormalized
-             -- contact (has_contact=false) is treated as contactless and still gets the link,
-             -- instead of losing BOTH the contact button and the channel link (dead end).
-             -- tg_message_id is NOT NULL by schema; the guard covers the LEFT JOIN miss
-             -- (raw_message_id nulled). city_ids is uuid[] NOT NULL, so cardinality is null-safe.
+             -- Fallback deep link to the original post — now read from the PERSISTED column
+             -- (draft_0023, filled by the parser) instead of joining raw_messages, which the 24h purge
+             -- deletes (the old join went NULL once the raw was gone, killing the link). Emitted on the
+             -- SAME visibility rule as before: the contact ladder (offer carries no REVEALABLE contact —
+             -- contact_normalized is null, the SAME predicate as has_contact above) OR the "city not
+             -- stated" case (cardinality(city_ids)=0: the user can't tell where the job is, so let them
+             -- open the source post for context). The stored value already leaks ONLY the source username
+             -- (never tg_chat_id / sender_id / internal ids). city_ids is uuid[] NOT NULL -> null-safe.
              case
                when (v.contact_normalized is null or cardinality(v.city_ids) = 0)
-                and src.username is not null and src.username <> ''
-                and rm.tg_message_id is not null
-               then 'https://t.me/' || src.username || '/' || rm.tg_message_id::text
+               then v.source_post_url
                else null
              end as source_post_url
       from vacancies v
       left join cities c on c.id = v.city_id
-      left join raw_messages rm on rm.id = v.raw_message_id
-      left join sources src on src.id = v.source_id
       where v.id = ${id}::uuid and v.is_active and v.duplicate_of is null
       limit 1`) as unknown as Row[];
     if (vac[0]) {
@@ -567,13 +579,26 @@ export async function vacancyContact(req: ReqLike, res: ResLike): Promise<void> 
       contact_kind: string | null;
     }[];
     if (vac[0]) {
+      const r = vac[0];
+      // CONTACTLESS GUARD (owner rule 2026-07-22, bug from tests): a card with NO revealable contact
+      // (contact_raw null/empty) must NOT record a reveal or burn the shared daily budget — the old code
+      // inserted BEFORE inspecting contact_raw, wasting a reveal on a card that returns {contact:null}.
+      // Guard runs BEFORE the already-check / insert; budget is only READ (never charged) to report the
+      // current remaining to the client.
+      if (!r.contact_raw || r.contact_raw.trim() === '') {
+        const used = await reveals24h(sql, auth.user.id);
+        return send(res, 200, { contact: null, reveals_left: Math.max(0, cap - used) });
+      }
+      let used: number;
       const already = await sql`
         select 1 from contact_reveals where user_id = ${auth.user.id}::uuid and vacancy_id = ${id}::uuid limit 1`;
       if (already.length === 0) {
-        if ((await reveals24h(sql, auth.user.id)) >= cap) return sendError(res, ApiErrorCode.RateLimited);
+        used = await reveals24h(sql, auth.user.id);
+        if (used >= cap) return sendError(res, ApiErrorCode.RateLimited);
         await sql`
           insert into contact_reveals (user_id, vacancy_id) values (${auth.user.id}::uuid, ${id}::uuid)
           on conflict (user_id, vacancy_id) do nothing`;
+        used += 1; // this reveal now counts against the shared daily budget
         // Referral accrual: first contact reveal is the target action that credits the
         // user's ancestors. Best-effort — a failure must never break the reveal response.
         try {
@@ -586,10 +611,15 @@ export async function vacancyContact(req: ReqLike, res: ResLike): Promise<void> 
           // eslint-disable-next-line no-console
           console.error('[referral] accrual failed (best-effort):', err instanceof Error ? err.message : String(err));
         }
+      } else {
+        // A repeat reveal is FREE — never charged, never re-inserted, never 429. We only READ the budget
+        // to echo the current remaining (reveals_left) so the client can refresh its counter.
+        used = await reveals24h(sql, auth.user.id);
       }
-      const r = vac[0];
-      if (!r.contact_raw) return send(res, 200, { contact: null });
-      return send(res, 200, { contact: { kind: r.contact_kind ?? 'other', value: r.contact_raw } });
+      return send(res, 200, {
+        contact: { kind: r.contact_kind ?? 'other', value: r.contact_raw },
+        reveals_left: Math.max(0, cap - used),
+      });
     }
 
     // Approved user ad.
@@ -600,13 +630,22 @@ export async function vacancyContact(req: ReqLike, res: ResLike): Promise<void> 
       contact_kind: string | null;
     }[];
     if (ad[0]) {
+      const r = ad[0];
+      // CONTACTLESS GUARD (mirrors the scraped branch): a user ad with no contact_raw burns nothing.
+      if (!r.contact_raw || r.contact_raw.trim() === '') {
+        const used = await reveals24h(sql, auth.user.id);
+        return send(res, 200, { contact: null, reveals_left: Math.max(0, cap - used) });
+      }
+      let used: number;
       const already = await sql`
         select 1 from ad_contact_reveals where user_id = ${auth.user.id}::uuid and user_ad_id = ${id}::uuid limit 1`;
       if (already.length === 0) {
-        if ((await reveals24h(sql, auth.user.id)) >= cap) return sendError(res, ApiErrorCode.RateLimited);
+        used = await reveals24h(sql, auth.user.id);
+        if (used >= cap) return sendError(res, ApiErrorCode.RateLimited);
         await sql`
           insert into ad_contact_reveals (user_id, user_ad_id) values (${auth.user.id}::uuid, ${id}::uuid)
           on conflict (user_id, user_ad_id) do nothing`;
+        used += 1; // counts against the shared daily budget
         // Referral accrual (same target action as scraped vacancies). Best-effort.
         try {
           const kind = await getConfigString('referral_activation_kind', 'contact_reveal');
@@ -618,10 +657,13 @@ export async function vacancyContact(req: ReqLike, res: ResLike): Promise<void> 
           // eslint-disable-next-line no-console
           console.error('[referral] accrual failed (best-effort):', err instanceof Error ? err.message : String(err));
         }
+      } else {
+        used = await reveals24h(sql, auth.user.id);
       }
-      const r = ad[0];
-      if (!r.contact_raw) return send(res, 200, { contact: null });
-      return send(res, 200, { contact: { kind: r.contact_kind ?? 'other', value: r.contact_raw } });
+      return send(res, 200, {
+        contact: { kind: r.contact_kind ?? 'other', value: r.contact_raw },
+        reveals_left: Math.max(0, cap - used),
+      });
     }
 
     return sendError(res, ApiErrorCode.NotFound);
@@ -661,7 +703,7 @@ export async function savedFeed(req: ReqLike, res: ResLike): Promise<void> {
              f.region_slug, f.region_slugs, f.work_type, f.gender,
              f.salary_text, f.salary_min, f.salary_max, f.salary_period, f.employer,
              f.description, f.posted_at, f.has_contact, f.visa_types::text[] as visa_types, f.placement_fee,
-             f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.is_revealed, f.saved_at
+             f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.is_revealed, f.source_post_url, f.saved_at
       from (${savedUnionSql(userPh)}) f
       where true
       ${cursorClause}

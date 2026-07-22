@@ -3025,6 +3025,29 @@ a {
   text-align: center;
 }
 
+/* Thin, calm hint under the "show contact" button: reveals left today.
+   Uses the theme-aware --kj-hint token, so it reads softly in both themes. */
+.reveal-hint {
+  margin-top: 7px;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--kj-hint);
+  text-align: center;
+}
+
+/* Soft "daily limit reached" notice that replaces the button — deliberately not a
+   red error: same muted --kj-hint tone, a little breathing room around it. */
+.reveal-limit {
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--kj-hint);
+  text-align: center;
+  background: var(--kj-section-bg);
+  border-radius: var(--kj-radius);
+}
+
 /* ── Trust card (vacancy + safety screens) ─────────────────────────────────*/
 .trust {
   display: flex;

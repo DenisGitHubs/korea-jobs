@@ -180,7 +180,7 @@ export async function runParse(): Promise<ParseResult> {
   // 1) Oldest pending raw messages WITHIN the freshness window. Join the source so we
   // can pass the channel title/notes to the model as a per-item city hint (source_hint).
   const pendingAll = await sql`
-    select r.id, r.text, r.source_id, r.posted_at, r.sender_username,
+    select r.id, r.text, r.source_id, r.posted_at, r.sender_username, r.tg_message_id,
            s.title as source_title, s.notes as source_notes, s.username as source_username
     from raw_messages r
     left join sources s on s.id = r.source_id
@@ -731,6 +731,19 @@ export async function runParse(): Promise<ParseResult> {
     // inside this text). scrubContacts strips phones/@handles/t.me·wa.me·kakao links.
     const description = scrubContacts((row.text as string | null) ?? null);
 
+    // PERSISTED original-post link (owner rule 2026-07-22, draft_0023). Same formula the read-side
+    // detail-CASE used — https://t.me/<source username>/<tg_message_id> — but computed & STORED here so
+    // it survives the 24h raw_messages purge (the join was going NULL once the raw was deleted, killing
+    // the "открыть в канале" fallback and creating dead-end cards). No contact/city gate here (that stays
+    // a DISPLAY decision in read.ts): we save the link whenever BOTH the channel username and the message
+    // id exist, else NULL. tg_message_id is bigint (neon returns it as string|number) -> stringify safely.
+    const srcUsername = ((row.source_username as string | null) ?? '').trim();
+    const tgMessageId = row.tg_message_id;
+    const sourcePostUrl =
+      srcUsername !== '' && tgMessageId != null && String(tgMessageId).trim() !== ''
+        ? `https://t.me/${srcUsername}/${String(tgMessageId).trim()}`
+        : null;
+
     // MULTI-CITY (multi-city plan): city_ids = the DISTINCT union of the AI's primary city (cityId) and
     // every city the DICTIONARY named in the ORIGINAL text + the source hint (rowGeo[idx], precomputed
     // above from the raw text and the title/@username/notes hint). city_id stays the PRIMARY city.
@@ -832,13 +845,13 @@ export async function runParse(): Promise<ParseResult> {
           title, description, employer,
           contact_raw, contact_kind,
           visa_types, placement_fee, has_housing, has_meals,
-          source_id, raw_message_id, posted_at, dedup_extra
+          source_id, raw_message_id, posted_at, dedup_extra, source_post_url
         ) values (
           ${cityId}::uuid, ${cityIds}::uuid[], ${regionSlug}, ${cityRegionSlugs}::text[], ${workType}::work_type, ${gender}::gender, ${null},
           ${null}, ${description}, ${it.employer ?? null},
           ${contactRaw}, ${contactKind}::contact_kind,
           ${visaTypes}::visa_type[], ${placementFee}::placement_fee, ${hasHousing}, ${hasMeals},
-          ${row.source_id}::uuid, ${rawId}::uuid, ${row.posted_at ?? null}, ${it.dedup_extra ?? null}
+          ${row.source_id}::uuid, ${rawId}::uuid, ${row.posted_at ?? null}, ${it.dedup_extra ?? null}, ${sourcePostUrl}
         )
         on conflict (content_hash) where is_active and duplicate_of is null
         do update set
@@ -866,7 +879,11 @@ export async function runParse(): Promise<ParseResult> {
           visa_types    = case when cardinality(vacancies.visa_types) = 0 then excluded.visa_types else vacancies.visa_types end,
           placement_fee = case when vacancies.placement_fee = 'unknown' then excluded.placement_fee else vacancies.placement_fee end,
           has_housing   = coalesce(vacancies.has_housing, excluded.has_housing),
-          has_meals     = coalesce(vacancies.has_meals, excluded.has_meals)
+          has_meals     = coalesce(vacancies.has_meals, excluded.has_meals),
+          -- Keep the link the canonical already has; only FILL it when it was NULL (a later repost from
+          -- a channel WITH a username can recover a link the first sighting lacked). Never overwrite a
+          -- stored link with NULL — coalesce(old, new), owner rule 2026-07-22.
+          source_post_url = coalesce(vacancies.source_post_url, excluded.source_post_url)
         returning id, (xmax = 0) as inserted`;
     } catch {
       // Bad row (e.g. invalid enum from the model) — don't loop on it.

@@ -13,12 +13,13 @@
 //      is spared here — it lives until it ages out in step 5;
 //   5. 24h purge (owner rule 2026-07-19): physically delete any raw_message older than
 //      raw_purge_hours (default 24h, by coalesce(posted_at, fetched_at)) UNLESS it still
-//      backs an ACTIVE vacancy card — that raw holds the "открыть в канале" deep link
-//      (vacancies/read.ts source_post_url joins rm.tg_message_id), so a live card's raw must
-//      survive. Deactivation (step 1) and this purge (step 5) run in the SAME pass, so a card
-//      that goes dark this tick usually has its raw removed by this very step the same tick
-//      (the backstop, step 6, sweeps any straggler). This also caps the "Не проверено" tab
-//      (low_confidence) at ≤24h;
+//      backs an ACTIVE vacancy card. NOTE (draft_0023, 2026-07-22): the "открыть в канале" deep link
+//      (vacancies.source_post_url) is now PERSISTED on the vacancy at parse time, so it NO LONGER
+//      depends on the raw surviving — the NOT EXISTS guard below is kept only as belt-and-suspenders
+//      (harmless; the raw of an active card carries no user-facing data now). Deactivation (step 1) and
+//      this purge (step 5) run in the SAME pass, so a card that goes dark this tick usually has its raw
+//      removed by this very step the same tick (the backstop, step 6, sweeps any straggler). This also
+//      caps the "Не проверено" tab (low_confidence) at ≤24h;
 //   6. BACKSTOP purge old raw_messages regardless of status — incl. stuck 'pending' and the
 //      raw of long-lived active cards — since they hold raw scraped text + phone numbers
 //      (third-party PII). Redundant behind steps 4/5 now, kept as a final safety net;
@@ -34,9 +35,10 @@
 //      within 7 days ages out. Best-effort (deploy-before-migrate window may lack the table).
 //
 // NOTE FK: vacancies.raw_message_id -> raw_messages(id) ON DELETE SET NULL (draft_0001_init.sql
-// line 322). Deleting a raw row never cascades to a vacancy: the card keeps living, its
-// raw_message_id becomes NULL, and source_post_url degrades softly to null (read.ts guards the
-// LEFT JOIN miss via `rm.tg_message_id is not null`).
+// line 322). Deleting a raw row never cascades to a vacancy: the card keeps living and its
+// raw_message_id becomes NULL. Its source_post_url is UNAFFECTED — since draft_0023 that link is a
+// PERSISTED column on the vacancy (filled by the parser), independent of the raw's lifetime. NO cleanup
+// statement here reads or writes vacancies.source_post_url, so a raw purge can never blank the link.
 
 import { getSql } from '../core/db.js';
 import { getConfigNumber } from '../config.js';
@@ -92,11 +94,12 @@ export async function runCleanup(): Promise<CleanupResult> {
 
   // 24h (owner rule 2026-07-19): anything older than raw_purge_hours (by posted_at, falling back
   // to fetched_at when Telegram gave no date) is deleted — UNLESS it still backs an ACTIVE card.
-  // A live card's raw carries the "открыть в канале" deep link (read.ts source_post_url via
-  // rm.tg_message_id); the NOT EXISTS keeps that raw only while the card is active. Since step 1
-  // (deactivate stale) already ran THIS tick, a card that just went dark no longer matches the
-  // NOT EXISTS and its raw is removed by this same step in the same pass. FK is ON DELETE SET
-  // NULL so the card never cascades away.
+  // The NOT EXISTS keeps a card's raw only while the card is active. (Since draft_0023 the
+  // "открыть в канале" link is persisted on the vacancy, so this guard is no longer needed for the
+  // link — kept as harmless belt-and-suspenders; source_post_url is a vacancy column, never touched
+  // here.) Since step 1 (deactivate stale) already ran THIS tick, a card that just went dark no longer
+  // matches the NOT EXISTS and its raw is removed by this same step. FK is ON DELETE SET NULL so the
+  // card never cascades away.
   const agedRawPurged = await sql`
     delete from raw_messages
     where coalesce(posted_at, fetched_at) < now() - make_interval(hours => ${rawPurgeHours})

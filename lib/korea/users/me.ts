@@ -7,8 +7,9 @@ import { getSql } from '../core/db.js';
 import { type ReqLike, type ResLike, send, sendError } from '../core/http.js';
 import { ApiErrorCode } from '../core/errors.js';
 import { authenticate } from '../core/context.js';
-import { getConfigString } from '../config.js';
+import { getConfigString, getConfigNumber } from '../config.js';
 import { readStreakSummary } from '../streaks/update.js';
+import { reveals24h } from '../vacancies/read.js';
 
 export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
   if ((req.method ?? 'GET') !== 'GET') return sendError(res, ApiErrorCode.NotFound);
@@ -105,11 +106,24 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
     const streak = await readStreakSummary(sql, user.id);
     const pointsTotal = (balRows[0]?.points_total ?? 0) + streak.bonusTotal;
 
+    // Contact reveals remaining TODAY = cap(contact_reveal_daily_cap, 50) − reveals in the last 24h
+    // (the SAME shared budget as GET /api/vacancies/:id/contact + /api/raw/reveal). Best-effort like
+    // readStreakSummary above: a fault degrades to the FULL budget (used=0) so /me never 500s over it.
+    const revealCap = await getConfigNumber('contact_reveal_daily_cap', 50);
+    let revealsUsed = 0;
+    try {
+      revealsUsed = await reveals24h(sql, user.id);
+    } catch {
+      /* best-effort: show the full budget rather than fail the whole /me response */
+    }
+    const revealsLeft = Math.max(0, revealCap - revealsUsed);
+
     send(res, 200, {
       public_id: user.publicId,
       lang: user.lang,
       terms: { required: termsRequired, version: currentVersion },
       points_total: pointsTotal,
+      reveals_left: revealsLeft,
       onboarded,
       subscription: {
         city_slugs: citySlugs,

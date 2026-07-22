@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, ApiError } from '../shared/api/client';
+import { useSubscriptionStore } from '../store/subscriptionStore';
 import type { RawView } from '../shared/types/api';
 
 /** Phone glyph — mirrors the "show contact" action on the vacancy detail screen. */
@@ -28,14 +29,21 @@ export function RawCard({ raw }: { raw: RawView }) {
   const { t } = useTranslation();
   const age = raw.age_hint <= 0 ? t('time.justNow') : t('time.days', { count: raw.age_hint });
   const [reveal, setReveal] = useState<RevealState>({ status: 'idle' });
+  // Raw reveals draw from the same daily budget as vacancy contacts — keep the
+  // shared counter in sync so the vacancy-screen hint stays accurate.
+  const setRevealsLeft = useSubscriptionStore((s) => s.setRevealsLeft);
 
   const showContact = useCallback(() => {
     setReveal({ status: 'loading' });
     api
       .rawReveal(raw.id)
-      .then((r) => setReveal({ status: 'done', text: r.text }))
+      .then((r) => {
+        setReveal({ status: 'done', text: r.text });
+        setRevealsLeft(r.reveals_left);
+      })
       .catch((e: unknown) => {
         const http = e instanceof ApiError ? e.http : 0;
+        if (http === 429) setRevealsLeft(0);
         const message =
           http === 429
             ? t('raw.errorLimit')
@@ -44,7 +52,7 @@ export function RawCard({ raw }: { raw: RawView }) {
               : t('raw.errorGeneric');
         setReveal({ status: 'error', message });
       });
-  }, [raw.id, t]);
+  }, [raw.id, t, setRevealsLeft]);
 
   return (
     <div className="card card--raw">

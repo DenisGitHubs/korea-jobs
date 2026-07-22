@@ -191,6 +191,16 @@ const files = [
   // low_confidence or a vacancy. Written/read best-effort (a fault never breaks a parse), purged > 7 days
   // by lib/korea/cleanup/run.ts. INTERNAL — no API/bot surface reads it. Depends only on stock Postgres.
   'draft_0022_verdict_cache.sql',
+
+  // Persisted original-post link (0023) — ADDITIVE / idempotent (ADD COLUMN IF NOT EXISTS). Adds
+  // vacancies.source_post_url (text, nullable): the "открыть в канале" deep link
+  // (https://t.me/<sources.username>/<tg_message_id>) is now STORED at parse time by
+  // lib/korea/parser/run.ts instead of recomputed on read by joining raw_messages (which the 24h purge
+  // deletes, losing the link). vacancies/read.ts projects this column (same contact-less/city-less
+  // visibility rule) and HIDES offers with neither a contact nor this link from the feed + /count. Run
+  // db/backfill_source_link.mts AFTER this to fill existing rows whose raw still survives. Depends on
+  // vacancies (draft_0001_init.sql).
+  'draft_0023_source_post_url.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

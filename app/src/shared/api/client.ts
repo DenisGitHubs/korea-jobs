@@ -20,7 +20,7 @@ import type {
   Subscription,
   TermsAcceptResult,
   UserAd,
-  VacancyContact,
+  VacancyContactReveal,
   VacancyQuery,
   VacancyView,
 } from '../types/api';
@@ -150,9 +150,12 @@ export const api = {
   /** GET /vacancies/:id — single card (no contact). */
   vacancy: (id: string) => request<VacancyView>('GET', `/vacancies/${encodeURIComponent(id)}`),
 
-  /** GET /vacancies/:id/contact — reveal on explicit user action only. */
+  /**
+   * GET /vacancies/:id/contact — reveal on explicit user action only. Carries the
+   * user's remaining daily reveal budget (`reveals_left`) when the backend ships it.
+   */
   vacancyContact: (id: string) =>
-    request<{ contact: VacancyContact | null }>('GET', `/vacancies/${encodeURIComponent(id)}/contact`),
+    request<VacancyContactReveal>('GET', `/vacancies/${encodeURIComponent(id)}/contact`),
 
   /** POST /vacancies/:id/report — flag an offer for moderation. */
   reportVacancy: (id: string, reason?: string) =>

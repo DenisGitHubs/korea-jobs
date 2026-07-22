@@ -4,8 +4,9 @@
 // SAME shared daily reveal cap as the vacancy/ad contact reveal (reveals24h, counted across all three
 // audit tables — see vacancies/read.test.ts for the summed SQL). Here we drive the handler through
 // mocked getSql / authenticate / config and a mocked reveals24h so we can pin its control flow on a
-// fake DB: first reveal charges the budget + records with an on-conflict guard; a repeat is free (no
-// budget read, no insert); hitting the cap → 429 with no insert; a row outside the whitelist → 404.
+// fake DB: first reveal charges the budget + records with an on-conflict guard; a repeat is free (never
+// charged / re-inserted; the budget is read only to echo reveals_left); hitting the cap → 429 with no
+// insert; an EMPTY message never records a reveal (contactless guard); a row outside the whitelist → 404.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -78,7 +79,8 @@ describe('rawReveal — shared daily cap, free repeat, race-safe insert', () => 
     await rawReveal(makeReq({ raw_id: RID }), res as unknown as ResLike);
 
     expect(res.statusCode).toBe(200);
-    expect(bodyOf(res)).toEqual({ id: RID, text: 'звоните 010-1111-2222' });
+    // reveals_left = cap(50) − (0 used + this reveal) = 49.
+    expect(bodyOf(res)).toEqual({ id: RID, text: 'звоните 010-1111-2222', reveals_left: 49 });
     // shared budget consulted with the fake sql + the authenticated id (never the body id)
     expect(vi.mocked(reveals24h)).toHaveBeenCalledWith(fn, 'user-1');
     const insert = calls.find((c) => /insert into raw_contact_reveals/.test(c.text));
@@ -86,15 +88,15 @@ describe('rawReveal — shared daily cap, free repeat, race-safe insert', () => 
     expect(insert!.text).toContain('on conflict (user_id, raw_id) do nothing');
   });
 
-  it('repeat reveal is FREE: budget never read, nothing inserted', async () => {
+  it('repeat reveal is FREE: nothing inserted (budget read only to echo reveals_left, never charged)', async () => {
     const { fn, calls } = makeSql({ rawRow: { id: RID, text: 't' }, alreadyRevealed: true });
     vi.mocked(getSql).mockReturnValue(fn);
     const res = makeRes();
     await rawReveal(makeReq({ raw_id: RID }), res as unknown as ResLike);
 
     expect(res.statusCode).toBe(200);
-    expect(vi.mocked(reveals24h)).not.toHaveBeenCalled();
-    expect(calls.some((c) => /insert into raw_contact_reveals/.test(c.text))).toBe(false);
+    expect(bodyOf(res)).toEqual({ id: RID, text: 't', reveals_left: 50 }); // full budget echoed, nothing charged
+    expect(calls.some((c) => /insert into raw_contact_reveals/.test(c.text))).toBe(false); // no new row
   });
 
   it('at the cap: 429 rate_limited and NO reveal recorded', async () => {
@@ -116,13 +118,15 @@ describe('rawReveal — shared daily cap, free repeat, race-safe insert', () => 
     expect(res.statusCode).toBe(404);
   });
 
-  it('CHARACTERIZATION: a null stored text coalesces to an empty string', async () => {
-    const { fn } = makeSql({ rawRow: { id: RID, text: null } });
+  it('empty message: contactless guard returns text "" WITHOUT recording a reveal or charging the budget', async () => {
+    const { fn, calls } = makeSql({ rawRow: { id: RID, text: null } });
     vi.mocked(getSql).mockReturnValue(fn);
     const res = makeRes();
     await rawReveal(makeReq({ raw_id: RID }), res as unknown as ResLike);
     expect(res.statusCode).toBe(200);
-    expect(bodyOf(res)).toEqual({ id: RID, text: '' });
+    // Budget untouched (reveals_left == full cap) and nothing inserted — an empty message has nothing to reveal.
+    expect(bodyOf(res)).toEqual({ id: RID, text: '', reveals_left: 50 });
+    expect(calls.some((c) => /insert into raw_contact_reveals/.test(c.text))).toBe(false);
   });
 
   it('CHARACTERIZATION: a missing/invalid raw_id is 400 bad_request (vacancyContact uses 404 instead)', async () => {

@@ -50,6 +50,8 @@ const adUpdatedAt = new Map<string, number>();
 const savedIds = new Set<string>(INITIAL_SAVED_IDS);
 /** Offer ids whose contact this user already revealed (source of truth for is_revealed). */
 const revealedIds = new Set<string>(INITIAL_REVEALED_IDS);
+/** Raw ids already revealed this session (repeat raw reveals are free, like vacancies). */
+const rawRevealedIds = new Set<string>();
 
 interface MockError {
   __mockHttp: number;
@@ -277,12 +279,18 @@ export async function handleMock(method: string, path: string, body?: unknown): 
     }
 
     // GET /vacancies/:id/contact — the reveal endpoint (explicit user action).
-    // Revealing marks the offer as revealed for this user (repeat reveals are free).
+    // Revealing marks the offer as revealed for this user (repeat reveals are free
+    // and never charge the daily budget). A first-time reveal of a real contact
+    // spends one unit; once the budget is exhausted the endpoint returns 429.
     if (method === 'GET' && seg.length === 3 && seg[2] === 'contact') {
       const v = ALL.find((x) => x.id === seg[1]);
       if (!v) return fail(404, 'not_found');
-      if (v.contact) revealedIds.add(v.id);
-      return { contact: v.contact ?? null };
+      if (v.contact && !revealedIds.has(v.id)) {
+        if ((me.reveals_left ?? 0) <= 0) return fail(429, 'rate_limited');
+        me = { ...me, reveals_left: (me.reveals_left ?? 0) - 1 };
+        revealedIds.add(v.id);
+      }
+      return { contact: v.contact ?? null, reveals_left: me.reveals_left };
     }
 
     // POST /vacancies/:id/report — flag for moderation.
@@ -329,14 +337,21 @@ export async function handleMock(method: string, path: string, body?: unknown): 
   }
 
   // POST /raw/reveal — reveal the original (unfiltered) text with the contact inline.
-  // Idempotent: re-revealing the same id keeps returning 200 (no limit accounting here).
+  // Shares the same daily budget as vacancy contacts. Idempotent: re-revealing the
+  // same id is free (returns 200 without charging); a first-time reveal spends one
+  // unit and returns 429 once the budget is exhausted.
   if (method === 'POST' && p === '/raw/reveal') {
     const b = (body ?? {}) as { raw_id?: unknown };
     const id = typeof b.raw_id === 'string' ? b.raw_id.trim() : '';
     if (!id) return fail(400, 'bad_request');
     const text = RAW_REVEALS[id];
     if (!text) return fail(404, 'not_found');
-    const view: RawRevealView = { id, text };
+    if (!rawRevealedIds.has(id)) {
+      if ((me.reveals_left ?? 0) <= 0) return fail(429, 'rate_limited');
+      me = { ...me, reveals_left: (me.reveals_left ?? 0) - 1 };
+      rawRevealedIds.add(id);
+    }
+    const view: RawRevealView = { id, text, reveals_left: me.reveals_left };
     return view;
   }
 

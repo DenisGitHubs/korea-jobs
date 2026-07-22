@@ -81,6 +81,17 @@ export interface VacancyContact {
   value: string;
 }
 
+/**
+ * GET /vacancies/:id/contact — the reveal endpoint response. `contact` is null when
+ * the listing has no direct contact. `reveals_left` is the user's remaining daily
+ * reveal budget AFTER this call; optional so a backend that has not shipped the field
+ * yet degrades gracefully (the client just keeps its previous counter / hides the hint).
+ */
+export interface VacancyContactReveal {
+  contact: VacancyContact | null;
+  reveals_left?: number;
+}
+
 export interface VacancyView {
   id: string;
   city: { slug: string; name: Localized } | null;
@@ -165,6 +176,11 @@ export interface RawRevealView {
   id: string;
   /** Original message text; the contact is somewhere inside it, unstructured. */
   text: string;
+  /**
+   * Remaining daily reveal budget AFTER this call (shared with vacancy contacts).
+   * Optional — absent on a backend that has not shipped the field yet.
+   */
+  reveals_left?: number;
 }
 
 /** Cursor page. `next_cursor === null` means no more items. */
@@ -237,6 +253,12 @@ export interface Me {
   points_total: number;
   /** First-run onboarding completed (server-persisted, so it never repeats cross-device). */
   onboarded: boolean;
+  /**
+   * How many contact reveals the user has left today (out of the shared daily
+   * budget). Optional so a backend that has not shipped the field yet degrades
+   * gracefully — the client hides the "reveals left" hint when it is absent.
+   */
+  reveals_left?: number;
 }
 
 /** One referral tier's counters (invited people + points earned from them). */
