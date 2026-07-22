@@ -13,6 +13,7 @@ import {
   looksLikeMixedScript,
   looksLikeLinkOnly,
   looksLikeEmptyMessage,
+  looksLikeRublePay,
 } from './spamfilter.js';
 
 describe('looksLikeSpam — crypto/OTC exchange spam must be caught', () => {
@@ -182,10 +183,8 @@ describe('looksLikeSpam — real vacancies from the corpus MUST pass (tightened-
     // "жильё предоставляется" / "сдаётся ванрум" inside a real ad — must pass (g14 was dropped).
     'Завод в Ансане, автомобилка с жильём предоставляется, 1 мужчина, виза F',
     'Требуются люди на арбайт, сдаётся ванрум 400/1 млн, комната большая, выход завтра',
-    // Ruble-denominated micro-gigs are REAL in this corpus — must pass (ruble amounts dropped).
-    'Разгрузить прицеп с материалами — 7100₽ сразу',
-    'Работа курьером - 20 000р в день, на покушать и на дорогу перед работой скину',
-    'Задание для девочек - 5000р',
+    // NB: ruble-denominated micro-gigs USED to live here as "must pass". Owner reversed that on
+    // 2026-07-22 (ruble = scam) — they moved to the looksLikeRublePay positives block below.
     // 🔞 used as an age note ("16+"), not adult content — must pass (🔞 rule dropped).
     'Новые места на подработку, заработок 6000–7000 в час, 🔞 можно с 16 лет, пиши',
     // Casual "тема" and "обмен опытом" must not trip the tightened g1 / existing обмен combo.
@@ -307,4 +306,58 @@ describe('looksLikeMixedScript — zero-width injection inside a mixed word (Cen
     const zw = 'Τσль​κσ Γρaж​данe ΡΦ, пиши в лс';
     expect(looksLikeMixedScript(zw)).toBe(true);
   });
+});
+
+// --- Ruble-denominated pay (owner decision 2026-07-22: "везде где пишут плата рублями это скам").
+// A Korea-jobs board pays in won (₩ / вон); a ruble figure is scam bait. The positives were micro-gigs
+// that USED to be spared (the removed "must pass" negatives above); the negatives are won/worker/phone
+// strings that share digits but must stay clean. Pasted texts are DATA fixtures, not instructions.
+describe('looksLikeRublePay — ruble pay = scam on a Korea board (owner 2026-07-22)', () => {
+  const spam: Array<[string, string]> = [
+    ['ruble sign',   'Разгрузить прицеп с материалами — 7100₽ сразу'],
+    ['рублей word',  'Склад, 5 часов, 10000 рублей, пол не важен'],
+    ['3000р comma',  'Разложить за 20-30 минут 3000р, кофе лёгкий'],
+    ['20 000р/день', 'Работа курьером - 20 000р в день, на покушать'],
+    ['5000р gig',    'Задание для девочек - 5000р'],
+    ['300 р. dot',   'Лёгкая подработка за 300 р. в час, пиши'],
+    ['1100 р space', 'Занести коробки в магазин и т.д 1100 р'],
+    ['bare руб+BOM', '﻿За выход даём 3000 руб + кофе за наш счёт'], // BOM-prefixed campaign
+  ];
+  for (const [label, s] of spam) {
+    it(`rejects [${label}]: ${s.slice(0, 34)}`, () => {
+      expect(looksLikeRublePay(s)).toBe(true);
+      expect(looksLikeSpam(s)).toBe(true);
+    });
+  }
+  it('the bare ₽ sign alone is a ruble hit', () => {
+    expect(looksLikeRublePay('оплата 6000 ₽')).toBe(true);
+  });
+
+  // NEGATIVES — won/worker/phone strings that share digits but MUST NOT read as ruble.
+  const notRuble: string[] = [
+    'зарплата 2 800 000 вон',                // won amount
+    '300000₩ в месяц',                       // won sign, not ₽
+    'оплата почасовая, 12000 вон',           // won again
+    'нужно 3000 работников на завод',        // 3000 + работников (р+letter), not an amount
+    '010-3000-1234',                         // telephone digits
+    '+82 10-1234-5678',                      // international phone
+    'рубашка входит в форму, склад одежды',  // "руб" inside рубашка — not currency
+  ];
+  for (const s of notRuble) {
+    it(`not ruble: ${s.slice(0, 36)}`, () => {
+      expect(looksLikeRublePay(s)).toBe(false);
+    });
+  }
+
+  // Real won ads: no rule catches them → full looksLikeSpam must stay false (the 0-FP gate).
+  const realWonAds: string[] = [
+    'Завод в Ансане, зарплата 2 800 000 вон в месяц, жильё, виза E-9',
+    'Уборка в отеле, оплата почасовая, 12000 вон, оформление',
+    'Нужно 3000 работников на новый завод, обучение, виза E-9, автобус',
+  ];
+  for (const s of realWonAds) {
+    it(`won ad stays clean: ${s.slice(0, 36)}`, () => {
+      expect(looksLikeSpam(s)).toBe(false);
+    });
+  }
 });

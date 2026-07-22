@@ -100,9 +100,11 @@ export const SPAM_PATTERNS: RegExp[] = [
 
   // --- extended 2026-07-21, data-driven from the 287-msg reject corpus; every pattern below was
   // validated to 0 FP on 521 CONFIRMED real vacancies (Roma). Only near-certain non-jobs fire.
-  // Cyrillic tails use explicit [а-яё] classes (JS \w/\b are ASCII-only). RUBLE amounts, a bare
-  // BOM prefix, Greek-letter obfuscation and the 🔞 glyph were TRIED and DROPPED — they collide
-  // with real ads in this corpus (ruble micro-gigs; "🔞 можно с 16 лет"), so they are NOT here.
+  // Cyrillic tails use explicit [а-яё] classes (JS \w/\b are ASCII-only). A bare BOM prefix,
+  // Greek-letter obfuscation and the 🔞 glyph were TRIED and DROPPED — they collide with real ads
+  // ("🔞 можно с 16 лет"), so they are NOT here. RUBLE amounts were dropped here too, but the owner
+  // REVERSED that on 2026-07-22 ("плата рублями = скам"): ruble pay is now caught by looksLikeRublePay
+  // (below), NOT by this array.
   //
   // g1 — "money scheme" recruiting bait. "тема" is context-bound (a real ad casually says "тема"),
   // so only the earn-scheme phrasings match, never the bare word.
@@ -163,8 +165,8 @@ export const SPAM_PATTERNS: RegExp[] = [
   // g10 — channel/folder-join promo.
   /добав(?:ьте|ить)\s+папку\s+с\s+канал/iu,
 
-  // g11 — remote / not-in-Korea work. Ruble AMOUNTS were dropped (the corpus is full of real
-  // ruble-denominated micro-gigs); only these unambiguous phrasings stay.
+  // g11 — remote / not-in-Korea work. Ruble AMOUNTS live in looksLikeRublePay now (owner 2026-07-22,
+  // ruble = scam on a Korea board); only these unambiguous non-ruble remote phrasings stay here.
   /(^|[^а-яё])удал[её]нк/iu,
   /городах\s+росси/iu,
 
@@ -309,8 +311,39 @@ export function looksLikeEmptyMessage(text: string): boolean {
   return GREETINGS.has(bare);
 }
 
+// --- Ruble-denominated pay (owner decision 2026-07-22: "везде где пишут плата рублями это скам").
+// This board is jobs *in Korea*, where legal pay is always in won (₩ / вон). A ruble figure means the
+// post is either not-in-Korea or courier-slang bait ("поднять капусту", micro-gigs "6400₽ за коробки")
+// — never a genuine Korea vacancy. NB: this deliberately REVERSES the 2026-07-21 stance ("ruble
+// micro-gigs are real, keep them"); the same posts spared back then are now dropped ON PURPOSE.
+// Validated on real-vacancies-full.json/521: 63 hits, EVERY one a ruble sum, ZERO carry a вон/₩ token
+// (so no won-priced Korea ad is ever caught) — the ruble-vs-won split is the hard gate, not recall.
+//
+// Three shapes, matched on the ZW-stripped, lowercased text (see looksLikeRublePay):
+//  (0) the ₽ sign anywhere;
+//  (1) the word руб / рубль / рубля / рублей … — the abbreviation "руб" only when NOT followed by
+//      another letter (so "рубашка"/"рубить"/"рубеж"/"рубрика"/"рубленый" are spared), and the full
+//      forms via an explicit ending list bounded on the right (so "рубленый" = рубл+еный never fires);
+//  (2) a number loosely followed by "р" / latin "p" and then a NON-letter — "3000р", "20 000р",
+//      "1100 р", "за 300 р.". That right-hand [^letter] lookahead is what keeps phones
+//      ("010-3000-1234"), won amounts ("300000 вон"), and worker counts ("3000 работников" → р+а)
+//      out. Cyrillic-safe boundaries, /iu; both р (Cyrillic) and p (latin look-alike) are accepted.
+const RUBLE_PATTERNS: RegExp[] = [
+  /₽/,
+  /(^|[^а-яёa-z])(?:руб(?![а-яёa-z])|рубл(?:ями|ях|ям|ей|ём|ем|ь|ю|я|е|и)(?![а-яёa-z]))/iu,
+  /\d[\d\s.,]*[рp](?![а-яёa-z])/iu,
+];
+
+/** True when the post quotes pay in rubles (₽ / руб* / "3000р") — scam on a Korea-jobs board. */
+export function looksLikeRublePay(text: string | null | undefined): boolean {
+  if (!text) return false;
+  // Same ZW-strip + lowercase as looksLikeSpam, so obfuscated "3000 руб" (ZWSP-spliced) still fires.
+  const t = text.replace(ZERO_WIDTH, '').toLowerCase();
+  return RUBLE_PATTERNS.some((rx) => rx.test(t));
+}
+
 /** True when the raw message is near-certain spam (pattern hit OR emoji carpet OR pharma blast OR
- *  mixed-script obfuscation OR link-only drop OR empty/greeting-only message). */
+ *  mixed-script obfuscation OR link-only drop OR empty/greeting-only message OR ruble-denominated pay). */
 export function looksLikeSpam(text: string | null | undefined): boolean {
   if (!text) return false;
   // Structural heuristics run on the RAW text (they inspect scripts/emoji/URLs, not lowercased words).
@@ -319,6 +352,7 @@ export function looksLikeSpam(text: string | null | undefined): boolean {
   if (looksLikeMixedScript(text)) return true;
   if (looksLikeLinkOnly(text)) return true;
   if (looksLikeEmptyMessage(text)) return true;
+  if (looksLikeRublePay(text)) return true;
   // Strip zero-width chars BEFORE lowercasing (adult/dating bots splice them inside words to hide
   // from the g8 patterns); MUST precede toLowerCase so the boundary helpers see clean tokens.
   // No /g on the patterns, so .test() is stateless — safe to reuse the module-level array.
