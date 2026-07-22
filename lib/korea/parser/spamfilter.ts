@@ -181,7 +181,7 @@ export const SPAM_PATTERNS: RegExp[] = [
   // Shared left boundary wraps BOTH alternatives (previously only "so'm" was guarded; digits are
   // allowed before, so "5 kg + 10 kg" and "1000so'm" still match).
   /(^|[^a-zа-яё])(?:\d\s*kg\s*\+\s*\d+\s*kg|so['ʻ]m(?![a-z]))/iu,
-  /такси\s+по\s+корее/iu,
+  // "такси по корее" moved into the owner-package такси line below (extended with недорого/дёшево).
   /нужны\s+бабки/iu,
   /(?:напиши(?:те)?|пиши)\s*\+\s+в\s+лс/iu,
   /oy\s+garantiya/iu,
@@ -200,6 +200,86 @@ export const SPAM_PATTERNS: RegExp[] = [
   /(^|[^а-яё])мне\s+нужн[оаы]\s+приглашени/iu,
   /(^|[^а-яё])оплачу\s+(?:их\s+)?(?:из\s+)?(?:своей\s+)?(?:зарплат|зп(?![а-яё]))/iu,
   /(^|[^а-яё])помогите\s+мне\s+со\s+всеми\s+расход/iu,
+
+  // --- OWNER PACKAGE 2026-07-22 (pre-AI enrichment): a batch of spam vocabulary the owner saw in
+  // the feed. Each pattern below was validated to 0 FP on real-vacancies-full.json /521 (the hard,
+  // irreversible-filter gate) via the scratchpad probe. Words that carried false positives were NOT
+  // taken bare — they are bound to a spam PHRASE that keeps 0 FP, or dropped entirely (see the report
+  // and the DROPPED note at the end of this block). Cyrillic tails use explicit [а-яё] classes and the
+  // (^|[^а-яё]) / (?![а-яё]) boundaries (JS \b/\w are ASCII-only — a \b next to а-я never matches).
+  //
+  // "приглашаем на эфир" — investment/webinar bait. BOUND to "на эфир": bare "эфир" also means the
+  // chiffon fabric of a dress-selling blast ("платья ЭФИР") and ETH crypto, so only the webinar phrase.
+  /приглаша[а-яё]*\s+на\s+эфир/iu,
+  // "Менеджер маркетплейсов (AVITO)" remote-reselling scam. BOUND to "менеджер маркетплейс": bare
+  // "маркетплейс" is UNSAFE — Korea has genuine marketplace-warehouse jobs (Coupang/쿠팡 склад), which
+  // this phrase-bind deliberately spares.
+  /менеджер[а-яё]*\s+маркетплейс/iu,
+  // AVITO written in Latin and/or Cyrillic look-alikes — a Russian classifieds brand that never appears
+  // in a Korea manual-labour ad. Every position accepts latin + cyrillic (+greek) look-alikes; the FIRST
+  // letter is now [aа] (was latin-only "a"), so a PURE-Cyrillic "авито" — the common scam spelling — is
+  // caught (fix 2026-07-22). Position 3 also gained the Russian и (U+0438): the class held the Ukrainian
+  // і (U+0456) look-alike but NOT и, so an all-Russian "авито" fell through before. Standalone-bounded on
+  // BOTH sides (right boundary is the file E-convention (?![а-яёa-z0-9])) so it can't fire glued inside a
+  // longer word — the LEFT boundary already spares "гравитон" (the "авито" substring is preceded by a
+  // Cyrillic "р", so the [^а-яёa-z] barrier fails), and the right E now also blocks a trailing latin/digit.
+  /(^|[^а-яёa-z])[aа][vвν][iіìи][tтτ][oоо](?![а-яёa-z0-9])/iu,
+  // "пенсионерам / пенсионеров" — remote-scam audience targeting. 0 FP: this migrant-labour board's
+  // audience is foreign workers, not pensioners.
+  /(^|[^а-яё])пенсионер[а-яё]*/iu,
+  // "реальный шанс / шанш" (typo) — earn-scheme bait ("Твой реальный шанш получать +10к день"). BOUND
+  // to "реальный шан(с|ш)": bare "шанс" is left alone (a real ad may say "шанс на стабильную работу").
+  /реальн[а-яё]*\s+шан[сш]/iu,
+  // "Быстрый Старт" — earn-scheme bait. BOUND to "быстрый старт": bare "старт" is UNSAFE (real ads say
+  // "стартовая ставка", "старт 130.000 с повышением"). The GREEK-obfuscated "Быcτρый Cтαρт" is already
+  // caught by looksLikeMixedScript, so only the plain-Cyrillic phrase is added here.
+  /быстр[а-яё]*\s+старт/iu,
+  // "быстрый подъём (денег)" — "подъём денег" is already caught above (g1); this adds the "быстрый
+  // подъём" phrasing. 0 FP.
+  /быстр[а-яё]*\s+подъ[её]м/iu,
+  // "Первые N человек получат по …" — scarcity bait. Owner range 1–4; a real ad never counts its first
+  // hires this way.
+  /перв[а-яё]+\s+[1-4]\s+человек/iu,
+  // "юс.тд / юс тд" — a USDT obfuscation the existing "юсдт" alternation (no separator) missed.
+  // Standalone-bounded so "плюс тд" (preceded by a letter) cannot fire.
+  /(^|[^а-яёa-z])юс[.\s]?тд(?![а-яёa-z0-9])/iu,
+  // "РЕАЛЬНЫЕ ЗАДАНИЯ … копеечной оплатой … без вложений … без криминала … мутных схем … напиши свой
+  // город" — one micro-task/mule recruiting blast, but each phrase is an independent 0-FP spam signal.
+  /реальн[а-яё]*\s+задани/iu,
+  /(^|[^а-яё])копеечн[а-яё]*/iu,
+  /без\s+вложени/iu,
+  /без\s+кримина[а-яё]*/iu,
+  /мутн[а-яё]*\s+схем/iu,
+  /напиш[а-яё]*\s+свой\s+город/iu,
+  // "Если нужны деньги — есть тема 20к" — earn-scheme opener.
+  /если\s+(?:вам\s+)?нужны\s+деньги/iu,
+  // "НЕ ЖЕНАТ СПРАВКА" — fake marital-status certificate (forged-documents seller). BOUND to "справка":
+  // bare "не женат" could occur in a genuine housing-with-job ad ("желательно не женатый мужчина").
+  /не\s+женат[а-яё]*\s+справк/iu,
+  // "Цитрамон" — a drug name from a pharmacy blast; catches the plain-text drug lists that carry too
+  // few 💊 to trip looksLikePharma.
+  /(^|[^а-яё])цитрамон/iu,
+  // "такси недорого / дёшево" — taxi SERVICE ad. Joined to the existing "такси по корее" (below via the
+  // такси line). NB deliberately NARROW: a genuine taxi-DRIVER vacancy ("нужен таксист / работа в такси")
+  // is NOT touched — only the service-advertising phrasings.
+  /такси\s+(?:по\s+корее|недорог|деш[её]в)/iu,
+  // "по вкусным ценам" — retail/clothes-selling blast ("платья … по вкусным ценам"), never a job.
+  /вкусн[а-яё]*\s+цен/iu,
+  // "Стоматология в Ансане — клиника вашей улыбки" — a dental-clinic SERVICE ad. BOUND to the field noun
+  // "стоматологи(я/и/ю)" and NOT the person "стоматолог/стоматолога": this cleanly spares a real
+  // dentist/assistant VACANCY ("требуется стоматолог") while cutting the clinic advert.
+  /(^|[^а-яёa-z])стоматологи[яию](?![а-яёa-z0-9])/iu,
+  // "Продаём велосипед, покупали за 250 тысяч" — a used-goods classified. BOUND to "прода* велосипед":
+  // bare "велосипед" is UNSAFE (real factory ads say "рекомендуется велосипед", "нужен велосипед для
+  // передвижения по заводу").
+  /прода[а-яё]{0,3}\s+велосипед/iu,
+  // DROPPED from this package (kept OUT on purpose): bare "студентам" (20 FP — "студентам корейский не
+  // требуется", "студентов не берут"), bare "старт" (11 FP), bare "такси" (2 FP — real "такси меж город"
+  // courier posts), bare "велосипед" (3 FP), bare "маркетплейс" (Coupang warehouse jobs), bare "хочу" /
+  // "помогите" / "продаю" / "поменяет" (too generic — owner-excluded), "кэш за" (a genuine "кэш за
+  // смену" cash-pay ad would die; "лутать кэш" already covers the mule slang). Already covered elsewhere
+  // (not duplicated): "нужны бабки" (g13), тезер/tether/trc20 (g5), USDT (#0/#10), "счета в аренду" (g3),
+  // "доставку котиков" (g3), "лутать кэш" (g1), "подъём денег" (g1).
 ];
 
 // Emoji-carpet heuristic (owner 2026-07-19): promo blasts that are almost pure emoji with a couple
