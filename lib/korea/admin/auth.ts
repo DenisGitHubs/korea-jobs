@@ -3,8 +3,10 @@
 // Admin authorization for privileged endpoints. Two accepted proofs, fail-closed:
 //   (a) Bearer CRON_SECRET — server-to-server / owner tooling (works even before any
 //       admin telegram_id is configured).
-//   (b) A valid Mini App initData whose telegram_id is in ADMIN_TELEGRAM_IDS
-//       (env, comma-separated). ADMIN_TELEGRAM_IDS is filled by the owner later.
+//   (b) A valid Mini App initData whose telegram_id is a recognised admin — either in
+//       ADMIN_TELEGRAM_IDS (env, comma-separated) OR a users row with role='admin' (the
+//       same DB-aware gate the bot already trusts). Fail-closed: a role-lookup DB error
+//       is treated as "not admin", never a grant.
 //
 // No proof => not admin. The telegram_id is taken ONLY from verified initData
 // (never from the body), same barrier as every user endpoint.
@@ -90,7 +92,10 @@ export function isAdminBearer(req: ReqLike): boolean {
 export async function requireAdmin(req: ReqLike): Promise<AdminResult> {
   if (isAdminBearer(req)) return { ok: true, via: 'bearer' };
   const auth = await authenticate(req);
-  if (auth.ok && isAdminTelegramId(auth.user.telegramId)) {
+  // Recognise admins by the SAME gate the bot trusts: env ADMIN_TELEGRAM_IDS ∪ users.role='admin'.
+  // isAdminTelegram is FAIL-CLOSED — a role-lookup DB error resolves to false (→ caller 401),
+  // never a grant. Order is preserved: bearer first, then a valid admin initData user.
+  if (auth.ok && (await isAdminTelegram(getSql(), auth.user.telegramId))) {
     return { ok: true, via: 'user', user: auth.user };
   }
   return { ok: false };
