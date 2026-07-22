@@ -4,8 +4,8 @@
 // handlers, plus body/header/auth helpers. Mirrors the cargobob _util pattern so a
 // handler can run both under Vercel and under the router with no changes.
 
-import { timingSafeEqual } from 'node:crypto';
-import { ApiErrorCode, httpStatusFor, makeError } from './errors.js';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { ApiErrorCode, type ApiErrorBody, httpStatusFor, makeError } from './errors.js';
 
 export interface ResLike {
   statusCode: number;
@@ -41,12 +41,38 @@ export function send(res: ResLike, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-/** Send the uniform error envelope for a code. Logs id + code only (never PII) so a
- *  production failure is traceable via errorId (errors.ts contract). */
-export function sendError(res: ResLike, code: ApiErrorCode, detail?: string): void {
-  const body = makeError(code, detail);
-  // eslint-disable-next-line no-console
-  console.error(`[api] error ${code} ${body.errorId}`);
+/**
+ * Send the uniform error envelope for a code. The caller (or user) can quote `errorId`;
+ * the SAME id is written to the log so a production failure is traceable.
+ *
+ * `cause` is the original thrown value and is honoured ONLY for an unexpected `internal`
+ * (500): its message + stack are logged at error level so a live 500 is diagnosable.
+ * Expected/known errors (400/401/404/429), and any call without a `cause`, log just the
+ * lightweight `code + errorId` line — no stack, so they never flood the log.
+ *
+ * Never logs the request body, headers, query or auth: only the code, the id, and the
+ * technical error text/stack. `detail` is a fixed short tag chosen by the call site
+ * (e.g. 'handler_error'), not user input.
+ */
+export function sendError(res: ResLike, code: ApiErrorCode, detail?: string, cause?: unknown): void {
+  // Short, quotable id; the same value goes into the body AND the log line below.
+  const errorId = randomUUID().slice(0, 8);
+  const body: ApiErrorBody = { ...makeError(code, detail), errorId };
+
+  if (code === ApiErrorCode.Internal && cause !== undefined) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    // eslint-disable-next-line no-console
+    console.error(`[api] internal ${errorId}: ${message}`);
+    const stack = cause instanceof Error ? cause.stack : undefined;
+    if (stack) {
+      // eslint-disable-next-line no-console
+      console.error(`[api] internal ${errorId} stack:\n${stack}`);
+    }
+  } else {
+    // eslint-disable-next-line no-console
+    console.error(`[api] error ${code} ${errorId}`);
+  }
+
   send(res, httpStatusFor(code), body);
 }
 

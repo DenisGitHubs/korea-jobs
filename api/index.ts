@@ -18,7 +18,7 @@
 //   /api/bot/webhook                                  -> X-Telegram-Bot-Api-Secret-Token
 //   /api/cron/parse|notify|digest|cleanup|referral-confirm -> Bearer CRON_SECRET
 
-import { type ReqLike, type ResLike, send } from '../lib/korea/core/http.js';
+import { type ReqLike, type ResLike, send, sendError } from '../lib/korea/core/http.js';
 import { ApiErrorCode, httpStatusFor, makeError } from '../lib/korea/core/errors.js';
 import { sourcesGet, ingestPost } from '../lib/korea/ingest/handler.js';
 import { cronParse, cronNotify, cronDigest, cronCleanup, cronReferralConfirm } from '../lib/korea/cron/handler.js';
@@ -172,10 +172,16 @@ export default async function router(req: ReqLike, res: ResLike): Promise<void> 
     req.query = query;
     try {
       return await route.handler(req, res);
-    } catch {
-      // Any unhandled handler error (auth throwing on missing BOT_TOKEN, a DB fault,
-      // ...) -> uniform 500 envelope instead of a raw crash.
-      return send(res, httpStatusFor(ApiErrorCode.Internal), makeError(ApiErrorCode.Internal, 'handler_error'));
+    } catch (err) {
+      // Last-resort catch for errors that ESCAPE a handler's own try/catch — i.e. throws
+      // BEFORE the handler's internal guard (e.g. authenticate() on missing BOT_TOKEN, a
+      // routing/parse throw). Most handlers already swallow their own DB faults with a local
+      // `catch { sendError(Internal) }` (no cause), so those are NOT covered here yet — a
+      // follow-up sweep will thread the cause through those ~47 sites for full coverage.
+      // What IS caught here: cause (message + stack) is logged centrally under the SAME
+      // errorId returned to the caller, so this class of live 500 is diagnosable; no request
+      // body/PII is logged (see sendError).
+      return sendError(res, ApiErrorCode.Internal, 'handler_error', err);
     }
   }
 
