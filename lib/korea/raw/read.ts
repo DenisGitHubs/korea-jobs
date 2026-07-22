@@ -6,13 +6,21 @@
 //
 // BUCKET (the single cleanest one): a raw row that is NOT yet a vacancy AND is either
 //   * still 'pending' (not parsed yet), or
-//   * 'skipped' with reject_reason = 'low_confidence' (the model DID think it's a job,
-//     but under the confidence bar).
+//   * 'skipped' with reject_reason = 'low_confidence' AND confidence IS NOT NULL (the model DID
+//     think it's a job, but under the confidence bar — the AI-JUDGED first copy).
 // Everything the parser labelled as junk (spam / spam_prefilter / currency_exchange /
 // agency_promo / course_ad / chitchat / resume_seeking_job / housing / ad_non_job /
 // not_vacancy / unclear / too_old / takedown, and any 'error' row) is excluded BY
 // CONSTRUCTION — the WHERE is a whitelist (pending ∪ skipped+low_confidence), not a
 // blacklist, so a new reject reason can never leak into this stream.
+//
+// CACHE-SKIP GUARD (owner 2026-07-22, "остаток-3"): low_confidence is now CACHED (verdict-cache.ts),
+// so an EXACT repeat of a «Не проверено» line is skipped PRE-AI with reject_reason='low_confidence'
+// too. To show ONLY the first (AI-judged) copy and hide the repeats, we add `confidence IS NOT NULL`
+// to the low_confidence arm: confidence is written ONLY on a row the model actually judged
+// (parser/run.ts) — a pre-AI cache skip leaves it NULL (the SAME discriminator /stats already uses,
+// admin/stats.ts). So the first copy (non-NULL confidence) shows; every cached repeat (NULL) does not.
+// 'pending' rows also have NULL confidence but are matched by their OWN arm (not yet judged at all).
 //
 // ALREADY-PUBLISHED GUARD (owner 2026-07-19): a repost whose text_hash already belongs to a
 // PARSED row (status='parsed', vacancy_id is not null) is the SAME vacancy the user already sees
@@ -94,7 +102,8 @@ function decodeCursor(c: string | undefined): { f: string; i: string } | null {
   return null;
 }
 
-/** GET /api/raw — cursor feed over UNVERIFIED raw messages (pending ∪ skipped+low_confidence). */
+/** GET /api/raw — cursor feed over UNVERIFIED raw messages
+ *  (pending ∪ skipped+low_confidence with a non-NULL confidence = the AI-judged first copy). */
 export async function rawFeed(req: ReqLike, res: ResLike): Promise<void> {
   if ((req.method ?? 'GET') !== 'GET') return sendError(res, ApiErrorCode.NotFound);
   const auth = await authenticate(req);
@@ -122,7 +131,8 @@ export async function rawFeed(req: ReqLike, res: ResLike): Promise<void> {
               greatest(0, floor(extract(epoch from (now() - coalesce(posted_at, fetched_at))) / 86400))::int as age_days
        from raw_messages
        where vacancy_id is null
-         and (status = 'pending' or (status = 'skipped' and reject_reason = 'low_confidence'))
+         and (status = 'pending'
+              or (status = 'skipped' and reject_reason = 'low_confidence' and confidence is not null))
          and (text_hash is null or not exists (
            select 1 from raw_messages p
            where p.text_hash = raw_messages.text_hash

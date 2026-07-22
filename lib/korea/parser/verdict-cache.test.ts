@@ -7,7 +7,8 @@
 //     (lowercase, keep only Cyrillic/Latin/Hangul; drop digits/emoji/punctuation/whitespace/other scripts)
 //     so a copy that mimics only a digit (8000→9000) or an emoji (🐠→🏝) still shares a hash — but a
 //     skeleton with NO letters at all (pure digits/emoji) returns null and is deliberately NOT cached.
-//   * shouldCacheVerdict is the write-side policy — NEVER cache a vacancy, NEVER cache 'low_confidence'.
+//   * shouldCacheVerdict is the write-side policy — cache rejects AND low_confidence «Не проверено»
+//     (owner 2026-07-22 «остаток-3»); the ONLY thing never cached is a kept/published vacancy.
 //   * lookup / touch / upsert take `sql` by injection (like streaks/update.test.ts), so we drive them
 //     with a fake that captures the statement + params and returns canned rows — no DB. Best-effort:
 //     a read fault yields an empty map (nothing is skipped, the batch just goes to the model).
@@ -94,19 +95,22 @@ describe('verdictHash — fuzzy letter-skeleton (floor-less)', () => {
   });
 });
 
-describe('shouldCacheVerdict — never cache a vacancy or low_confidence', () => {
+describe('shouldCacheVerdict — cache rejects AND low_confidence, never a kept vacancy', () => {
   it('caches a genuine non-vacancy reject', () => {
     expect(shouldCacheVerdict(false, 'spam')).toBe(true);
     expect(shouldCacheVerdict(false, 'unclear')).toBe(true);
     expect(shouldCacheVerdict(false, 'chitchat')).toBe(true);
     expect(shouldCacheVerdict(false, 'not_vacancy')).toBe(true);
   });
-  it('NEVER caches a vacancy (rides the normal dedup contour)', () => {
+  it("NOW caches 'low_confidence' too (owner 2026-07-22 «остаток-3»: repeat «Не проверено» collapse)", () => {
+    // First arg is the KEPT-as-vacancy flag; a low_confidence row is under the bar (kept=false), so
+    // its verdict IS cached — the second exact copy replays it instead of hitting the model again.
+    expect(shouldCacheVerdict(false, 'low_confidence')).toBe(true);
+  });
+  it('NEVER caches a kept/published vacancy (rides the normal dedup contour)', () => {
+    // kept=true means is_vacancy AND confidence>=min — never happens on the reject branch; defense in depth.
     expect(shouldCacheVerdict(true, 'low_confidence')).toBe(false);
     expect(shouldCacheVerdict(true, 'spam')).toBe(false); // defensive: even a mislabelled vacancy
-  });
-  it("NEVER caches 'low_confidence' (the visible «Не проверено» tab)", () => {
-    expect(shouldCacheVerdict(false, 'low_confidence')).toBe(false);
   });
 });
 

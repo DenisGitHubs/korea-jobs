@@ -73,6 +73,20 @@ function cleanGender(v: unknown): Gender {
   return typeof v === 'string' && GENDER_SET.has(v) ? (v as Gender) : 'any';
 }
 
+// Confidence value stored for an AI-JUDGED reject/low_confidence row. DEFENSE IN DEPTH (Censor
+// «остаток-3»): a row that REACHED the model — any verdict — is the FIRST, AI-judged copy and MUST
+// stay distinguishable from a pre-AI cache-skip, which writes NO confidence (leaves it NULL). That
+// non-NULL confidence is the EXACT discriminator raw/read.ts + admin/stats.ts + raw/reveal.ts use
+// (`reject_reason='low_confidence' AND confidence IS NOT NULL`) to keep the AI-judged «Не проверено»
+// row visible while hiding cached repeats. The whole «первая судимая ИИ копия» invariant hung on the
+// model ALWAYS returning a number; if it ever omits confidence on an is_vacancy=true+low_confidence
+// item, the naive `it.confidence ?? null` would write NULL and the judged row would silently vanish
+// (indistinguishable from a cache-skip). So default a missing/non-finite confidence to 0 (still under
+// parser_min_confidence, so the low_confidence branch stays self-consistent) — never NULL.
+export function aiJudgedConfidence(confidence: unknown): number {
+  return typeof confidence === 'number' && Number.isFinite(confidence) ? confidence : 0;
+}
+
 // Cheap, high-precision spam pre-filter — obvious non-jobs (crypto exchange, money-mule,
 // leaflet gigs, emoji carpets) are the bulk of the raw stream. Rules + thresholds live in
 // parser/spamfilter.ts (extracted so they are unit-testable); rows that match are marked
@@ -434,22 +448,29 @@ export async function runParse(): Promise<ParseResult> {
       await sql`
         update raw_messages set status='skipped', processed_at=now(), reject_reason=${s.reason}
         where id=${s.rawId}::uuid`;
-      // Reject journal parity (owner rule 2026-07-20): a cache replay IS a real AI-verdict reject being
-      // reused, so it MUST advance the day+reason counter exactly like a fresh reject — the reject-log
-      // invariant is "every AI-verdict reject counted always", and these short repeats are the single MOST
-      // common reject (without this they slipped past the counter). logSample:false — count the replay but
-      // never re-store the full text of a repeat (the first copy already sampled it; low_confidence is
-      // never cached so it never lands here). Best-effort (recordAiReject never throws). NOTE: we do NOT
-      // write raw_messages.confidence on a cache replay — that NULL is exactly how /stats separates a
-      // pre-AI skip from a real AI verdict (admin/stats.ts), so leave it untouched.
-      await recordAiReject({
-        reason: s.reason,
-        confidence: null,
-        postedAt: null,
-        text: '',
-        sourceNote: null,
-        logSample: false,
-      });
+      // Reject journal parity (owner rule 2026-07-20): a cache replay of a genuine REJECT IS a real
+      // AI-verdict reject being reused, so it MUST advance the day+reason counter exactly like a fresh
+      // reject — the reject-log invariant is "every AI-verdict reject counted always", and these short
+      // repeats are the single MOST common reject. logSample:false — count the replay but never re-store
+      // the full text of a repeat (the first copy already sampled it). Best-effort (never throws). NOTE:
+      // we do NOT write raw_messages.confidence on a cache replay — that NULL is exactly how /stats and
+      // GET /api/raw separate a pre-AI skip from a real AI verdict (admin/stats.ts, raw/read.ts), so it
+      // is left untouched.
+      //   EXCLUDE 'low_confidence' (owner 2026-07-22, "остаток-3"): low_confidence IS cached now, but it
+      //   is the visible «Не проверено» tab, NOT a discarded reject — it must never enter ai_reject_stats
+      //   (reject-log.ts invariant: "never 'low_confidence' here"). A low_confidence cache replay is
+      //   simply a silent pre-AI skip: no counter, no sample, no «Не проверено» row (its confidence stays
+      //   NULL, so raw/read.ts hides it — only the AI-judged first copy, with a non-NULL confidence, shows).
+      if (s.reason !== 'low_confidence') {
+        await recordAiReject({
+          reason: s.reason,
+          confidence: null,
+          postedAt: null,
+          text: '',
+          sourceNote: null,
+          logSample: false,
+        });
+      }
     }
     // Bump n/last_seen once per DISTINCT hash we served from cache (best-effort).
     await touchVerdictCache(sql, [...new Set(cacheSkips.map((s) => s.hash))]);
@@ -636,7 +657,7 @@ export async function runParse(): Promise<ParseResult> {
         update raw_messages
         set status='skipped', processed_at=now(),
             reject_reason=${rejectReason},
-            confidence=${it.confidence ?? null}, text_hash=${hash}
+            confidence=${aiJudgedConfidence(it.confidence)}, text_hash=${hash}
         where id=${rawId}::uuid`;
       // Reject journal (owner rule 2026-07-20), best-effort. Count + (when enabled) sample the FULL
       // original text of AI-verdict rejects. EXCLUDE 'low_confidence' — those are the visible "Не
@@ -650,15 +671,22 @@ export async function runParse(): Promise<ParseResult> {
           sourceNote: (row.source_username as string | null) ?? null,
           logSample: rejectLogEnabled,
         });
-        // VERDICT CACHE write-back (owner rule 2026-07-21): remember this reject so an EXACT repeat skips
-        // the model next time (see the pre-AI lookup at 1c). Cache ONLY a genuine NON-vacancy reject —
-        // low_confidence is already excluded here, and shouldCacheVerdict re-asserts BOTH (never a
-        // vacancy, never low_confidence) so the policy is one pure, testable gate. Best-effort.
-        // verdictHashById keyed the row before the AI, so short texts (null hash) are simply not cached.
-        if (shouldCacheVerdict(it.is_vacancy, rejectReason)) {
-          const vh = verdictHashById.get(rawId) ?? null;
-          if (vh) await upsertVerdictCache(sql, vh, rejectReason);
-        }
+      }
+      // VERDICT CACHE write-back (owner rule 2026-07-21; low_confidence added 2026-07-22, "остаток-3").
+      // Remember this verdict so an EXACT repeat skips the model next time (see the pre-AI lookup at 1c).
+      // Cache BOTH genuine rejects AND low_confidence «Не проверено» — this is the reject branch, so the
+      // row was NOT kept as a published vacancy; caching low_confidence is exactly what collapses a
+      // repeated «Не проверено» line ("Возьму пару человек" ×25) to ONE AI judgment + one visible row
+      // (the repeats become pre-AI cache skips that raw/read.ts hides). This write is OUTSIDE the
+      // low_confidence guard above (that guard is only about the reject JOURNAL, which must NOT count
+      // low_confidence). shouldCacheVerdict re-asserts the ONE invariant — never cache a PUBLISHED
+      // vacancy (is_vacancy AND confidence >= min); that can never happen in this branch, so it is pure
+      // defense in depth. Best-effort. verdictHashById keyed the row before the AI, so short texts (null
+      // hash) are simply not cached.
+      const keptAsVacancy = it.is_vacancy === true && (it.confidence ?? 0) >= minConfidence;
+      if (shouldCacheVerdict(keptAsVacancy, rejectReason)) {
+        const vh = verdictHashById.get(rawId) ?? null;
+        if (vh) await upsertVerdictCache(sql, vh, rejectReason);
       }
       continue;
     }

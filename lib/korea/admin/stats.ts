@@ -7,8 +7,9 @@
 // sendMessage plain text is valid, 4096-char limit; our line block is far under it).
 //
 // The "Непроверенные" bucket MIRRORS the /api/raw feed (raw/read.ts) 1:1 — same whitelist
-// (pending ∪ skipped+low_confidence), vacancy_id is null, same freshness window driven by
-// config raw_max_age_days (clamped to >= 1), so the number matches what users actually see.
+// (pending ∪ skipped+low_confidence with a non-NULL confidence, so cached low_confidence repeats —
+// pre-AI skips, confidence NULL — are excluded just like the tab), vacancy_id is null, same freshness
+// window driven by config raw_max_age_days (clamped to >= 1), so the number matches what users see.
 
 import { getSql } from '../core/db.js';
 import { getConfigNumber } from '../config.js';
@@ -100,7 +101,8 @@ export async function gatherStats(): Promise<Stats> {
       (select count(*) from user_ads where status = 'pending')::int                  as ads_pending,
       (select count(*) from raw_messages
          where vacancy_id is null
-           and (status = 'pending' or (status = 'skipped' and reject_reason = 'low_confidence'))
+           and (status = 'pending'
+                or (status = 'skipped' and reject_reason = 'low_confidence' and confidence is not null))
            and fetched_at > now() - make_interval(days => ${maxAge}))::int           as unverified
   `) as unknown as Record<string, unknown>[];
   const c = cRows[0] ?? {};

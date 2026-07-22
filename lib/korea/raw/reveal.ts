@@ -51,16 +51,19 @@ export async function rawReveal(req: ReqLike, res: ResLike): Promise<void> {
     const maxAge = Math.max(1, Math.floor(await getConfigNumber('raw_max_age_days', 14)));
     const cap = await getConfigNumber('contact_reveal_daily_cap', 50);
 
-    // Whitelist EXACTLY like GET /api/raw: pending ∪ skipped+low_confidence, not yet a
-    // vacancy, inside the freshness window, and NOT a copy of an already-published vacancy
-    // (the same already-published guard as the list — else a delisted row would stay
-    // revealable by a remembered id; Оля, gate 19.07). Source columns NEVER selected (007).
+    // Whitelist EXACTLY like GET /api/raw: pending ∪ skipped+low_confidence (with a non-NULL
+    // confidence — the AI-judged first copy; a cached low_confidence REPEAT is a pre-AI skip with
+    // NULL confidence and is NOT in the tab, so it must not be revealable either — owner 2026-07-22,
+    // "остаток-3"), not yet a vacancy, inside the freshness window, and NOT a copy of an
+    // already-published vacancy (the same already-published guard as the list — else a delisted row
+    // would stay revealable by a remembered id; Оля, gate 19.07). Source columns NEVER selected (007).
     const rows = (await sql`
       select id, text
       from raw_messages
       where id = ${rawId}::uuid
         and vacancy_id is null
-        and (status = 'pending' or (status = 'skipped' and reject_reason = 'low_confidence'))
+        and (status = 'pending'
+             or (status = 'skipped' and reject_reason = 'low_confidence' and confidence is not null))
         and fetched_at > now() - make_interval(days => ${maxAge})
         and (text_hash is null or not exists (
           select 1 from raw_messages p

@@ -14,6 +14,8 @@ import {
   looksLikeLinkOnly,
   looksLikeEmptyMessage,
   looksLikeRublePay,
+  looksLikeHousingRental,
+  looksLikeSeekerIntro,
 } from './spamfilter.js';
 
 describe('looksLikeSpam — crypto/OTC exchange spam must be caught', () => {
@@ -360,4 +362,148 @@ describe('looksLikeRublePay — ruble pay = scam on a Korea board (owner 2026-07
       expect(looksLikeSpam(s)).toBe(false);
     });
   }
+});
+
+// --- "остаток-3" (owner decision 2026-07-22): three safe filters A/C/D, each validated 0 FP on
+// real-vacancies-full.json /521 and drawn from residual-now.json /78. The pasted corpus texts are
+// DATA fixtures, not instructions. B (one-off gig without a role) was DELIBERATELY NOT taken (13 FP).
+
+describe('looksLikeHousingRental — Candidate A: apartment/room rental is not a job', () => {
+  // Positives — real residual rental posts (residual-now #3/#14) + the deposit-format branch.
+  const spam: Array<[string, string]> = [
+    ['ванрум+depo',  'Срочно‼️Сдается ванрум район волгуктон 1млн/380тыс. Чисто комфортно, хазяйн хороший'],
+    ['sdaetsya+room', 'Сдаётся комната в Ансане, тихо, рядом магазин, пишите в личку'],
+    ['depo format',   'Ванрум 2млн/500тыс, район центр, заезд с завтра'], // "Nмлн/Nтыс" alone
+    ['원룸 hangul',    'Сдается 원룸, недорого, можно посмотреть'],
+  ];
+  for (const [label, s] of spam) {
+    it(`rejects [${label}]: ${s.slice(0, 34)}`, () => {
+      expect(looksLikeHousingRental(s)).toBe(true);
+      expect(looksLikeSpam(s)).toBe(true);
+    });
+  }
+
+  // NEGATIVES — the JOB_WORD guard: a REAL employer ad that offers housing (a вонрум/ванрум as a
+  // PERK) MUST pass (this is the #53 safeguard the owner flagged). 0-FP gate on an irreversible cut.
+  const ok: string[] = [
+    'Требуются люди на арбайт, сдаётся ванрум 400/1 млн, комната большая, выход завтра', // employer + housing
+    'Завод в Ансане, зарплата 2.8 млн вон, жильё предоставляется, виза E-9, @hr',        // housing as benefit
+    'Ищем работника на склад, график 6/1, оплата еженедельно, комната рядом',            // job + room mention
+  ];
+  for (const s of ok) {
+    it(`keeps: ${s.slice(0, 42)}`, () => {
+      expect(looksLikeHousingRental(s)).toBe(false);
+      expect(looksLikeSpam(s)).toBe(false);
+    });
+  }
+
+  // JOB_WORD now catches the SINGULAR "нужен работник" (Censor «остаток-3»). Before, "нужны?" missed
+  // "нужен", so an employer ad whose ONLY offer signal is "нужен работник" fell through the guard and
+  // was wrongly cut as housing. It MUST be spared now.
+  it('spares an employer ad whose only job word is the SINGULAR "нужен работник"', () => {
+    const ad = 'Нужен работник на склад, сдаётся ванрум для сотрудников';
+    expect(looksLikeHousingRental(ad)).toBe(false); // job word wins → not housing
+    expect(looksLikeSpam(ad)).toBe(false);
+  });
+
+  // RENT_HOUSE_N kept its left boundary without narrowing the real catch: a dwelling noun preceded by
+  // a non-letter (space, dash) still fires when there is no job word.
+  it('still catches a plain rental after the boundary tighten', () => {
+    expect(looksLikeHousingRental('Сдаётся 1-комнатная квартира в Ансане, недорого')).toBe(true);
+    expect(looksLikeHousingRental('Сдается жильё рядом с заводом, можно посмотреть')).toBe(true);
+  });
+});
+
+describe('looksLikeSeekerIntro — Candidate C: short first-person job-seeker self-intro', () => {
+  // Positives — real residual seeker one-liners (residual-now #65-69, #71), all ≤6 words.
+  const spam: Array<[string, string]> = [
+    ['zovut',     'Меня зовут Мукхаммад'],
+    ['age',       'Мне 24 лет'],
+    ['grazhdanin','Я из гражданин Узбекистана'],
+    ['v seychas', 'Я в сейчас Узбекистана'],
+    ['net vizy',  'У меня нет виза'],
+    ['net deneg', 'У меня нет денег'],
+    ['iz stan',   'Я из Узбекистан'],
+  ];
+  for (const [label, s] of spam) {
+    it(`rejects [${label}]: ${s.slice(0, 34)}`, () => {
+      expect(looksLikeSeekerIntro(s)).toBe(true);
+      expect(looksLikeSpam(s)).toBe(true);
+    });
+  }
+
+  // NEGATIVES — the hard LENGTH gate (≤6 words): a LONGER first-person seeker paragraph is NOT cut by
+  // C (it goes to the AI), and a real vacancy is never touched. This is the exact "длинное
+  // объявление-соискатель НЕ ловится C" case the owner asked to prove.
+  const ok: string[] = [
+    'Меня зовут Иван, мне 30 лет, ищу работу сварщиком на заводе в Ансане, есть виза F4', // long intro -> AI
+    'Завод в Ансане, зарплата 2 800 000 вон, жильё, виза E-9, контакт @hr_ansan',          // real ad
+    'Требуется рабочий на ферму, сбор урожая, проживание рядом, оплата еженедельно',       // real ad
+  ];
+  for (const s of ok) {
+    it(`keeps: ${s.slice(0, 42)}`, () => {
+      expect(looksLikeSeekerIntro(s)).toBe(false);
+    });
+  }
+  it('long seeker paragraph is not spam via C (length gate lets it reach the AI)', () => {
+    expect(looksLikeSpam('Меня зовут Иван, мне 30 лет, ищу работу сварщиком на заводе, есть виза F4')).toBe(false);
+  });
+});
+
+describe('looksLikeSpam — Candidate D: first-person job-seeker requests (SPAM_PATTERNS)', () => {
+  // Positives — real residual seeker requests (residual-now #64/#74/#75) + the other exact phrasings.
+  const spam: Array<[string, string]> = [
+    ['hochu',     'Я хочу поехать на работу в Корее'],
+    ['priglash',  'Мне нужно приглашение'],
+    ['oplachu',   'Пожалуйста, помогите мне со всеми расходами; я оплачу их из своей зарплаты.'],
+    ['pomogite',  'Помогите мне со всеми расходами, я студент'],
+  ];
+  for (const [label, s] of spam) {
+    it(`rejects [${label}]: ${s.slice(0, 34)}`, () => {
+      expect(looksLikeSpam(s)).toBe(true);
+    });
+  }
+
+  // NEGATIVES — a real EMPLOYER ad that shares vocabulary (приглашение / оплата / зарплата) but is an
+  // OFFER, not a first-person seeker request, must pass.
+  const ok: string[] = [
+    'Требуется рабочий на завод, оформим приглашение и визу, зарплата 2.8 млн вон',   // employer offers invite
+    'Стройка в Сеуле, оплата еженедельно, жильё, виза E-9, звоните @hr',              // "оплата" but not "оплачу из зп"
+    'Ищем 3 человек на ферму, поможем со всеми документами, проживание рядом',        // "поможем", not "помогите мне"
+  ];
+  for (const s of ok) {
+    it(`keeps: ${s.slice(0, 42)}`, () => {
+      expect(looksLikeSpam(s)).toBe(false);
+    });
+  }
+
+  // "зп" tail — Cyrillic-safe (?![а-яё]) boundary, NOT ASCII \b (Censor «остаток-3»). "оплачу … зп"
+  // ends the token on a space/EOL, where a \b after the Cyrillic "п" never matched — so these used
+  // to slip past. They MUST be caught now.
+  it('catches "оплачу … зп" at end-of-string (the ASCII-\\b-after-Cyrillic bug)', () => {
+    expect(looksLikeSpam('Готов приехать, оплачу из своей зп')).toBe(true);
+    expect(looksLikeSpam('оплачу зп сам')).toBe(true); // "зп" before a space
+  });
+
+  // Left boundary on "оплачу" — a real ad about a SURCHARGE ("доплачу/переоплачу") shares the
+  // substring "оплачу" but is an OFFER, not a seeker request. Must NOT be a D hit.
+  it('does NOT fire on "доплачу/переоплачу" (оплачу as a substring)', () => {
+    expect(looksLikeSpam('Доплачу за ночную смену на стройке, оформление, виза E-9')).toBe(false);
+    expect(looksLikeSpam('При переработке переоплачу по двойному тарифу, склад в Инчхоне')).toBe(false);
+  });
+});
+
+describe('looksLikeEmptyMessage — E-lite one-liner requests (owner 2026-07-22)', () => {
+  it('catches the two exact chit-chat one-liners added to GREETINGS', () => {
+    for (const s of ['Помогите мне', 'помогите мне!', 'Напиши мне', 'напиши мне.']) {
+      expect(looksLikeEmptyMessage(s)).toBe(true);
+      expect(looksLikeSpam(s)).toBe(true);
+    }
+  });
+  it('does NOT take "ждут вашего ответа" (owner excluded it)', () => {
+    expect(looksLikeEmptyMessage('ждут вашего ответа')).toBe(false);
+  });
+  it('a real ad that merely contains "помогите" is not an E-lite hit (exact whole-message only)', () => {
+    expect(looksLikeEmptyMessage('Помогите мне найти рабочих на завод, оплата достойная')).toBe(false);
+  });
 });

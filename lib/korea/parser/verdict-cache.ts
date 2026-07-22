@@ -8,19 +8,27 @@
 //
 // This cache is a SEPARATE contour: a FUZZY "letter-skeleton" hash (verdictHash) — lowercase, keep ONLY
 // letters (Cyrillic/Latin/Hangul) and drop everything else (digits, emoji, punctuation, whitespace,
-// zero-width marks) — storing only genuine NON-vacancy reject verdicts. Before the AI batch, the parser
-// looks up every survivor's verdict-hash; a hit is skipped with the cached reject_reason and never reaches
-// the model. After the AI, a fresh non-vacancy reject is written back. Vacancies and low_confidence are
-// NEVER cached (the first copy of anything the model might keep is always judged fresh; vacancies ride the
-// normal dedup contour).
+// zero-width marks). Before the AI batch, the parser looks up every survivor's verdict-hash; a hit is
+// skipped with the cached reject_reason and never reaches the model. After the AI, a fresh verdict is
+// written back.
+//
+// WHAT IS CACHED (owner update 2026-07-22, "остаток-3"): BOTH genuine non-vacancy rejects AND
+// 'low_confidence' («Не проверено») verdicts. The ONLY thing never cached is a PUBLISHED vacancy
+// (is_vacancy AND confidence >= min) — those ride the normal text_hash dedup contour. The FIRST copy of
+// any text is ALWAYS judged fresh by the AI (a cache row only exists AFTER the first copy was judged), so
+// nothing the model might keep is pre-empted. For 'low_confidence' this means: the first copy is judged,
+// shown in «Не проверено», and cached; every EXACT repeat is served from cache — it never re-hits the paid
+// model AND never creates a SECOND «Не проверено» row (the repeats are hidden as pre-AI skips — a cache
+// skip leaves raw_messages.confidence NULL, and GET /api/raw shows only the AI-judged first copy, which
+// has a non-NULL confidence). This REVERSES the 2026-07-21 stance that excluded low_confidence.
 //
 // WHY a skeleton (owner rule 2026-07-21): bots mimic a message to dodge exact dedup by swapping only a
 // digit (8000→9000) or an emoji (🐠→🏝). The skeleton reduces those to ONE family, so the SECOND such copy
-// reuses the first's reject verdict. CONSCIOUS TRADE-OFF: two texts that differ ONLY by digits/emoji share
-// one reject verdict — acceptable because ONLY rejects are cached and the FIRST copy is always judged by
-// the AI, so a genuine vacancy is still judged fresh (a vacancy is never cached; low_confidence is never
-// cached). A skeleton with NO letters at all (pure digits/emoji/phone) is NOT cached (verdictHash → null):
-// such rows are the structural/spam pre-filter's job, not the verdict cache's.
+// reuses the first's verdict. CONSCIOUS TRADE-OFF: two texts that differ ONLY by digits/emoji share one
+// verdict — acceptable because a PUBLISHED vacancy is never cached and the FIRST copy is always judged by
+// the AI, so a genuine vacancy is still judged fresh. A skeleton with NO letters at all (pure digits/emoji/
+// phone) is NOT cached (verdictHash → null): such rows are the structural/spam pre-filter's job, not the
+// verdict cache's.
 //
 // The two contours must NEVER mix: raw_messages.text_hash keeps its 40-char floor over normalizeForHash
 // (vacancy dedup, byte-exact); THIS hash is the floor-less letter-skeleton (short-repeat reject dedup).
@@ -69,14 +77,18 @@ export function verdictHash(text: string | null | undefined): string | null {
 }
 
 /**
- * Cache POLICY gate (pure): a verdict may be remembered ONLY when it is a genuine NON-vacancy reject.
- * NEVER cache a vacancy (those ride the normal dedup contour and their first copy is always judged fresh)
- * and NEVER cache 'low_confidence' (the visible "Не проверено" tab — its first copy must always reach a
- * human/AI, and repeats there are handled by the vacancy dedup contour). Kept pure so the caller's write
- * path is unit-testable without a DB.
+ * Cache POLICY gate (pure): a verdict may be remembered UNLESS the row was kept as a PUBLISHED vacancy.
+ * `isVacancy` here means "kept as a published vacancy" (is_vacancy AND confidence >= min) — NOT the raw
+ * model flag. Rejects AND 'low_confidence' («Не проверено») verdicts ARE cached now (owner 2026-07-22,
+ * "остаток-3"): the first copy is judged fresh and every exact repeat replays the cached verdict without
+ * hitting the model. A published vacancy is never cached (it rides the normal text_hash dedup contour and
+ * its first copy is always judged fresh). `rejectReason` is retained in the signature for call-site
+ * symmetry and possible future policy hooks. Kept pure so the caller's write path is unit-testable
+ * without a DB.
  */
 export function shouldCacheVerdict(isVacancy: boolean, rejectReason: string): boolean {
-  return !isVacancy && rejectReason !== 'low_confidence';
+  void rejectReason; // reason no longer gates caching (low_confidence is cached too); kept for symmetry
+  return !isVacancy;
 }
 
 /**

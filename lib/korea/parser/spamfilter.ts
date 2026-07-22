@@ -185,6 +185,21 @@ export const SPAM_PATTERNS: RegExp[] = [
   /нужны\s+бабки/iu,
   /(?:напиши(?:те)?|пиши)\s*\+\s+в\s+лс/iu,
   /oy\s+garantiya/iu,
+
+  // --- CANDIDATE D (owner decision 2026-07-22, "остаток-3"): first-person JOB-SEEKER requests. A
+  // person ASKING to be brought over / sponsored is not a vacancy — the board lists offers, not
+  // requests. EXACT application phrasings only (validated 0 FP on 521 confirmed real vacancies): the
+  // seeker's own voice "я хочу поехать/поработать/устроиться", "мне нужно приглашение", "оплачу из
+  // своей зарплаты/зп", "помогите мне со всеми расходами". Cyrillic-safe boundaries on EVERY phrase
+  // (Censor hardening «остаток-3», same durable lesson as RENT_JOB_WORD): the LEFT boundary is
+  // (^|[^а-яё]) on ALL FOUR — without it "оплачу" is a substring of "доплачу/переоплачу/недоплачу"
+  // (a real "доплата" ad) and "помогите" could match mid-word; and the "зп" tail closes on a
+  // Cyrillic-safe (?![а-яё]) lookahead, NEVER an ASCII \b — a \b after the Cyrillic "п" never
+  // matches, so "оплачу … зп" (space/EOL after) used to fail silently.
+  /(^|[^а-яё])я\s+хочу\s+(?:поехать|поработать|устро)/iu,
+  /(^|[^а-яё])мне\s+нужн[оаы]\s+приглашени/iu,
+  /(^|[^а-яё])оплачу\s+(?:их\s+)?(?:из\s+)?(?:своей\s+)?(?:зарплат|зп(?![а-яё]))/iu,
+  /(^|[^а-яё])помогите\s+мне\s+со\s+всеми\s+расход/iu,
 ];
 
 // Emoji-carpet heuristic (owner 2026-07-19): promo blasts that are almost pure emoji with a couple
@@ -295,6 +310,11 @@ export function looksLikeLinkOnly(text: string): boolean {
 const GREETINGS = new Set([
   'привет', 'здравствуйте', 'салам', 'ассалому алейкум',
   'hi', 'hello', 'raxmat', 'рахмат', 'спасибо',
+  // E-lite (owner decision 2026-07-22, "остаток-3"): two EXACT one-liner chit-chat requests that
+  // are a whole message on their own — never a job. Added here (not as a separate rule) exactly as
+  // the owner allowed; validated with 0 FP on 521 confirmed real vacancies. NOTE: "ждут вашего
+  // ответа" was deliberately NOT taken (owner), and bare "как" was left out (too common a word).
+  'помогите мне', 'напиши мне',
 ]);
 
 export function looksLikeEmptyMessage(text: string): boolean {
@@ -309,6 +329,70 @@ export function looksLikeEmptyMessage(text: string): boolean {
     .replace(/\s+/g, ' ')
     .trim();
   return GREETINGS.has(bare);
+}
+
+// --- CANDIDATE A: apartment/room RENTAL ads (owner decision 2026-07-22, "остаток-3"). This is a
+// JOBS board; a "сдаётся ванрум/원룸 …" post or a deposit-format price ("1млн/380тыс") is housing,
+// never a vacancy. Structural, by the shape of looksLikeEmptyMessage (its own ZW-strip + lowercase).
+// Ported BYTE-IDENTICAL from the validated probe (0 FP on 521 confirmed real vacancies).
+//   • RENT_JOB_WORD — any employer/offer word (требуется / вакансия / зарплата / з/п / арбайт /
+//     подработка / график / нужны люди / ищем работника / смена / постоянка / оплата). If it is
+//     present the message is an OFFER (an employer may throw in a вонрум as a PERK), so it is NEVER
+//     cut here — this guard is exactly what spared the real employer-with-housing ad #53.
+//   • RENT_SDAETSYA — "сдаётся/сдается" as a whole word (cyrillic-safe boundaries, never ASCII \b).
+//   • RENT_HOUSE_N — a dwelling noun (ванрум/вонрум/원룸/ван рум/комната/жильё/квартира).
+//   • RENT_PRICE_FMT — the "Nмлн / Nтыс" deposit-then-rent format a rental quotes; a vacancy never does.
+// Fires on (сдаётся AND dwelling-noun) OR the deposit price format — but ONLY when no job word is present.
+// нуж(?:ен|н[а-яё]*) also catches the SINGULAR "нужен работник" (Censor «остаток-3»): the old
+// "нужны?" caught нужн/нужны but MISSED "нужен", so a real employer ad "нужен работник … сдаётся
+// ванрум" slipped past this guard and was wrongly cut as housing. This is a defensive gate — a wider
+// job-word match only SPARES more real offers, so broadening toward "нужен" is safe (0-FP direction).
+const RENT_JOB_WORD =
+  /(^|[^а-яё])(требу[а-яё]*|ваканси[а-яё]*|зарплат[а-яё]*|з[\/. ]?п(?![а-яё])|арбайт[а-яё]*|подработк[а-яё]*|график[а-яё]*|нуж(?:ен|н[а-яё]*)\s+(?:люди|человек|работник|мужчин|женщин|парн|девушк|сотрудник)|ищем\s+(?:работник|людей|сотрудник)|смена[а-яё]*|постоянк[а-яё]*|оплата)/iu;
+const RENT_SDAETSYA = /(^|[^а-яё])сда[её]тся(?![а-яё])/iu;
+// Left boundary (^|[^а-яёa-z0-9]) on every dwelling alternative (Censor «остаток-3»: match the file's
+// boundary convention, cf. the B helper) so a noun can't fire glued inside a longer word; the Cyrillic
+// tails ([а-яё]*) still cover the word's right side and Korean 원룸 rides the same boundary.
+const RENT_HOUSE_N =
+  /(^|[^а-яёa-z0-9])(?:ванрум|вонрум|원룸|ван\s?рум|комнат[а-яё]*|жиль[её]|квартир[а-яё]*)/iu;
+const RENT_PRICE_FMT = /\d+\s*млн\s*\/\s*\d+\s*тыс/iu;
+
+/** True when the message is an apartment/room RENTAL ad, not a job (see block above). */
+export function looksLikeHousingRental(text: string | null | undefined): boolean {
+  if (!text) return false;
+  // ZW-strip + lowercase (mirrors looksLikeSpam / the probe's `norm`) so obfuscated copies match.
+  const t = text.replace(ZERO_WIDTH, '').toLowerCase();
+  if (RENT_JOB_WORD.test(t)) return false; // employer-with-housing safeguard (spared #53)
+  return (RENT_SDAETSYA.test(t) && RENT_HOUSE_N.test(t)) || RENT_PRICE_FMT.test(t);
+}
+
+// --- CANDIDATE C: a job-SEEKER's short self-introduction (owner decision 2026-07-22, "остаток-3").
+// "Меня зовут …, мне 25 лет, я из Узбекистана, у меня нет визы" is a résumé blurb, not an offer. TWO
+// hard gates TOGETHER give the 0-FP result on 521 confirmed real vacancies:
+//   (1) LENGTH — at most 6 letter-words. A real ad is longer; this alone kills almost every FP.
+//   (2) a FIRST-PERSON intro template from the fixed list below.
+// CYRILLIC-SAFE boundaries (durable lesson, and the exact bug this filter hit on #66/#71): ASCII \b /
+// \w never span а-я, so the left boundary is (^|[^а-яё]) and the right is (?![а-яё]) — NEVER \b.
+// Ported BYTE-IDENTICAL from the validated probe.
+const SEEKER_INTRO: RegExp[] = [
+  /^\s*меня\s+зовут(?![а-яё])/iu,
+  /(^|[^а-яё])мне\s+\d+\s*(?:лет|год)/iu,
+  /(^|[^а-яё])я\s+(?:из\s+)?граждан[а-яё]*/iu,
+  /(^|[^а-яё])я\s+из\s+[а-яё]+стан/iu,
+  /(^|[^а-яё])я\s+в\s+сейчас(?![а-яё])/iu,
+  /(^|[^а-яё])у\s+меня\s+нет\s+(?:виз|денег|деньг|документ)/iu,
+];
+// Letter-word tokens (Cyrillic + Latin) for the length gate — matches the probe's tokCount exactly.
+// /g is for String.match only (stateless — no lastIndex); NEVER .test() on this one.
+const SEEKER_WORD_RE = /[а-яёa-z]+/g;
+const SEEKER_MAX_WORDS = 6;
+
+/** True when the message is a short first-person job-seeker self-intro (see block above). */
+export function looksLikeSeekerIntro(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const t = text.replace(ZERO_WIDTH, '').toLowerCase();
+  if ((t.match(SEEKER_WORD_RE) ?? []).length > SEEKER_MAX_WORDS) return false; // hard length gate
+  return SEEKER_INTRO.some((rx) => rx.test(t));
 }
 
 // --- Ruble-denominated pay (owner decision 2026-07-22: "везде где пишут плата рублями это скам").
@@ -343,16 +427,20 @@ export function looksLikeRublePay(text: string | null | undefined): boolean {
 }
 
 /** True when the raw message is near-certain spam (pattern hit OR emoji carpet OR pharma blast OR
- *  mixed-script obfuscation OR link-only drop OR empty/greeting-only message OR ruble-denominated pay). */
+ *  mixed-script obfuscation OR link-only drop OR empty/greeting-only message OR ruble-denominated pay
+ *  OR apartment/room rental OR a short job-seeker self-intro). */
 export function looksLikeSpam(text: string | null | undefined): boolean {
   if (!text) return false;
-  // Structural heuristics run on the RAW text (they inspect scripts/emoji/URLs, not lowercased words).
+  // Structural heuristics run on the RAW text (they inspect scripts/emoji/URLs, not lowercased words);
+  // looksLikeHousingRental / looksLikeSeekerIntro do their OWN ZW-strip + lowercase internally.
   if (looksLikeEmojiCarpet(text)) return true;
   if (looksLikePharma(text)) return true;
   if (looksLikeMixedScript(text)) return true;
   if (looksLikeLinkOnly(text)) return true;
   if (looksLikeEmptyMessage(text)) return true;
   if (looksLikeRublePay(text)) return true;
+  if (looksLikeHousingRental(text)) return true; // Candidate A (остаток-3): rental, not a job
+  if (looksLikeSeekerIntro(text)) return true;   // Candidate C (остаток-3): seeker self-intro
   // Strip zero-width chars BEFORE lowercasing (adult/dating bots splice them inside words to hide
   // from the g8 patterns); MUST precede toLowerCase so the boundary helpers see clean tokens.
   // No /g on the patterns, so .test() is stateless — safe to reuse the module-level array.
