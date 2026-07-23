@@ -266,21 +266,30 @@ export default function PostScreen() {
 
   // Draw the eye to the "Next" CTA after a terminal choice (e.g. picking a city)
   // WITHOUT auto-advancing. `.wizard__nav` is in normal flow (not sticky), so we
-  // scroll the button into view + play one soft warm halo. `flashSeq` remounts
+  // scroll the nav wrapper into view + play one soft warm halo. `flashSeq` remounts
   // the button (key) to replay the one-shot animation; `flashOn` toggles the
   // class. Reduced motion: no scroll/pulse — a constant gentle ring instead
   // (kept until the step changes). The animation self-clears via onAnimationEnd.
-  const nextBtnRef = useRef<HTMLButtonElement>(null);
+  const navRef = useRef<HTMLDivElement>(null);
   const [flashSeq, setFlashSeq] = useState(0);
   const [flashOn, setFlashOn] = useState(false);
   const flashNext = useCallback(() => {
     setFlashSeq((n) => n + 1);
     setFlashOn(true);
-    if (!prefersReducedMotion()) {
+    if (prefersReducedMotion()) return;
+    // Scroll the STABLE nav wrapper (no `key`, never remounts) — NOT the keyed
+    // "Next" button, whose remount churns its ref. Double rAF so the scroll runs
+    // only AFTER React has committed and the browser has laid out the (tall,
+    // all-provinces-expanded) city step. A single frame fired before layout
+    // settled on desktop Chrome, so scrollIntoView computed a stale target and
+    // appeared to do nothing; the mobile WebView caught it only by scheduling
+    // luck (hence "works on phone, not desktop"). There is no inner overflow
+    // scroller, so this resolves to the document element on every platform.
+    requestAnimationFrame(() =>
       requestAnimationFrame(() =>
-        nextBtnRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
-      );
-    }
+        navRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
+      ),
+    );
   }, []);
   // Clear the flash whenever the user navigates between steps, so the halo/ring
   // never lingers onto an unrelated step.
@@ -824,13 +833,12 @@ export default function PostScreen() {
             {/* In-app wizard nav is the primary CTA on this screen. We drive it in the
                 DOM (brand-orange) instead of the native Telegram MainButton so the
                 action is on-brand and the bottom TabBar can stay visible. */}
-            <div className="wizard__nav">
+            <div className="wizard__nav" ref={navRef}>
               <button className="btn btn--ghost" onClick={back}>
                 {step === 0 ? t('nav.back') : t('post.prev')}
               </button>
               <button
                 key={flashSeq}
-                ref={nextBtnRef}
                 className={`btn btn--primary ${flashOn ? 'btn--flash' : ''}`}
                 onClick={next}
                 disabled={!stepValid(step) || submitting}

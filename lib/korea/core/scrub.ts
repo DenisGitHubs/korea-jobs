@@ -56,14 +56,69 @@ const SALARY_MARKER =
 const RE_MONEY_AFTER = new RegExp(`^\\s*(?:[~\\-–—]\\s*[\\d\\s.,]*)?(?:${MONEY_UNIT})`, 'iu');
 // Salary marker immediately before the number ("월 2 500 000", "зарплата 2500000").
 const RE_MONEY_BEFORE = new RegExp(`(?:${SALARY_MARKER})[\\s:：]*$`, 'iu');
-// Generic long digit run (the former rule #7 catch-all pattern), now applied via a callback.
+// A run immediately followed by '%' is a percentage / tax rate ("120.000 -3.3%", "수수료 3%"),
+// never a phone (no phone carries a percent sign). Rescue it like money — but only after the
+// phone-length guard in isMoneyRun (see there): phone-shaped runs (leading '+' or 0) are already
+// gone before this is consulted, and an unformatted phone typed without either is refused there.
+const RE_PERCENT_AFTER = /^\s*%/;
+
+// --- Clock-time protection -------------------------------------------------------------------
+// Real clock time (HH:MM): 1-2 hour digits, ':', EXACTLY 2 minute digits, bounded by non-digits
+// on both sides. The `(?!\d)` tail is what makes it a REAL time and not the head of a phone:
+// "15:00" / "9:00" match, but "9:01012345678" does NOT (its ":" is followed by a phone, not by a
+// clean 2-digit minute). Real times are masked out before the generic phone pass and restored
+// after, so that pass can neither eat a time nor start on a time's digits. This replaces the old,
+// leaky `(?<!\d:\d?)` lookbehind, which blindly shielded 2 positions after ANY "digit:" — so a
+// phone glued to a fake "9:" started on its 3rd digit and part of it survived.
+const RE_CLOCK_TIME = /(?<!\d)\d{1,2}:\d{2}(?!\d)/g;
+
+// Placeholder frame for a stashed time. Private-Use codepoints (U+E000/U+E001): not letters,
+// digits, spaces or punctuation, so they appear in NO scrub pattern AND act as run boundaries —
+// the framed index can never be swallowed by the generic phone pass. Built from char codes so the
+// source stays pure ASCII (no invisible characters in the file).
+const TOK_OPEN = String.fromCharCode(0xe000);
+const TOK_CLOSE = String.fromCharCode(0xe001);
+const RE_TIME_TOKEN = new RegExp(`${TOK_OPEN}(\\d+)${TOK_CLOSE}`, 'g');
+
+// Generic long digit run (the former rule #7 catch-all pattern), applied via a callback. No time
+// guard here: real clock times are already masked away (see RE_CLOCK_TIME) before this runs, so
+// the run can only start on genuine, non-time digits.
 const RE_GENERIC_PHONE = /\+?\d[\d\s().\-]{7,}\d/g;
 
-// True when a long digit run reads as money (a unit follows, or a pay marker precedes it).
+// Longest run of consecutive digits inside a token. Tells a grouped money figure (many short
+// groups, e.g. "12.000.000" -> 3) from an unformatted phone (one long run, e.g. "821012345678"
+// -> 12). Used to keep the percent rescue from ever saving a phone.
+function longestDigitRun(s: string): number {
+  let max = 0;
+  let cur = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 48 && c <= 57) {
+      cur += 1;
+      if (cur > max) max = cur;
+    } else {
+      cur = 0;
+    }
+  }
+  return max;
+}
+
+// True when a long digit run reads as a NON-phone (a money unit follows, a pay marker precedes,
+// or a percent sign follows). Only ever ADDS a "keep"; the default for anything ambiguous is REDACT.
 function isMoneyRun(match: string, offset: number, full: string): boolean {
   const after = full.slice(offset + match.length, offset + match.length + 32);
   const before = full.slice(Math.max(0, offset - 24), offset);
-  return RE_MONEY_AFTER.test(after) || RE_MONEY_BEFORE.test(before);
+  if (RE_MONEY_AFTER.test(after) || RE_MONEY_BEFORE.test(before)) return true;
+  // Percent rescue is stricter than the money-unit/marker rescue: a run right before '%' is a
+  // rate/amount ("120.000 -3.3%") — but ONLY when it is not phone-length. An international number
+  // typed without '+' or a leading 0 ("821012345678%") is NOT phone-shaped and would otherwise be
+  // saved by the bare '%'. We refuse the rescue for any run whose longest contiguous digit group
+  // reaches phone length (>= 9). Grouped salary figures never do (max ~3), so this keeps
+  // "120.000 -3.3%" / "12.000.000 -3.3%" whole while redacting the phone. Threshold 9 = the
+  // shortest plausible phone (KR mobile is 10-11, +82 is 11-13), far above the 3-4 contiguous
+  // digits of a grouped amount.
+  if (RE_PERCENT_AFTER.test(after) && longestDigitRun(match) < 9) return true;
+  return false;
 }
 
 /**
@@ -73,31 +128,46 @@ function isMoneyRun(match: string, offset: number, full: string): boolean {
  */
 export function scrubContacts(text: string | null): string | null {
   if (!text) return text;
-  return (
-    text
-      // 1) Chat/profile links.
-      .replace(/(?:https?:\/\/)?(?:t\.me|wa\.me|open\.kakao\.com|kakao\.com)\/\S+/gi, REDACT)
-      // 2) E-mail — redact the WHOLE address. Must run before the @handle rule, which would
-      //    otherwise only eat "@domain" and leave the local part + ".com" behind.
-      .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, REDACT)
-      // 3) Messenger word + explicit "id"/"айди" marker + handle ("kakao id: xxx"). Keeps the
-      //    app word (so the card still reads "kakao [скрыто]") and redacts the id.
-      .replace(RE_MSG_ID_MARKER, `$1 ${REDACT}`)
-      // 4) Messenger word + separator + handle ("카톡 worker2025", "telegram: xxx", "line xxx").
-      .replace(RE_MSG_SEP, `$1 ${REDACT}`)
-      // 5) Bare @handles.
-      .replace(/@[A-Za-z0-9_]{4,}/g, REDACT)
-      // 6) Labelled phone — a number right after a phone word, even if short/oddly grouped.
-      .replace(RE_PHONE_LABELLED, REDACT)
-      // 7) Generic phone: a long run of digits/space/()-.  Formerly redacted EVERY such run,
-      //    which also ate big salary amounts ("2 500 000~3 000 000 вон" -> "[скрыто]~[скрыто]").
-      //    Now: still redact anything phone-shaped (leading '+' or a leading 0 — every Korean and
-      //    international number; labelled numbers are already gone via #6), but KEEP a run that
-      //    carries a clear money signal. Default is REDACT, so this only rescues amounts.
-      .replace(RE_GENERIC_PHONE, (m: string, offset: number, full: string) => {
-        const digits = m.replace(/\D/g, '');
-        if (m.includes('+') || digits.startsWith('0')) return REDACT; // phone-shaped
-        return isMoneyRun(m, offset, full) ? m : REDACT;
-      })
-  );
+
+  // Protect real clock times (HH:MM) up front: stash each into a Private-Use placeholder that
+  // carries no colon and — framed by U+E000/U+E001 — no swallowable digits, so no later rule
+  // (least of all the generic phone pass) can match inside or across it. Restored verbatim at the
+  // very end. A fake "9:01012345678" is NOT a real time (RE_CLOCK_TIME), so it is left in place
+  // and its phone tail is redacted normally.
+  const times: string[] = [];
+  const stashed = text.replace(RE_CLOCK_TIME, (m) => {
+    const token = `${TOK_OPEN}${times.length}${TOK_CLOSE}`;
+    times.push(m);
+    return token;
+  });
+
+  const scrubbed = stashed
+    // 1) Chat/profile links.
+    .replace(/(?:https?:\/\/)?(?:t\.me|wa\.me|open\.kakao\.com|kakao\.com)\/\S+/gi, REDACT)
+    // 2) E-mail — redact the WHOLE address. Must run before the @handle rule, which would
+    //    otherwise only eat "@domain" and leave the local part + ".com" behind.
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, REDACT)
+    // 3) Messenger word + explicit "id"/"айди" marker + handle ("kakao id: xxx"). Keeps the
+    //    app word (so the card still reads "kakao [скрыто]") and redacts the id.
+    .replace(RE_MSG_ID_MARKER, `$1 ${REDACT}`)
+    // 4) Messenger word + separator + handle ("카톡 worker2025", "telegram: xxx", "line xxx").
+    .replace(RE_MSG_SEP, `$1 ${REDACT}`)
+    // 5) Bare @handles.
+    .replace(/@[A-Za-z0-9_]{4,}/g, REDACT)
+    // 6) Labelled phone — a number right after a phone word, even if short/oddly grouped.
+    .replace(RE_PHONE_LABELLED, REDACT)
+    // 7) Generic phone: a long run of digits/space/()-.  Formerly redacted EVERY such run,
+    //    which also ate big salary amounts ("2 500 000~3 000 000 вон" -> "[скрыто]~[скрыто]").
+    //    Now: still redact anything phone-shaped (leading '+' or a leading 0 — every Korean and
+    //    international number; labelled numbers are already gone via #6), but KEEP a run that
+    //    carries a clear money signal. Default is REDACT, so this only rescues amounts.
+    .replace(RE_GENERIC_PHONE, (m: string, offset: number, full: string) => {
+      const digits = m.replace(/\D/g, '');
+      if (m.includes('+') || digits.startsWith('0')) return REDACT; // phone-shaped
+      return isMoneyRun(m, offset, full) ? m : REDACT;
+    });
+
+  // Restore the stashed real clock times verbatim. The token only ever holds a valid index; the
+  // `?? full` fallback keeps the replacer total (and satisfies noUncheckedIndexedAccess).
+  return scrubbed.replace(RE_TIME_TOKEN, (full, i: string) => times[Number(i)] ?? full);
 }
