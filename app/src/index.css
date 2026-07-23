@@ -1817,6 +1817,42 @@ a {
   flex: 1;
 }
 
+/* One soft warm halo on "Next" after a terminal choice (e.g. picking a city) to
+   draw the eye WITHOUT auto-advancing. Layered as a SECOND animation so the
+   button keeps its living kj-flow gradient (the shorthand would otherwise drop
+   it). Plays once; the component remounts the button (key) to replay it. */
+.wizard__nav .btn--primary.btn--flash {
+  animation: kj-flow 5.5s ease-in-out infinite, kj-next-flash 0.5s ease-out;
+}
+
+@keyframes kj-next-flash {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--kj-brand) 60%, transparent),
+      0 8px 22px -8px color-mix(in srgb, var(--kj-brand) 62%, transparent),
+      inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  }
+  55% {
+    box-shadow: 0 0 0 7px color-mix(in srgb, var(--kj-brand) 0%, transparent),
+      0 8px 22px -8px color-mix(in srgb, var(--kj-brand) 62%, transparent),
+      inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--kj-brand) 0%, transparent),
+      0 8px 22px -8px color-mix(in srgb, var(--kj-brand) 62%, transparent),
+      inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  }
+}
+
+/* Reduced motion: no scroll/pulse — a constant, gentle brand ring instead. */
+@media (prefers-reduced-motion: reduce) {
+  .wizard__nav .btn--primary.btn--flash {
+    animation: none !important;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--kj-brand) 40%, transparent),
+      0 8px 22px -8px color-mix(in srgb, var(--kj-brand) 62%, transparent),
+      inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  }
+}
+
 .consent {
   display: flex;
   gap: 10px;

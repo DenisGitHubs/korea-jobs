@@ -14,6 +14,7 @@ import {
   workTypeKey,
 } from '../shared/labels';
 import { WorkTypeIcon } from '../components/icons/WorkTypeIcon';
+import { prefersReducedMotion } from '../lib/motion';
 import { useSettingsStore } from '../store/settingsStore';
 import { useBackButton } from '../hooks/useBackButton';
 import { AppBar } from '../components/AppBar';
@@ -28,8 +29,12 @@ import { MyAdsTab } from './post/MyAdsTab';
 const CONSENT_KEY = 'kj:ads-consent';
 /** Versioned key for the auto-saved compose draft (Draft + step). Bump the
  *  suffix if the Draft shape changes incompatibly. */
-const DRAFT_KEY = 'kj:adDraft.v1';
-const STEP_COUNT = 7;
+const DRAFT_KEY = 'kj:adDraft.v2';
+/** Pre-v2 draft key (7-step wizard, no scheduleOther). Purged on load so a stale
+ *  older draft can never rehydrate the new 5-step form. */
+const DRAFT_KEY_OLD = 'kj:adDraft.v1';
+const DRAFT_VER = 2;
+const STEP_COUNT = 5;
 const LAST = STEP_COUNT - 1;
 const MIN_DESC = 15;
 const CONTACT_RAW_MAX = 300;
@@ -39,6 +44,14 @@ const CONTACT_HINT_FROM = 250;
 
 /** Fees offered in the wizard — deliberately no 'unknown' (owner decision). */
 const WIZARD_FEES: readonly PlacementFee[] = ['free', 'paid'];
+
+/** Schedule quick-pick presets (single-select chips). d.schedule stays a plain
+ *  string (unchanged AdInput contract): a preset stores its localized label, a
+ *  free-typed value is kept as-is under the "Other" chip. Preset labels are in
+ *  the author's language — a deliberate trade-off to avoid touching the contract. */
+const SCHED_PRESET_KEYS = ['w52', 'w61', 'shift', 'flex'] as const;
+const SCHED_CHIP_KEYS = ['w52', 'w61', 'shift', 'flex', 'other'] as const;
+type SchedKey = (typeof SCHED_CHIP_KEYS)[number];
 
 /** Short i18n tags used when several contact methods are joined into contact_raw. */
 const CONTACT_TAG_KEY: Record<ContactKind, string> = {
@@ -64,6 +77,9 @@ interface Draft {
   cityOther: boolean;
   cityText: string;
   schedule: string;
+  /** True when the "Other" schedule chip is chosen (free-text mode, even while
+   *  the schedule string is still empty). */
+  scheduleOther: boolean;
   housing: TriState;
   housingTerms: string;
   meals: TriState;
@@ -113,6 +129,20 @@ function contactStepValid(d: Draft, username: string, t: TFunction): boolean {
   return raw.length > 0 && raw.length <= CONTACT_RAW_MAX;
 }
 
+/** Which schedule chip is active for the current draft: a matched preset, the
+ *  'other' free-text chip, or none. Preset match is against the current-language
+ *  labels — an edit-mode string that doesn't match falls into 'other' (value
+ *  preserved), never lost. */
+function activeSchedule(d: Draft, t: TFunction): SchedKey | null {
+  if (d.scheduleOther) return 'other';
+  const s = d.schedule.trim();
+  if (!s) return null;
+  for (const k of SCHED_PRESET_KEYS) {
+    if (t(`post.sched.${k}`) === s) return k;
+  }
+  return null;
+}
+
 function loadConsent(): boolean {
   try {
     return localStorage.getItem(CONSENT_KEY) === '1';
@@ -134,6 +164,7 @@ function emptyDraft(username: string): Draft {
     cityOther: false,
     cityText: '',
     schedule: '',
+    scheduleOther: false,
     housing: 'unknown',
     housingTerms: '',
     meals: 'unknown',
@@ -153,10 +184,13 @@ function emptyDraft(username: string): Draft {
  *  falls back to a valid default (tolerant of older payloads). */
 function loadDraft(username: string): { d: Draft; step: number } | null {
   try {
+    // One-time purge of the pre-v2 draft: an older 7-step payload must never
+    // rehydrate the new 5-step form (mismatched version → treated as absent).
+    localStorage.removeItem(DRAFT_KEY_OLD);
     const raw = localStorage.getItem(DRAFT_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { v?: number; step?: number; d?: Partial<Draft> } | null;
-    if (!parsed || parsed.v !== 1 || typeof parsed.step !== 'number' || !parsed.d) return null;
+    if (!parsed || parsed.v !== DRAFT_VER || typeof parsed.step !== 'number' || !parsed.d) return null;
     const d: Draft = { ...emptyDraft(username), ...parsed.d };
     const step = Math.min(Math.max(0, Math.floor(parsed.step)), LAST);
     return { d, step };
@@ -167,9 +201,14 @@ function loadDraft(username: string): { d: Draft; step: number } | null {
 
 /** Rebuild a wizard Draft from an existing ad (edit mode). Contact is handled
  *  separately as a single free-text field so the original string round-trips. */
-function draftFromAd(ad: AdMine): Draft {
+function draftFromAd(ad: AdMine, t: TFunction): Draft {
   const fee: PlacementFee | null =
     ad.placement_fee === 'paid' ? 'paid' : ad.placement_fee === 'free' ? 'free' : null;
+  // A stored schedule that matches no preset (current language) opens under the
+  // "Other" chip so the original text is preserved and editable, never dropped.
+  const sched = ad.schedule ?? '';
+  const schedTrim = sched.trim();
+  const schedIsPreset = schedTrim !== '' && SCHED_PRESET_KEYS.some((k) => t(`post.sched.${k}`) === schedTrim);
   return {
     title: ad.title,
     workType: ad.work_type,
@@ -181,7 +220,8 @@ function draftFromAd(ad: AdMine): Draft {
     city: ad.city ? ad.city.slug : null,
     cityOther: !ad.city && !!ad.city_text,
     cityText: ad.city_text ?? '',
-    schedule: ad.schedule ?? '',
+    schedule: sched,
+    scheduleOther: schedTrim !== '' && !schedIsPreset,
     housing: boolToTri(ad.has_housing),
     housingTerms: ad.housing_terms ?? '',
     meals: boolToTri(ad.has_meals),
@@ -224,6 +264,42 @@ export default function PostScreen() {
   const [d, setD] = useState<Draft>(restored.current.d);
   const patch = useCallback((p: Partial<Draft>) => setD((prev) => ({ ...prev, ...p })), []);
 
+  // Draw the eye to the "Next" CTA after a terminal choice (e.g. picking a city)
+  // WITHOUT auto-advancing. `.wizard__nav` is in normal flow (not sticky), so we
+  // scroll the button into view + play one soft warm halo. `flashSeq` remounts
+  // the button (key) to replay the one-shot animation; `flashOn` toggles the
+  // class. Reduced motion: no scroll/pulse — a constant gentle ring instead
+  // (kept until the step changes). The animation self-clears via onAnimationEnd.
+  const nextBtnRef = useRef<HTMLButtonElement>(null);
+  const [flashSeq, setFlashSeq] = useState(0);
+  const [flashOn, setFlashOn] = useState(false);
+  const flashNext = useCallback(() => {
+    setFlashSeq((n) => n + 1);
+    setFlashOn(true);
+    if (!prefersReducedMotion()) {
+      requestAnimationFrame(() =>
+        nextBtnRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
+      );
+    }
+  }, []);
+  // Clear the flash whenever the user navigates between steps, so the halo/ring
+  // never lingers onto an unrelated step.
+  useEffect(() => {
+    setFlashOn(false);
+  }, [step]);
+
+  const activeSched = activeSchedule(d, t);
+  const pickSchedule = (key: SchedKey): void => {
+    if (key === 'other') {
+      // Toggle free-text mode; entering it starts with an empty schedule string.
+      patch(d.scheduleOther ? { scheduleOther: false, schedule: '' } : { scheduleOther: true, schedule: '' });
+      return;
+    }
+    const label = t(`post.sched.${key}`);
+    const on = !d.scheduleOther && d.schedule.trim() === label;
+    patch({ scheduleOther: false, schedule: on ? '' : label });
+  };
+
   // Auto-save the compose draft (Draft + step) so leaving for another bottom tab
   // and coming back never loses progress. Never while editing an existing ad
   // (only a fresh compose draft is kept); a pristine draft clears the key.
@@ -234,7 +310,7 @@ export default function PostScreen() {
       if (step === 0 && JSON.stringify(d) === pristine) {
         localStorage.removeItem(DRAFT_KEY);
       } else {
-        localStorage.setItem(DRAFT_KEY, JSON.stringify({ v: 1, step, d }));
+        localStorage.setItem(DRAFT_KEY, JSON.stringify({ v: DRAFT_VER, step, d }));
       }
     } catch {
       /* storage blocked */
@@ -250,18 +326,29 @@ export default function PostScreen() {
   const stepValid = (s: number): boolean => {
     switch (s) {
       case 0:
-        return d.title.trim().length > 0 && d.description.trim().length >= MIN_DESC;
+        // "About the vacancy": title + description (min length) required, salary
+        // must contain a digit, and a fee choice (free/paid) is made. Work type
+        // and schedule are optional.
+        return (
+          d.title.trim().length > 0 &&
+          d.description.trim().length >= MIN_DESC &&
+          salaryHasDigit &&
+          d.placementFee !== null
+        );
       case 1:
-        // At least one digit in the salary, and a fee choice (free/paid) is made.
-        return salaryHasDigit && d.placementFee !== null;
-      case 3:
+        // "Terms" (visa + housing + meals) are all optional — always passable.
+        return true;
+      case 2:
         // City is optional, but "Other" requires a typed city name.
         return d.cityOther ? d.cityText.trim().length > 0 : true;
-      case 5:
+      case 3:
+        // Contact (was step 5) — explicitly re-indexed so it can't fall through
+        // to `default: true` and leave "Next" enabled without a contact.
         return editingId
           ? editContactLen > 0 && editContactLen <= CONTACT_RAW_MAX
           : contactStepValid(d, username, t);
-      case 6:
+      case 4:
+        // Review + consent (was step 6) — explicitly re-indexed.
         return consent;
       default:
         return true;
@@ -390,7 +477,7 @@ export default function PostScreen() {
   /** Enter edit mode for an ad picked from the "My ads" list. */
   const startEdit = useCallback(
     (ad: AdMine) => {
-      setD(draftFromAd(ad));
+      setD(draftFromAd(ad, t));
       setEditContact(ad.contact_raw ?? '');
       setEditContactKind(ad.contact_kind ?? 'other');
       setEditingId(ad.id);
@@ -400,7 +487,7 @@ export default function PostScreen() {
       setSubmitError(null);
       setTab('compose');
     },
-    [],
+    [t],
   );
 
   const toggleContact = useCallback((k: ContactKind) => {
@@ -533,11 +620,6 @@ export default function PostScreen() {
                   <div className="region__title">{t('post.workTypeLabel')}</div>
                   <ChipSelect grid single options={workOptions} value={d.workType ? [d.workType] : []} onChange={(n) => patch({ workType: n[0] ?? null })} />
                 </div>
-                <Field label={t('post.descLabel')} value={d.description} onChange={(v) => patch({ description: v })} placeholder={t('post.descPlaceholder')} multiline rows={5} maxLength={2000} hint={t('post.descHint')} />
-              </div>
-            ) : step === 1 ? (
-              <div className="stack stack--wizard">
-                <div className="wizard__headline">{t('post.s2.title')}</div>
                 <Field
                   label={t('post.salaryLabel')}
                   value={d.salaryText}
@@ -552,38 +634,38 @@ export default function PostScreen() {
                 {d.placementFee === 'paid' ? (
                   <Field label={t('post.feeTermsLabel')} value={d.feeTerms} onChange={(v) => patch({ feeTerms: v })} placeholder={t('post.feeTermsPlaceholder')} multiline rows={3} />
                 ) : null}
-              </div>
-            ) : step === 2 ? (
-              <div className="stack stack--wizard">
-                <div className="wizard__headline">{t('post.s3.title')}</div>
-                <ChipSelect grid={2} options={visaOptions} value={d.visa} onChange={onVisaChange} />
-                <div className="hint">{t('post.visaHint')}</div>
-              </div>
-            ) : step === 3 ? (
-              <div className="stack stack--wizard">
-                <div className="wizard__headline">{t('post.cityLabel')}</div>
-                <CityPicker compact single value={d.city ? [d.city] : []} onChange={(n) => patch({ city: n[0] ?? null, cityOther: false })} />
-                <div className="section">
-                  <button
-                    type="button"
-                    className="row"
-                    onClick={() => patch({ cityOther: true, city: null })}
-                    aria-pressed={d.cityOther}
-                  >
-                    <span className="row__label">{t('post.cityOtherOption')}</span>
-                    <span className={`check check--radio ${d.cityOther ? 'check--on' : ''}`} aria-hidden>
-                      ✓
-                    </span>
-                  </button>
+                <div>
+                  <div className="region__title">{t('post.scheduleLabel')}</div>
+                  <div className="chips">
+                    {SCHED_CHIP_KEYS.map((k) => {
+                      const on = activeSched === k;
+                      return (
+                        <button
+                          key={k}
+                          type="button"
+                          className={`chip ${on ? 'chip--on' : ''}`}
+                          onClick={() => pickSchedule(k)}
+                          aria-pressed={on}
+                        >
+                          {t(`post.sched.${k}`)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {activeSched === 'other' ? (
+                    <Field label={t('post.scheduleLabel')} value={d.schedule} onChange={(v) => patch({ schedule: v })} placeholder={t('post.schedulePlaceholder')} />
+                  ) : null}
                 </div>
-                {d.cityOther ? (
-                  <Field label={t('post.cityOtherLabel')} value={d.cityText} onChange={(v) => patch({ cityText: v })} placeholder={t('post.cityOtherPlaceholder')} maxLength={60} />
-                ) : null}
-                <Field label={t('post.scheduleLabel')} value={d.schedule} onChange={(v) => patch({ schedule: v })} placeholder={t('post.schedulePlaceholder')} />
+                <Field label={t('post.descLabel')} value={d.description} onChange={(v) => patch({ description: v })} placeholder={t('post.descPlaceholder')} multiline rows={5} maxLength={2000} hint={t('post.descHint')} />
               </div>
-            ) : step === 4 ? (
+            ) : step === 1 ? (
               <div className="stack stack--wizard">
-                <div className="wizard__headline">{t('post.s5.title')}</div>
+                <div className="wizard__headline">{t('post.termsTitle')}</div>
+                <div>
+                  <div className="region__title">{t('post.s3.title')}</div>
+                  <ChipSelect grid={2} options={visaOptions} value={d.visa} onChange={onVisaChange} />
+                  <div className="hint">{t('post.visaHint')}</div>
+                </div>
                 <div className="section">
                   <div className="row">
                     <span className="row__label">{t('filter.housing')}</span>
@@ -603,7 +685,36 @@ export default function PostScreen() {
                   <Field label={t('post.mealsInfoLabel')} value={d.mealsInfo} onChange={(v) => patch({ mealsInfo: v })} placeholder={t('post.mealsInfoPlaceholder')} />
                 ) : null}
               </div>
-            ) : step === 5 ? (
+            ) : step === 2 ? (
+              <div className="stack stack--wizard">
+                <div className="wizard__headline">{t('post.cityLabel')}</div>
+                <CityPicker
+                  compact
+                  single
+                  value={d.city ? [d.city] : []}
+                  onChange={(n) => {
+                    patch({ city: n[0] ?? null, cityOther: false });
+                    if (n[0]) flashNext();
+                  }}
+                />
+                <div className="section">
+                  <button
+                    type="button"
+                    className="row"
+                    onClick={() => patch({ cityOther: true, city: null })}
+                    aria-pressed={d.cityOther}
+                  >
+                    <span className="row__label">{t('post.cityOtherOption')}</span>
+                    <span className={`check check--radio ${d.cityOther ? 'check--on' : ''}`} aria-hidden>
+                      ✓
+                    </span>
+                  </button>
+                </div>
+                {d.cityOther ? (
+                  <Field label={t('post.cityOtherLabel')} value={d.cityText} onChange={(v) => patch({ cityText: v })} placeholder={t('post.cityOtherPlaceholder')} maxLength={60} />
+                ) : null}
+              </div>
+            ) : step === 3 ? (
               editingId ? (
                 <div className="stack stack--wizard">
                   <div className="wizard__headline">{t('post.contactLabel')}</div>
@@ -688,6 +799,7 @@ export default function PostScreen() {
                   <SummaryRow k={t('post.workTypeLabel')} v={d.workType ? t(workTypeKey(d.workType)) : '—'} />
                   <SummaryRow k={t('post.salaryLabel')} v={d.salaryText || '—'} />
                   <SummaryRow k={t('post.feeLabel')} v={d.placementFee ? t(feeKey(d.placementFee)) : '—'} />
+                  <SummaryRow k={t('post.scheduleLabel')} v={d.schedule.trim() || '—'} />
                   <SummaryRow k={t('post.s3.title')} v={d.visa.length ? d.visa.map((x) => t(visaKey(x))).join(', ') : '—'} />
                   <SummaryRow k={t('post.cityLabel')} v={d.cityOther ? d.cityText.trim() || '—' : d.city ?? '—'} />
                   <SummaryRow k={t('post.contactLabel')} v={(editingId ? editContact : contactJoined) || '—'} />
@@ -716,7 +828,16 @@ export default function PostScreen() {
               <button className="btn btn--ghost" onClick={back}>
                 {step === 0 ? t('nav.back') : t('post.prev')}
               </button>
-              <button className="btn btn--primary" onClick={next} disabled={!stepValid(step) || submitting}>
+              <button
+                key={flashSeq}
+                ref={nextBtnRef}
+                className={`btn btn--primary ${flashOn ? 'btn--flash' : ''}`}
+                onClick={next}
+                disabled={!stepValid(step) || submitting}
+                onAnimationEnd={(e) => {
+                  if (e.animationName === 'kj-next-flash') setFlashOn(false);
+                }}
+              >
                 {step < LAST
                   ? t('post.next')
                   : submitting
