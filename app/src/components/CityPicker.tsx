@@ -82,7 +82,15 @@ export function CityPicker({
     seeded.current = true;
     const init: Record<string, boolean> = {};
     for (const g of grouped) {
-      if (g.items.length > 1) init[g.region] = g.items.some((c) => value.includes(c.slug));
+      if (g.items.length > 1) {
+        // single (ad wizard): expand EVERY province so the full city list is
+        // visible for the radio pick. The shared accordion otherwise defaults to
+        // "all collapsed", which in the compact wizard step hid every multi-city
+        // province and made the list look empty (regression from the accordion
+        // rework). multi (filter/settings) keeps collapsed-by-default, opening
+        // only a province that already holds a selected city.
+        init[g.region] = single ? true : g.items.some((c) => value.includes(c.slug));
+      }
     }
     setOpen(init);
     // eslint-disable-next-line react-hooks/exhaustive-deps

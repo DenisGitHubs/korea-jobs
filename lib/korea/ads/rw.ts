@@ -173,8 +173,12 @@ export async function adsCreate(req: ReqLike, res: ResLike): Promise<void> {
     }
 
     send(res, 200, { id: id ?? null, status });
-  } catch {
-    sendError(res, ApiErrorCode.Internal);
+  } catch (err) {
+    // Thread the cause into the errorId funnel: sendError logs the real DB/transport message + stack
+    // next to the id (never the body/contacts). WITHOUT this the log was just "[api] error internal
+    // <id>" with no reason — a create failure (e.g. a schema/column fault on the INSERT) was
+    // undiagnosable even though the client had an errorId to quote.
+    sendError(res, ApiErrorCode.Internal, 'ad_create_failed', err);
   }
 }
 
@@ -249,8 +253,8 @@ export async function adsMine(req: ReqLike, res: ResLike): Promise<void> {
       expires_at: r.expires_at ? new Date(r.expires_at).toISOString() : null,
     }));
     send(res, 200, { items });
-  } catch {
-    sendError(res, ApiErrorCode.Internal);
+  } catch (err) {
+    sendError(res, ApiErrorCode.Internal, 'ads_mine_failed', err);
   }
 }
 
@@ -321,7 +325,7 @@ export async function adsModerate(req: ReqLike, res: ResLike): Promise<void> {
     const { found } = await moderateAd(id, action, reason);
     if (!found) return sendError(res, ApiErrorCode.NotFound);
     send(res, 200, { ok: true });
-  } catch {
-    sendError(res, ApiErrorCode.Internal);
+  } catch (err) {
+    sendError(res, ApiErrorCode.Internal, 'ad_moderate_failed', err);
   }
 }

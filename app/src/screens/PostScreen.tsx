@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -26,10 +26,16 @@ import { IconCheckCircle, IconClock, IconWarn } from '../components/icons/StateI
 import { MyAdsTab } from './post/MyAdsTab';
 
 const CONSENT_KEY = 'kj:ads-consent';
+/** Versioned key for the auto-saved compose draft (Draft + step). Bump the
+ *  suffix if the Draft shape changes incompatibly. */
+const DRAFT_KEY = 'kj:adDraft.v1';
 const STEP_COUNT = 7;
 const LAST = STEP_COUNT - 1;
 const MIN_DESC = 15;
 const CONTACT_RAW_MAX = 300;
+/** Only surface the contact-length hint once the text nears the cap — a bare
+ *  "19/300" on a short contact just confused users (owner feedback). */
+const CONTACT_HINT_FROM = 250;
 
 /** Fees offered in the wizard — deliberately no 'unknown' (owner decision). */
 const WIZARD_FEES: readonly PlacementFee[] = ['free', 'paid'];
@@ -141,6 +147,24 @@ function emptyDraft(username: string): Draft {
   };
 }
 
+/** Restore a persisted compose draft (versioned key). Returns null on a missing
+ *  key, broken JSON or a version/shape mismatch — the wizard then starts empty.
+ *  The payload is merged onto a fresh empty draft so any missing/renamed field
+ *  falls back to a valid default (tolerant of older payloads). */
+function loadDraft(username: string): { d: Draft; step: number } | null {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { v?: number; step?: number; d?: Partial<Draft> } | null;
+    if (!parsed || parsed.v !== 1 || typeof parsed.step !== 'number' || !parsed.d) return null;
+    const d: Draft = { ...emptyDraft(username), ...parsed.d };
+    const step = Math.min(Math.max(0, Math.floor(parsed.step)), LAST);
+    return { d, step };
+  } catch {
+    return null;
+  }
+}
+
 /** Rebuild a wizard Draft from an existing ad (edit mode). Contact is handled
  *  separately as a single free-text field so the original string round-trips. */
 function draftFromAd(ad: AdMine): Draft {
@@ -175,8 +199,15 @@ export default function PostScreen() {
   const navigate = useNavigate();
   const username = useSettingsStore((s) => s.username);
 
+  // Restore a persisted compose draft ONCE (survives bottom-tab switches that
+  // unmount this screen). Read a single snapshot so d + step stay consistent.
+  const restored = useRef<{ d: Draft; step: number } | null>(null);
+  if (restored.current === null) {
+    restored.current = loadDraft(username) ?? { d: emptyDraft(username), step: 0 };
+  }
+
   const [tab, setTab] = useState<Tab>('compose');
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(restored.current.step);
   const [phase, setPhase] = useState<'form' | 'result'>('form');
   const [result, setResult] = useState<'approved' | 'pending' | 'rejected' | null>(null);
   const [rejectReason, setRejectReason] = useState<string | null>(null);
@@ -190,8 +221,26 @@ export default function PostScreen() {
   const [editContactKind, setEditContactKind] = useState<ContactKind>('other');
   const [lastWasEdit, setLastWasEdit] = useState(false);
 
-  const [d, setD] = useState<Draft>(() => emptyDraft(username));
+  const [d, setD] = useState<Draft>(restored.current.d);
   const patch = useCallback((p: Partial<Draft>) => setD((prev) => ({ ...prev, ...p })), []);
+
+  // Auto-save the compose draft (Draft + step) so leaving for another bottom tab
+  // and coming back never loses progress. Never while editing an existing ad
+  // (only a fresh compose draft is kept); a pristine draft clears the key.
+  const pristine = useMemo(() => JSON.stringify(emptyDraft(username)), [username]);
+  useEffect(() => {
+    if (editingId) return;
+    try {
+      if (step === 0 && JSON.stringify(d) === pristine) {
+        localStorage.removeItem(DRAFT_KEY);
+      } else {
+        localStorage.setItem(DRAFT_KEY, JSON.stringify({ v: 1, step, d }));
+      }
+    } catch {
+      /* storage blocked */
+    }
+    // editingId gates persistence; included so entering/leaving edit re-evaluates.
+  }, [d, step, editingId, pristine]);
 
   // Live join of the selected contact methods — drives the summary + counter.
   const contactJoined = buildContactRaw(d, username, t);
@@ -264,6 +313,14 @@ export default function PostScreen() {
         setRejectReason(null);
         setLastWasEdit(Boolean(editing));
         setPhase('result');
+        // New ad submitted — drop the saved compose draft so it can't come back.
+        if (!editing) {
+          try {
+            localStorage.removeItem(DRAFT_KEY);
+          } catch {
+            /* storage blocked */
+          }
+        }
       })
       .catch((e) => {
         if (editing) {
@@ -560,9 +617,11 @@ export default function PostScreen() {
                     maxLength={CONTACT_RAW_MAX}
                     hint={t('myAds.editContactHint')}
                   />
-                  <div className={`hint ${editContactLen > CONTACT_RAW_MAX ? 'hint--warn' : ''}`}>
-                    {t('post.contactLenHint', { n: editContactLen })}
-                  </div>
+                  {editContactLen > CONTACT_HINT_FROM ? (
+                    <div className={`hint ${editContactLen > CONTACT_RAW_MAX ? 'hint--warn' : ''}`}>
+                      {t('post.contactLenHint', { n: editContactLen, max: CONTACT_RAW_MAX })}
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <div className="stack stack--wizard">
@@ -614,9 +673,9 @@ export default function PostScreen() {
                     <Field label={t('post.contactOtherLabel')} value={d.otherVal} onChange={(v) => patch({ otherVal: v })} placeholder={t('post.contactOtherPlaceholder')} maxLength={80} />
                   ) : null}
 
-                  {d.contactSel.length ? (
+                  {d.contactSel.length > 0 && contactJoined.length > CONTACT_HINT_FROM ? (
                     <div className={`hint ${contactJoined.length > CONTACT_RAW_MAX ? 'hint--warn' : ''}`}>
-                      {t('post.contactLenHint', { n: contactJoined.length })}
+                      {t('post.contactLenHint', { n: contactJoined.length, max: CONTACT_RAW_MAX })}
                     </div>
                   ) : null}
                 </div>

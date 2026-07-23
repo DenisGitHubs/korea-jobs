@@ -210,7 +210,6 @@ export const ru = {
     language: 'Язык',
     aboutTitle: 'О приложении',
     aboutText: 'Свежие вакансии для рабочих по всей Корее из открытых чатов, собранные в одном месте.',
-    version: 'Версия',
     howto: 'Как пользоваться',
     howtoHint: 'Короткий тур по приложению',
     inviteFriends: 'Пригласить друзей',
@@ -292,7 +291,7 @@ export const ru = {
     contactWhatsappPlaceholder: 'Номер WhatsApp',
     contactOtherLabel: 'Другой способ',
     contactOtherPlaceholder: 'Ссылка, ник или как связаться',
-    contactLenHint: 'Контакты: {{n}}/300',
+    contactLenHint: '{{n}} из {{max}} символов',
     contactTag: {
       phone: 'Тел.',
       telegram: 'TG',

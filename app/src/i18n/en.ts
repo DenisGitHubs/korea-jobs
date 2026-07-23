@@ -213,7 +213,6 @@ export const en: typeof ru = {
     language: 'Language',
     aboutTitle: 'About',
     aboutText: 'Fresh blue-collar job openings from open chats across Korea, gathered in one place.',
-    version: 'Version',
     howto: 'How to use',
     howtoHint: 'A quick tour of the app',
     inviteFriends: 'Invite friends',
@@ -295,7 +294,7 @@ export const en: typeof ru = {
     contactWhatsappPlaceholder: 'WhatsApp number',
     contactOtherLabel: 'Other',
     contactOtherPlaceholder: 'Link, handle or how to reach you',
-    contactLenHint: 'Contacts: {{n}}/300',
+    contactLenHint: '{{n}} of {{max}} characters',
     contactTag: {
       phone: 'Tel.',
       telegram: 'TG',

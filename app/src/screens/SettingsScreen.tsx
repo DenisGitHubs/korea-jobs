@@ -260,20 +260,23 @@ export default function SettingsScreen() {
         <div className="region">
           <div className="region__title">{t('settings.appearance')}</div>
           <div className="section">
-            <div className="row">
-              <div className="row__label">
-                <div>{t('settings.theme')}</div>
-                <div className="row__sub">{t('settings.themeHint')}</div>
+            {/* Long schedule hint sits on its own full-width line UNDER the
+                segmented control, so it never gets squeezed / mis-wrapped beside
+                the three theme buttons. */}
+            <div className="row row--stack">
+              <div className="row__line">
+                <div className="row__label">{t('settings.theme')}</div>
+                <Segmented<ThemeMode>
+                  value={themeMode}
+                  options={[
+                    { value: 'auto', label: t('settings.themeAuto') },
+                    { value: 'light', label: t('settings.themeLight') },
+                    { value: 'dark', label: t('settings.themeDark') },
+                  ]}
+                  onChange={onThemeChange}
+                />
               </div>
-              <Segmented<ThemeMode>
-                value={themeMode}
-                options={[
-                  { value: 'auto', label: t('settings.themeAuto') },
-                  { value: 'light', label: t('settings.themeLight') },
-                  { value: 'dark', label: t('settings.themeDark') },
-                ]}
-                onChange={onThemeChange}
-              />
+              <div className="row__sub row__sub--block">{t('settings.themeHint')}</div>
             </div>
             <div className="row">
               <span className="row__label">{t('settings.language')}</span>
@@ -294,10 +297,6 @@ export default function SettingsScreen() {
           <div className="section">
             <div className="dl">
               <span className="dl__v">{t('settings.aboutText')}</span>
-            </div>
-            <div className="dl">
-              <span className="dl__k">{t('settings.version')}</span>
-              <span className="dl__v">0.2.0 · mock</span>
             </div>
           </div>
         </div>

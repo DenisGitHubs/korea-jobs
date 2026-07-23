@@ -443,6 +443,29 @@ a {
   font-weight: 600;
 }
 
+/* Settings row that drops a full-width sub-label UNDER its control line, so a
+   long hint (e.g. the auto-theme schedule) never gets squeezed / mis-wrapped
+   beside a segmented control. */
+.row--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.row--stack .row__line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+.row--stack .row__line .row__label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.row__sub--block {
+  display: block;
+  width: 100%;
+}
+
 /* ── Checkbox ──────────────────────────────────────────────────────────── */
 .check {
   width: 22px;
