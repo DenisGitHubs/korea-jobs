@@ -21,6 +21,7 @@ import { getConfigNumber } from '../config.js';
 import { sendMessage } from '../bot/telegram.js';
 import { adminRecipients } from '../admin/auth.js';
 import { recordModerationExample, decideAdModeration } from './moderation.js';
+import { notifyAuthorAdDecision } from '../notify/author.js';
 import { parseAdInput, adModText, UUID_RE, type AdBody } from './input.js';
 import { buildCityMatcher, detectCitySlugs, detectRegionSlugs } from '../cities/detect.js';
 
@@ -171,6 +172,11 @@ export async function adsCreate(req: ReqLike, res: ResLike): Promise<void> {
       const summary = [citySlug ?? cityText ?? regionSlug ?? '—', f.workType, f.title].filter(Boolean).join(' · ');
       await notifyAdminsPending(sql, id, summary);
     }
+    // A fresh ad is a transition from nothing → always tell the author (best-effort, never blocks
+    // the response): published, declined, or routed to manual review (an apology for the delay).
+    if (id) {
+      await notifyAuthorAdDecision(sql, id, status, rejectReason);
+    }
 
     send(res, 200, { id: id ?? null, status });
   } catch (err) {
@@ -270,6 +276,10 @@ export async function moderateAd(
   const sql = getSql();
   const ttl = await getConfigNumber('user_ad_ttl_days', 14);
   const status: 'approved' | 'rejected' = action === 'approve' ? 'approved' : 'rejected';
+  // The reject_reason value WRITTEN to the row: a manual reject with no reason is stored as the
+  // service token 'rejected'. Compute it once so the DB write and the author DM below CANNOT drift
+  // (the author sees the reason phrase derived from exactly what we persisted).
+  const storedReason = action === 'reject' ? (reason ?? 'rejected') : null;
 
   // Only a 'pending' ad can be moderated: this prevents re-approving an 'expired' (or
   // already-decided) ad and silently returning it to the feed. A stale button on an
@@ -278,7 +288,7 @@ export async function moderateAd(
     update user_ads
     set status = ${status}::user_ad_status,
         moderated_at = now(),
-        reject_reason = ${action === 'reject' ? (reason ?? 'rejected') : null},
+        reject_reason = ${storedReason},
         expires_at = case when ${status} = 'approved' then now() + make_interval(days => ${ttl}) else expires_at end,
         notify_pending = case when ${status} = 'approved' then true else notify_pending end
     where id = ${adId}::uuid and status = 'pending'
@@ -299,6 +309,10 @@ export async function moderateAd(
     .filter(Boolean)
     .join('\n');
   await recordModerationExample(text, status === 'approved' ? 'approved' : 'rejected', action === 'reject' ? reason : null);
+  // The ad was 'pending' (guarded in the UPDATE) and just became approved/rejected by an admin →
+  // a REAL transition, so tell its author (best-effort). We pass the SAME reject_reason we stored
+  // above (storedReason) so the DM and the DB row cannot drift. Both call sites: bot buttons + API.
+  await notifyAuthorAdDecision(sql, adId, status, storedReason, 'pending');
   return { found: true };
 }
 

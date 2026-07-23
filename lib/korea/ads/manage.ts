@@ -24,6 +24,7 @@ import { authenticate, type AuthedUser } from '../core/context.js';
 import { getConfigNumber } from '../config.js';
 import { decideAdModeration } from './moderation.js';
 import { notifyAdminsPending, resolveAdCityIds, resolveAdRegionSlugs } from './rw.js';
+import { notifyAuthorAdDecision } from '../notify/author.js';
 import { parseAdInput, adModText, UUID_RE, type AdBody } from './input.js';
 
 /** The caller's own ad, resolved once per request. Carries the columns every action needs
@@ -193,6 +194,9 @@ export async function adUnarchive(req: ReqLike, res: ResLike): Promise<void> {
     if (status === 'pending') {
       await notifyAdminsPending(sql, ad.id, pendingSummary(ad.city_slug ?? ad.city_text ?? ad.region_slug, ad.work_type, ad.title));
     }
+    // Unarchive always re-moderates from 'archived', so any outcome is a REAL transition; tell the
+    // author (best-effort): pending (apology), approved (published) or rejected (reason).
+    await notifyAuthorAdDecision(sql, ad.id, status, rejectReason, ad.status);
     send(res, 200, { ok: true, status });
   } catch {
     sendError(res, ApiErrorCode.Internal);
@@ -277,6 +281,10 @@ async function adPatch(req: ReqLike, res: ResLike): Promise<void> {
     if (status === 'pending') {
       await notifyAdminsPending(sql, ad.id, pendingSummary(citySlug ?? cityText ?? regionSlug, f.workType, f.title));
     }
+    // Author DM only on a REAL status transition (prevStatus = ad.status): pending (apology),
+    // approved (published) or rejected (reason). A re-edit that stays the SAME status stays silent
+    // — no re-spamming "опубликовано"/"на проверке" on every save of an already-decided ad.
+    await notifyAuthorAdDecision(sql, ad.id, status, rejectReason, ad.status);
     send(res, 200, { ok: true, status });
   } catch {
     sendError(res, ApiErrorCode.Internal);
