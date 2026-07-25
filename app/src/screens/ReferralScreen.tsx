@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { postEvent, shareMessage } from '@telegram-apps/sdk-react';
 import { api } from '../shared/api/client';
 import type { ReferralView, StreakStat } from '../shared/types/api';
 import { useBackButton } from '../hooks/useBackButton';
-import { useSettingsStore } from '../store/settingsStore';
+import { useShareApp } from '../hooks/useShareApp';
 import { AppBar } from '../components/AppBar';
 import { Loading } from '../components/Loading';
 import { EmptyState } from '../components/EmptyState';
@@ -34,6 +33,57 @@ const STATUS_TIERS = [
 
 /** Last points_total the user has seen — drives the "+N points" nudge. */
 const POINTS_SEEN_KEY = 'kj:refPointsSeen';
+/** Last tier index the user has seen — drives the festive "tier up" celebration. */
+const TIER_SEEN_KEY = 'kj:refTierSeen';
+
+type Tier = (typeof STATUS_TIERS)[number];
+
+/** Highest tier index reached for a given number of confirmed direct invites. */
+function tierIndexFor(directInvited: number): number {
+  let idx = 0;
+  for (let i = 0; i < STATUS_TIERS.length; i++) {
+    if (directInvited >= STATUS_TIERS[i].min) idx = i;
+  }
+  return idx;
+}
+
+interface TierProgress {
+  tier: Tier;
+  nextTier: Tier | undefined;
+  toNext: number;
+  /** Fill % of the bar toward the next tier: clamp((got - min)/(nextMin - min)*100, 0, 100). */
+  pct: number;
+}
+
+function tierProgress(directInvited: number): TierProgress {
+  const idx = tierIndexFor(directInvited);
+  const tier = STATUS_TIERS[idx];
+  const nextTier = STATUS_TIERS[idx + 1];
+  const toNext = nextTier ? nextTier.min - directInvited : 0;
+  const pct = nextTier
+    ? Math.max(0, Math.min(100, ((directInvited - tier.min) / (nextTier.min - tier.min)) * 100))
+    : 0;
+  return { tier, nextTier, toNext, pct };
+}
+
+/** Compact progress bar: [current badge] [filled track] [next badge]. Render only when nextTier exists. */
+function RefProgress({ tier, nextTier, pct }: { tier: Tier; nextTier: Tier; pct: number }) {
+  return (
+    <div className="ref-progress">
+      <div className="ref-progress__row">
+        <span className="ref-progress__cap ref-progress__cap--current" aria-hidden>
+          {tier.emoji || '•'}
+        </span>
+        <span className="ref-progress__track">
+          <span className="ref-progress__fill" style={{ width: `${pct}%` }} />
+        </span>
+        <span className="ref-progress__cap" aria-hidden>
+          {nextTier.emoji}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 type TFn = ReturnType<typeof useTranslation>['t'];
 
@@ -56,6 +106,9 @@ type State =
   | { status: 'error' }
   | { status: 'ready'; data: ReferralView };
 
+/** Transient celebration shown on load when the confirmed balance grew. */
+type Celebrate = { tierUp: boolean; gain: number; directInvited: number };
+
 function ShareIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -70,14 +123,16 @@ function ShareIcon() {
 export default function ReferralScreen() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const isReal = useSettingsStore((s) => s.isReal);
+  // App-invite share (rich card + link fallback) + its "Sent" banner, shared with
+  // the Settings "Share the app" button — no duplicated fallback logic.
+  const { shareApp, shareToast } = useShareApp();
 
   const [state, setState] = useState<State>({ status: 'loading' });
   const [reloadKey, setReloadKey] = useState(0);
   const [copied, setCopied] = useState(false);
-  const [gain, setGain] = useState<number | null>(null);
-  // Transient banner for the app-share success ("Sent"). Null = hidden.
-  const [shareToast, setShareToast] = useState<string | null>(null);
+  // Transient celebration card shown when the confirmed balance grew since the last
+  // visit (festive tier-up variant, or an ordinary "+N points" variant). Null = hidden.
+  const [celebrate, setCelebrate] = useState<Celebrate | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -95,35 +150,39 @@ export default function ReferralScreen() {
     };
   }, [reloadKey]);
 
-  // Announce newly *confirmed* points since the last visit, so confirmation is
-  // no longer silent. First-ever visit only records a baseline (no nudge).
+  // Announce newly *confirmed* progress since the last visit, so confirmation is no
+  // longer silent. We compare BOTH points_total and the tier index against baselines:
+  //   • points grew + tier index grew → festive "new badge" celebration
+  //   • points grew, same tier        → ordinary "+N points" celebration
+  //   • first-ever visit              → only record baselines (no card)
   useEffect(() => {
     if (state.status !== 'ready') return;
     const total = state.data.points_total;
+    const directInvited = state.data.levels[0]?.invited ?? 0;
+    const idx = tierIndexFor(directInvited);
     try {
-      const raw = localStorage.getItem(POINTS_SEEN_KEY);
-      const seen = raw == null ? null : Number.parseInt(raw, 10);
-      if (seen != null && Number.isFinite(seen) && total > seen) {
-        setGain(total - seen);
+      const rawPts = localStorage.getItem(POINTS_SEEN_KEY);
+      const seenPts = rawPts == null ? null : Number.parseInt(rawPts, 10);
+      const rawTier = localStorage.getItem(TIER_SEEN_KEY);
+      const seenTier = rawTier == null ? null : Number.parseInt(rawTier, 10);
+      if (seenPts != null && Number.isFinite(seenPts) && total > seenPts) {
+        const tierUp = seenTier != null && Number.isFinite(seenTier) && idx > seenTier;
+        setCelebrate({ tierUp, gain: total - seenPts, directInvited });
       }
       localStorage.setItem(POINTS_SEEN_KEY, String(total));
+      localStorage.setItem(TIER_SEEN_KEY, String(idx));
     } catch {
-      /* storage blocked — skip the nudge */
+      /* storage blocked — skip the celebration */
     }
   }, [state]);
 
+  // The ordinary (points-only) celebration auto-dismisses after 6s; the festive
+  // tier-up one stays until the user closes it (✕).
   useEffect(() => {
-    if (gain == null) return;
-    const id = window.setTimeout(() => setGain(null), 4000);
+    if (celebrate == null || celebrate.tierUp) return;
+    const id = window.setTimeout(() => setCelebrate(null), 6000);
     return () => window.clearTimeout(id);
-  }, [gain]);
-
-  // Auto-dismiss the app-share toast.
-  useEffect(() => {
-    if (shareToast == null) return;
-    const id = window.setTimeout(() => setShareToast(null), 2200);
-    return () => window.clearTimeout(id);
-  }, [shareToast]);
+  }, [celebrate]);
 
   const goBack = useCallback(() => navigate(-1), [navigate]);
   useBackButton(true, goBack);
@@ -140,68 +199,66 @@ export default function ReferralScreen() {
       });
   }, []);
 
-  // The CURRENT app-invite share path — kept intact as the graceful fallback below.
-  // Opens Telegram's native "share to a chat" sheet; the link travels ONLY in the
-  // `url` param (so it never duplicates inside the text), `text` is the pitch.
-  const shareFallback = useCallback(
-    (link: string) => {
-      const pathFull = `/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(
-        t('referral.shareText'),
-      )}`;
-      try {
-        if (isReal) {
-          postEvent('web_app_open_tg_link', { path_full: pathFull });
-        } else {
-          window.open(`https://t.me${pathFull}`, '_blank');
-        }
-      } catch {
-        window.open(`https://t.me${pathFull}`, '_blank');
-      }
-    },
-    [isReal, t],
-  );
-
-  // Share the APP itself. Preferred path (Bot API 8.0+): the backend mints a
-  // "prepared inline message" (rich invite card) handed to Telegram's native share
-  // sheet via WebApp.shareMessage. DEGRADES SILENTLY to the current link-share
-  // (`shareFallback`) on every failure mode, so nothing regresses on older clients:
-  //   • shareMessage.isAvailable() === false → client < 8.0 / unsupported / no SDK env
-  //     (the endpoint is never even called), or
-  //   • the backend opts out ({ fallback:true }) or returns no preparedMessageId, or
-  //   • the endpoint errors / the network fails, or
-  //   • the native share dialog rejects (shareMessage promise throws).
-  // The referral binding rides inside the prepared card server-side; the fallback
-  // link still carries the ref code as before.
-  const share = useCallback(
-    async (link: string) => {
-      if (shareMessage.isAvailable()) {
-        try {
-          const prep = await api.sharePrepare({ kind: 'app' });
-          if (prep.ok && !prep.fallback && prep.preparedMessageId) {
-            // Resolves on `prepared_message_sent`, rejects on `prepared_message_failed`
-            // (or a dismissed dialog) → the catch below falls back.
-            await shareMessage(prep.preparedMessageId);
-            setShareToast(t('referral.shareSent'));
-            return;
-          }
-        } catch {
-          /* backend/network/dialog failure → fall through to the link-share */
-        }
-      }
-      shareFallback(link);
-    },
-    [shareFallback, t],
-  );
-
   return (
     <div className="app">
       <AppBar title={t('referral.title')} onBack={goBack} />
       <div className="screen">
-        {gain != null ? (
-          <div className="ref-toast" role="status">
-            {t('referral.pointsGained', { count: gain })}
-          </div>
-        ) : null}
+        {celebrate != null
+          ? (() => {
+              const { tier, nextTier, toNext, pct } = tierProgress(celebrate.directInvited);
+              // Festive variant → the NEW tier's emoji; ordinary variant → the current
+              // tier's emoji (or a generic 🎉 for the badge-less novice tier).
+              const badgeEmoji = tier.emoji || '🎉';
+              return (
+                <div className="ref-celebrate" role="status">
+                  <button
+                    className="ref-celebrate__close"
+                    onClick={() => setCelebrate(null)}
+                    aria-label={t('common.close')}
+                  >
+                    ✕
+                  </button>
+                  <span className="ref-celebrate__badge" aria-hidden>
+                    {badgeEmoji}
+                  </span>
+                  {celebrate.tierUp ? (
+                    <>
+                      <div className="ref-celebrate__title">
+                        {t('referral.tierUp.title', {
+                          emoji: tier.emoji,
+                          name: t(`referral.status.${tier.key}`),
+                        })}
+                      </div>
+                      <div className="ref-celebrate__sub">
+                        {t('referral.tierUp.sub', { count: celebrate.directInvited })}
+                      </div>
+                      {nextTier ? (
+                        <RefProgress tier={tier} nextTier={nextTier} pct={pct} />
+                      ) : (
+                        <div className="ref-celebrate__sub">{t('referral.status.max')}</div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className="ref-celebrate__title">
+                        {t('referral.pointsGained', { count: celebrate.gain })}
+                      </div>
+                      {nextTier ? (
+                        <>
+                          <RefProgress tier={tier} nextTier={nextTier} pct={pct} />
+                          <div className="ref-celebrate__sub">
+                            {t('referral.status.next', { count: toNext })}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="ref-celebrate__sub">{t('referral.status.max')}</div>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })()
+          : null}
         {shareToast != null ? (
           <div className="ref-toast" role="status">
             {shareToast}
@@ -218,7 +275,7 @@ export default function ReferralScreen() {
             onAction={() => setReloadKey((k) => k + 1)}
           />
         ) : (
-          <ReferralBody data={state.data} copied={copied} onCopy={copy} onShare={share} t={t} />
+          <ReferralBody data={state.data} copied={copied} onCopy={copy} onShare={shareApp} t={t} />
         )}
       </div>
     </div>
@@ -249,13 +306,7 @@ function ReferralBody({
 
   // Status from confirmed direct invites (the most legible "people you brought").
   const directInvited = levels[0]?.invited ?? 0;
-  let tierIdx = 0;
-  for (let i = 0; i < STATUS_TIERS.length; i++) {
-    if (directInvited >= STATUS_TIERS[i].min) tierIdx = i;
-  }
-  const tier = STATUS_TIERS[tierIdx];
-  const nextTier = STATUS_TIERS[tierIdx + 1];
-  const toNext = nextTier ? nextTier.min - directInvited : 0;
+  const { tier, nextTier, toNext, pct } = tierProgress(directInvited);
 
   return (
     <>
@@ -277,6 +328,8 @@ function ReferralBody({
         <div className="ref-status__next">
           {nextTier ? t('referral.status.next', { count: toNext }) : t('referral.status.max')}
         </div>
+        {/* Permanent progress bar toward the next badge (hidden at the top tier). */}
+        {nextTier ? <RefProgress tier={tier} nextTier={nextTier} pct={pct} /> : null}
         {points_pending > 0 ? (
           <>
             <div className="ref-balance__pending">{t('referral.pending', { count: points_pending })}</div>

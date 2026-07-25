@@ -1,9 +1,11 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api } from '../shared/api/client';
 import type { VisaType, WorkType } from '../shared/types/api';
 import { VISA_TYPES, WORK_TYPES, visaKey, workTypeKey } from '../shared/labels';
+import { useShareApp } from '../hooks/useShareApp';
+import { loadReferral } from '../lib/shareLink';
 import { WorkTypeIcon } from '../components/icons/WorkTypeIcon';
 import { toSubscription, useSubscriptionStore } from '../store/subscriptionStore';
 import { useSettingsStore } from '../store/settingsStore';
@@ -24,6 +26,17 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
   return a.every((x) => sb.has(x));
 }
 
+function ShareIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="18" cy="5" r="3" />
+      <circle cx="6" cy="12" r="3" />
+      <circle cx="18" cy="19" r="3" />
+      <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" />
+    </svg>
+  );
+}
+
 export default function SettingsScreen() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -34,6 +47,13 @@ export default function SettingsScreen() {
   const setThemeMode = useSettingsStore((s) => s.setThemeMode);
   const setTourReplay = useUiStore((s) => s.setTourReplay);
   const { bySlug } = useCities();
+  // Explicit "Share the app" action (same rich-card + link fallback as the referral
+  // screen, via the shared hook). Warm the referral info once so the fallback link
+  // is ready on first tap.
+  const { shareApp, shareToast } = useShareApp();
+  useEffect(() => {
+    void loadReferral();
+  }, []);
 
   const apply = useSubscriptionStore((s) => s.apply);
   const sCities = useSubscriptionStore((s) => s.citySlugs);
@@ -124,6 +144,11 @@ export default function SettingsScreen() {
     <div className="app">
       <AppBar title={t('settings.title')} />
       <div className="screen">
+        {shareToast != null ? (
+          <div className="ref-toast" role="status">
+            {shareToast}
+          </div>
+        ) : null}
         <div className="hero">
           <h1 className="hero__title">{t('settings.subscriptionTitle')}</h1>
           <p className="hero__sub">{t('settings.subscriptionHint')}</p>
@@ -206,6 +231,17 @@ export default function SettingsScreen() {
         >
           {saving ? t('common.saving') : dirty ? t('settings.saveSubscription') : t('settings.saved')}
         </button>
+
+        {/* Explicit, prominent app-share (owner ask: not buried inside the referral
+            sub-screen). Reuses the shared app-share hook + referral.shareSent toast. */}
+        <div className="region">
+          <button className="share-app" onClick={() => void shareApp()}>
+            <span className="share-app__icon" aria-hidden>
+              <ShareIcon />
+            </span>
+            <span className="share-app__label">{t('settings.shareApp')}</span>
+          </button>
+        </div>
 
         <div className="region">
           <div className="section">

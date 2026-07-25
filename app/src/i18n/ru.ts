@@ -21,6 +21,7 @@ export const ru = {
     done: 'Готово',
     yes: 'Да',
     no: 'Нет',
+    close: 'Закрыть',
   },
   feed: {
     title: 'Вакансии',
@@ -182,6 +183,11 @@ export const ru = {
     shareCopied: 'Ссылка скопирована',
     shareSent: 'Отправлено',
     shareUnavailable: 'Не удалось подготовить ссылку. Попробуй ещё раз.',
+    shareNudge: {
+      text: 'Знаешь, кому пригодится? Скинь вакансию земляку',
+      cta: 'Скинуть',
+      close: 'Скрыть',
+    },
   },
   settings: {
     title: 'Настройки',
@@ -215,6 +221,7 @@ export const ru = {
     howtoHint: 'Короткий тур по приложению',
     inviteFriends: 'Пригласить друзей',
     inviteFriendsHint: 'Получай баллы за приглашённых друзей',
+    shareApp: 'Поделиться приложением',
     safety: 'Безопасность',
     safetyHint: 'Как не попасться на обман',
     rules: 'Правила программы',
@@ -594,6 +601,13 @@ export const ru = {
     pointsGained_few: '+{{count}} балла за приглашения!',
     pointsGained_many: '+{{count}} баллов за приглашения!',
     pointsGained_other: '+{{count}} баллов за приглашения!',
+    tierUp: {
+      title: 'Новый значок! {{emoji}} {{name}}',
+      sub_one: 'Ты пригласил уже {{count}} друга — так держать!',
+      sub_few: 'Ты пригласил уже {{count}} друзей — так держать!',
+      sub_many: 'Ты пригласил уже {{count}} друзей — так держать!',
+      sub_other: 'Ты пригласил уже {{count}} друзей — так держать!',
+    },
     streaksTitle: 'Твои серии',
     streakVisit: 'Серия заходов',
     streakOpen: 'Серия открытий',

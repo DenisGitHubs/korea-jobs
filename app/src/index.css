@@ -3795,3 +3795,209 @@ a {
   box-shadow: var(--lg-shadow, 0 12px 34px -14px rgba(24, 28, 48, 0.4));
   animation: kj-fade-in 0.18s ease;
 }
+
+/* ── "Share this vacancy" nudge (VacancyScreen, after a reveal) ──────────── */
+.nudge-share {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: var(--kj-space-4);
+  padding: 12px 14px;
+  border-radius: var(--kj-radius);
+  background: var(--lg-card);
+  border: 1px solid var(--lg-brd);
+  box-shadow: var(--lg-shadow-sm), var(--lg-rim);
+  animation: kj-nudge-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) 0.45s both;
+}
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .nudge-share {
+    backdrop-filter: blur(18px) saturate(150%);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+  }
+}
+.nudge-share__icon {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--kj-brand-tint);
+  color: var(--kj-brand-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+.nudge-share__text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.nudge-share__cta {
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: var(--kj-brand-tint);
+  color: var(--kj-brand-strong);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.nudge-share__close {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--kj-hint);
+  font-size: 14px;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+@keyframes kj-nudge-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nudge-share {
+    animation: kj-fade-in 0.15s ease 0.45s both;
+  }
+}
+
+/* ── Referral: progress to next badge + celebration card ────────────────── */
+.ref-progress {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.ref-progress__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 240px;
+}
+.ref-progress__cap {
+  flex: 0 0 auto;
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.55;
+}
+.ref-progress__cap--current {
+  opacity: 1;
+}
+.ref-progress__track {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--kj-brand) 16%, var(--kj-section-bg));
+}
+.ref-progress__fill {
+  height: 100%;
+  border-radius: 999px;
+  background-image: linear-gradient(90deg, var(--kj-brand), color-mix(in srgb, var(--kj-brand) 60%, #ffca9a));
+  transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ref-celebrate {
+  position: relative;
+  overflow: hidden;
+  text-align: center;
+  margin-bottom: var(--kj-space-4);
+  padding: 18px 16px;
+  border-radius: var(--kj-radius-lg);
+  background-image: linear-gradient(135deg, var(--kj-brand), color-mix(in srgb, var(--kj-brand) 55%, #ffca9a));
+  color: var(--kj-brand-ink);
+  box-shadow: 0 10px 26px -10px color-mix(in srgb, var(--kj-brand) 55%, transparent);
+  animation: kj-celebrate-in 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ref-celebrate__badge {
+  font-size: 34px;
+  line-height: 1;
+  display: inline-block;
+  animation: kj-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.1s both;
+}
+.ref-celebrate__title {
+  font-size: 16px;
+  font-weight: 800;
+  margin-top: 6px;
+}
+.ref-celebrate__sub {
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0.92;
+  margin-top: 4px;
+}
+.ref-celebrate .ref-progress__track {
+  background: rgba(255, 255, 255, 0.32);
+}
+.ref-celebrate .ref-progress__fill {
+  background-image: linear-gradient(90deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.75));
+}
+.ref-celebrate__close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--kj-brand-ink);
+  cursor: pointer;
+}
+@keyframes kj-celebrate-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ref-celebrate,
+  .ref-celebrate__badge {
+    animation: kj-fade-in 0.15s ease !important;
+  }
+}
+
+/* ── Settings: prominent "Share the app" button ─────────────────────────── */
+.share-app {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: none;
+  border-radius: var(--kj-radius-lg);
+  background-image: linear-gradient(120deg, var(--kj-brand), color-mix(in srgb, var(--kj-brand) 66%, #ffca9a));
+  color: var(--kj-brand-ink);
+  box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--kj-brand) 55%, transparent);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.share-app__icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+}
+.share-app__label {
+  flex: 1;
+  text-align: left;
+}

@@ -96,6 +96,9 @@ export default function VacancyScreen() {
   const [saved, setSaved] = useState(false);
   // Transient banner for the browser/mock share fallback ("link copied"). Null = hidden.
   const [shareToast, setShareToast] = useState<string | null>(null);
+  // "Share this vacancy" nudge shown once, right after a successful reveal, at a
+  // frequency cap (see maybeShowShareNudge). Card-local; ✕ hides only this instance.
+  const [showNudge, setShowNudge] = useState(false);
 
   // Warm the referral code/link once (memoized) so the Share tap opens the native
   // sheet instantly instead of waiting on a first GET /referral round-trip.
@@ -114,6 +117,8 @@ export default function VacancyScreen() {
     let alive = true;
     setLoading(true);
     setNotFound(false);
+    // New card → drop any leftover nudge from the previous listing.
+    setShowNudge(false);
     api
       .vacancy(id)
       .then((v) => {
@@ -155,6 +160,26 @@ export default function VacancyScreen() {
   // daily budget is spent; any other network/server error → generic retry; a
   // real {contact:null} is NOT an error (falls into the 'done' branch below and
   // shows "no contact"). Mirrors the RawCard reveal handling.
+  // Decide whether to show the "share this vacancy" nudge after a successful reveal.
+  // Counter increments on EVERY successful reveal (independent of whether we show) so
+  // the frequency cap is stable; we show only on the 1st reveal and every 4th after,
+  // and at most once per session (sessionStorage). A referral code already rides in
+  // the shared vacancy card, so nudging to share the vacancy also spreads the app.
+  const maybeShowShareNudge = useCallback(() => {
+    try {
+      const count = (Number.parseInt(localStorage.getItem('kj:shareNudgeCount') ?? '0', 10) || 0) + 1;
+      localStorage.setItem('kj:shareNudgeCount', String(count));
+      const dueByFrequency = count === 1 || count % 4 === 0;
+      const shownThisSession = sessionStorage.getItem('kj:shareNudgeShownSession') === '1';
+      if (dueByFrequency && !shownThisSession) {
+        sessionStorage.setItem('kj:shareNudgeShownSession', '1');
+        setShowNudge(true);
+      }
+    } catch {
+      /* storage blocked — skip the nudge */
+    }
+  }, []);
+
   const revealContact = useCallback(() => {
     setContact({ status: 'loading' });
     api
@@ -163,6 +188,8 @@ export default function VacancyScreen() {
         setContact({ status: 'done', contact: r.contact });
         // Keep the shared counter in sync with the server's post-reveal budget.
         setRevealsLeft(r.reveals_left);
+        // A real contact was revealed → maybe surface the share nudge.
+        if (r.contact != null) maybeShowShareNudge();
       })
       .catch((e: unknown) => {
         const http = e instanceof ApiError ? e.http : 0;
@@ -174,7 +201,7 @@ export default function VacancyScreen() {
           message: http === 429 ? t('vacancy.errorLimit') : t('vacancy.errorGeneric'),
         });
       });
-  }, [id, t, setRevealsLeft]);
+  }, [id, t, setRevealsLeft, maybeShowShareNudge]);
 
   const copy = useCallback((value: string) => {
     void navigator.clipboard
@@ -572,6 +599,34 @@ export default function VacancyScreen() {
                 </div>
               )}
             </div>
+
+            {/* Share nudge — appears right after a real contact is revealed, capped by
+                frequency + once-per-session. "Скинуть" reuses the exact AppBar share
+                (rich card + link fallback, referral code inside), then hides itself. */}
+            {showNudge && contact.status === 'done' && contact.contact != null ? (
+              <div className="nudge-share" role="note">
+                <span className="nudge-share__icon" aria-hidden>
+                  👋
+                </span>
+                <span className="nudge-share__text">{t('vacancy.shareNudge.text')}</span>
+                <button
+                  className="nudge-share__cta"
+                  onClick={() => {
+                    void shareVacancy();
+                    setShowNudge(false);
+                  }}
+                >
+                  {t('vacancy.shareNudge.cta')}
+                </button>
+                <button
+                  className="nudge-share__close"
+                  onClick={() => setShowNudge(false)}
+                  aria-label={t('vacancy.shareNudge.close')}
+                >
+                  ✕
+                </button>
+              </div>
+            ) : null}
 
             {/* Trust card + link to the full safety guide (replaces the old prepay note). */}
             <div className="trust" style={{ marginTop: 16 }}>

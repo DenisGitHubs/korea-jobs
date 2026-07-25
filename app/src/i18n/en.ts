@@ -24,6 +24,7 @@ export const en: typeof ru = {
     done: 'Done',
     yes: 'Yes',
     no: 'No',
+    close: 'Close',
   },
   feed: {
     title: 'Jobs',
@@ -185,6 +186,11 @@ export const en: typeof ru = {
     shareCopied: 'Link copied',
     shareSent: 'Sent',
     shareUnavailable: 'Could not prepare the link. Please try again.',
+    shareNudge: {
+      text: 'Know someone who needs this? Share it with a friend',
+      cta: 'Share',
+      close: 'Hide',
+    },
   },
   settings: {
     title: 'Settings',
@@ -218,6 +224,7 @@ export const en: typeof ru = {
     howtoHint: 'A quick tour of the app',
     inviteFriends: 'Invite friends',
     inviteFriendsHint: 'Earn points for friends you invite',
+    shareApp: 'Share the app',
     safety: 'Safety',
     safetyHint: 'How to avoid scams',
     rules: 'Program Rules',
@@ -597,6 +604,13 @@ export const en: typeof ru = {
     pointsGained_few: '+{{count}} points from your invites!',
     pointsGained_many: '+{{count}} points from your invites!',
     pointsGained_other: '+{{count}} points from your invites!',
+    tierUp: {
+      title: 'New badge! {{emoji}} {{name}}',
+      sub_one: 'You’ve invited {{count}} friend — keep it up!',
+      sub_few: 'You’ve invited {{count}} friends — keep it up!',
+      sub_many: 'You’ve invited {{count}} friends — keep it up!',
+      sub_other: 'You’ve invited {{count}} friends — keep it up!',
+    },
     streaksTitle: 'Your streaks',
     streakVisit: 'Visit streak',
     streakOpen: 'Open streak',
