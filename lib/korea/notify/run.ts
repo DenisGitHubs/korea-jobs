@@ -26,12 +26,23 @@
 // NO region, both cardinality 0, still gets everything). An offer with NO geo at all is never pushed
 // (its pending flag is cleared up front). The `no_city` toggle governs only the passive feed/digest
 // surface, where a user browses city-less offers on purpose; a realtime DM about one would be noise.
+//
+// PER-USER DAILY CAP (owner, 2026-07-26): subscriptions.notify_daily_cap (draft_0026) is a personal
+// ceiling on DMs (LETTERS, not offers) per Asia/Seoul calendar day — NULL means no limit, and NULL
+// is what EVERY row holds until its owner picks a number in the settings (the column has no default
+// and nobody was backfilled). Before the send loop we run ONE grouped query (never N+1) that
+// gives, for every candidate of this run, their cap and how many successful DMs they already got
+// since Seoul midnight; a user at or over budget is skipped for the rest of the day. The count is
+// over DISTINCT tg_message_id because notifications_sent holds one row PER OFFER while a grouped DM
+// covers up to notify_group_cap of them. See "WHAT HAPPENS TO THE OFFERS" on recordSkipped below.
+
 
 import { getSql } from '../core/db.js';
 import { getConfigBool, getConfigNumber } from '../config.js';
 import { sendMessage, isUserUnavailable, retryAfterSeconds } from '../bot/telegram.js';
 import { workTypeLabelRu } from '../core/labels.js';
 import { scrubContacts } from '../core/scrub.js';
+import { isOverDailyCap } from './cap.js';
 
 type Sql = ReturnType<typeof getSql>;
 
@@ -39,6 +50,7 @@ export interface NotifyResult {
   vacancies: number;
   ads: number;
   sent: number; // messages sent this run (a grouped DM counts once), not items delivered
+  capped: number; // users skipped this run because they had used up their own daily DM budget
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -264,19 +276,87 @@ async function recordSent(sql: Sql, userId: string, p: Position, messageId: numb
   }
 }
 
-/** Record a permanently-skipped push (403) for one item, idempotent on the per-target unique. */
-async function recordSkipped(sql: Sql, userId: string, p: Position): Promise<void> {
+/**
+ * Record a permanently-skipped push for one item, idempotent on the per-target unique.
+ * `reason` lands in notifications_sent.error so the two skip causes stay tellable apart:
+ *   * null         — 403: the user blocked the bot / never started it;
+ *   * 'daily_cap'  — the user's own per-day DM budget was already spent (see below).
+ *
+ * WHAT HAPPENS TO THE OFFERS WHEN A USER IS OVER THEIR CAP — deliberate, and it matters:
+ * the offer is NOT re-queued for that person; it is dropped from THEIR realtime channel for good
+ * (they still see it in the feed and in the daily digest, which this cap does not touch).
+ * The alternative — leaving the offer notify_pending until the user's day rolls over — deadlocks
+ * the whole cron: step 1 always takes the OLDEST pending offers, so items held for one capped
+ * subscriber would permanently occupy the batch and every OTHER subscriber would stop receiving
+ * anything. Recording the skip keeps the queue draining, matches what the person actually asked
+ * for ("no more than N notifications a day" — the surplus is by definition unwanted), and stays
+ * auditable: select ... from notifications_sent where error = 'daily_cap'.
+ */
+async function recordSkipped(sql: Sql, userId: string, p: Position, reason: string | null = null): Promise<void> {
   if (p.kind === 'vacancy') {
     await sql`
-      insert into notifications_sent (user_id, vacancy_id, status)
-      values (${userId}::uuid, ${p.id}::uuid, 'skipped')
+      insert into notifications_sent (user_id, vacancy_id, status, error)
+      values (${userId}::uuid, ${p.id}::uuid, 'skipped', ${reason})
       on conflict (user_id, vacancy_id) do nothing`;
   } else {
     await sql`
-      insert into notifications_sent (user_id, ad_id, status)
-      values (${userId}::uuid, ${p.id}::uuid, 'skipped')
+      insert into notifications_sent (user_id, ad_id, status, error)
+      values (${userId}::uuid, ${p.id}::uuid, 'skipped', ${reason})
       on conflict (user_id, ad_id) where ad_id is not null do nothing`;
   }
+}
+
+/** Per-user daily budget state for this run: the chosen cap (null = no limit) + DMs already sent today. */
+interface DailyBudget {
+  cap: number | null;
+  letters: number;
+}
+
+/**
+ * ONE query for the whole run (explicitly not N+1): for every candidate user, their notify_daily_cap
+ * and the number of notification DMs already delivered to them since Asia/Seoul midnight.
+ *
+ * Counting rule: notifications_sent stores one row PER OFFER, while a grouped DM covers up to
+ * notify_group_cap offers and shares a single tg_message_id — so LETTERS = count(distinct
+ * tg_message_id) over successful rows. Rows without a message id (a rare 'sent' whose Bot API reply
+ * carried no message_id) are not counted; erring towards one DM too many beats silently muting a user.
+ *
+ * The cap column is read through to_jsonb(s) so this query also works on a database where
+ * draft_0026 has not been applied yet: the missing key yields NULL = no limit = today's behaviour.
+ * The whole thing is best-effort — any fault degrades to "no caps at all" rather than stopping mail.
+ */
+async function loadDailyBudgets(sql: Sql, userIds: string[]): Promise<Map<string, DailyBudget>> {
+  const out = new Map<string, DailyBudget>();
+  if (userIds.length === 0) return out;
+  try {
+    const rows = (await sql`
+      select s.user_id::text as user_id,
+             (to_jsonb(s) ->> 'notify_daily_cap')::int as cap,
+             coalesce(n.letters, 0)::int as letters
+      from subscriptions s
+      left join (
+        select user_id, count(distinct tg_message_id)::int as letters
+        from notifications_sent
+        where user_id = any(${userIds}::uuid[])
+          and status = 'sent'
+          and tg_message_id is not null
+          and sent_at >= (date_trunc('day', now() at time zone 'Asia/Seoul') at time zone 'Asia/Seoul')
+        group by user_id
+      ) n on n.user_id = s.user_id
+      where s.user_id = any(${userIds}::uuid[])`) as unknown as {
+      user_id: string;
+      cap: number | null;
+      letters: number | null;
+    }[];
+    for (const r of rows) out.set(r.user_id, { cap: r.cap ?? null, letters: r.letters ?? 0 });
+  } catch {
+    // Missing column (deploy-before-migration) or a transient DB fault: fall through with an empty
+    // map, i.e. nobody is capped. Failing OPEN here is intentional — a cap fault must never turn
+    // into "no notifications at all".
+    // eslint-disable-next-line no-console
+    console.error('[notify] daily-cap lookup failed (proceeding uncapped)');
+  }
+  return out;
 }
 
 /** Add one matched position to a user's DM bucket, creating the bucket on first sighting. */
@@ -287,7 +367,7 @@ function collect(map: Map<string, Recipient>, userId: string, telegramId: string
 }
 
 export async function runNotify(): Promise<NotifyResult> {
-  if (!(await getConfigBool('notify_enabled', true))) return { vacancies: 0, ads: 0, sent: 0 };
+  if (!(await getConfigBool('notify_enabled', true))) return { vacancies: 0, ads: 0, sent: 0, capped: 0 };
 
   const sql = getSql();
 
@@ -338,9 +418,26 @@ export async function runNotify(): Promise<NotifyResult> {
   }
 
   // ── 3. One DM per user, up to groupCap items; overflow stays pending for a later tick ─────────
+  // PER-USER DAILY CAP: one grouped lookup for every candidate of this run (no N+1), then a purely
+  // in-memory decision per user. Users with no subscription row here, or with cap NULL, are unlimited.
+  const budgets = await loadDailyBudgets(sql, [...byUser.keys()]);
+
   let sent = 0;
+  let capped = 0;
   for (const [userId, rcpt] of byUser) {
     if (sent >= sendCap) break; // per-run message cap: untouched users stay pending, resume next tick
+
+    // Over their own daily budget → send nothing and CLOSE these offers for them (recordSkipped
+    // with 'daily_cap'), so the batch keeps draining for everyone else. See recordSkipped's header
+    // for why re-queueing them instead would stall the whole cron. Does not consume the run's
+    // sendCap: no Bot API call happens.
+    const budget = budgets.get(userId);
+    const cap = budget?.cap ?? null;
+    if (isOverDailyCap(budget?.letters ?? 0, cap)) {
+      capped += 1;
+      for (const p of rcpt.positions) await recordSkipped(sql, userId, p, 'daily_cap');
+      continue;
+    }
 
     const included = rcpt.positions.slice(0, groupCap);
     const { text, extra } = buildUserMessage(included, appUrl);
@@ -348,6 +445,7 @@ export async function runNotify(): Promise<NotifyResult> {
 
     if (r.kind === 'sent') {
       sent += 1;
+      if (budget) budget.letters += 1; // keep the budget honest if a user ever gets two DMs in a run
       for (const p of included) await recordSent(sql, userId, p, r.messageId);
     } else if (r.kind === 'unavailable') {
       await sql`update users set is_blocked = true where id = ${userId}::uuid`;
@@ -366,9 +464,12 @@ export async function runNotify(): Promise<NotifyResult> {
 
   // ── 4. Clear notify_pending for any item that now has no un-notified matching subscriber left ──
   // Re-runs the exact permissive match: an empty result means every eligible subscriber was reached
-  // (this run or earlier). Items still awaiting someone — capped overflow, a deferred/rate-limited or
-  // never-processed user — keep the flag and are picked up next tick. Robust to mid-run subscription
-  // changes, and correct however the send loop ended (cap/break included).
+  // (this run or earlier). Items still awaiting someone — groupCap overflow, a deferred/rate-limited
+  // or never-processed user — keep the flag and are picked up next tick. Robust to mid-run
+  // subscription changes, and correct however the send loop ended (cap/break included).
+  // A user skipped by their PERSONAL daily cap already has a 'skipped'/'daily_cap' row, so the
+  // `not exists` in vacSubs/adSubs no longer counts them and the item can retire normally — that
+  // is what keeps a capped subscriber from freezing the queue for everyone else.
   for (const v of vacs) {
     if ((await vacSubs(sql, v)).length === 0) {
       await sql`update vacancies set notify_pending = false where id = ${v.id}::uuid`;
@@ -380,5 +481,5 @@ export async function runNotify(): Promise<NotifyResult> {
     }
   }
 
-  return { vacancies: vacs.length, ads: ads.length, sent };
+  return { vacancies: vacs.length, ads: ads.length, sent, capped };
 }

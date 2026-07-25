@@ -21,6 +21,7 @@ import type { ReqLike, ResLike } from '../core/http.js';
 import { getSql } from '../core/db.js';
 import { authenticate } from '../core/context.js';
 import { subscriptionPost } from './rw.js';
+import { isOverDailyCap } from '../notify/cap.js';
 
 const USER_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 
@@ -172,4 +173,141 @@ describe('subscriptionPost — mailing is OPT-IN (absent flag = OFF)', () => {
 
     expect(calls).toHaveLength(0);
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// notify_daily_cap (owner, 2026-07-26) — "сколько уведомлений в сутки".
+//
+// Owner's rule: EVERYONE is unlimited unless they picked a number themselves — there is no default
+// limit anywhere (no column DEFAULT, no constant). A brand-new row is therefore created with NULL.
+//
+// This endpoint REPLACES the whole subscription row, which is the wrong default for a field an
+// older client knows nothing about: an absent value must NOT lift someone's EXISTING limit. So this
+// column alone is keep-on-absent on UPDATE, and because the "без ограничения" choice is ITSELF a
+// NULL, the upsert spells the coalesce out as a CASE. The tests below pin the three inbound cases
+// (absent / explicit no-limit / a number) at the level of the SQL that is actually bound, plus the
+// 400 for junk.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Param slots added by the cap: 11 = VALUES nullif-input, 12 = UPDATE case-input (13 = its nullif). */
+const capValuesParam = (calls: Call[]) => insertParams(calls)[11];
+const capUpdateParam = (calls: Call[]) => insertParams(calls)[12];
+type Call = { text: string; params: unknown[] };
+
+/** Like makeSql, but the upsert answers its RETURNING clause with a stored cap. */
+function makeSqlStoring(storedCap: number | null) {
+  const calls: Call[] = [];
+  const fn = (strings: TemplateStringsArray | string, ...params: unknown[]): Promise<Row[]> => {
+    const text = Array.isArray(strings) ? (strings as unknown as string[]).join('?') : String(strings);
+    calls.push({ text, params });
+    if (/insert into subscriptions/.test(text)) return Promise.resolve([{ notify_daily_cap: storedCap }]);
+    return Promise.resolve([]);
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return { fn: fn as any, calls };
+}
+
+describe('subscriptionPost — notify_daily_cap: absent must never lift an existing limit', () => {
+  it('ABSENT field binds null, so the UPDATE branch keeps subscriptions.notify_daily_cap', async () => {
+    const { fn, calls } = makeSqlStoring(20); // the row already had a 20/day limit
+    vi.mocked(getSql).mockReturnValue(fn);
+    const res = makeRes();
+
+    await subscriptionPost(makeReq({ notify: true }), res as unknown as ResLike);
+
+    expect(capValuesParam(calls)).toBe(null);
+    expect(capUpdateParam(calls)).toBe(null);
+    // The keep-on-absent branch must literally be there — this is the whole point of the column.
+    expect(insertParams(calls) && calls.find((c) => /insert into subscriptions/.test(c.text))!.text).toContain(
+      'then subscriptions.notify_daily_cap',
+    );
+    // ...and the echo reports the value the DB kept, not "no limit".
+    expect(bodyOf(res).notify_daily_cap).toBe(20);
+  });
+
+  it('a BRAND-NEW row created without the field is stored UNLIMITED (NULL), never with a default', async () => {
+    // Owner, 2026-07-26: «всем без ограничений. Захотят изменить — то изменят в настройках кол-во».
+    // The DB answers RETURNING with NULL because `nullif(null, 0)` is what the INSERT stores.
+    const { fn, calls } = makeSqlStoring(null);
+    vi.mocked(getSql).mockReturnValue(fn);
+    const res = makeRes();
+
+    await subscriptionPost(makeReq({ notify: true }), res as unknown as ResLike);
+
+    // Nothing numeric is bound at all: with the field absent there is simply no default cap to
+    // bind, so no ceiling can reach the fresh row.
+    expect(insertParams(calls).filter((p) => typeof p === 'number')).toEqual([]);
+    expect(capValuesParam(calls)).toBe(null); // absent -> null -> nullif(null, 0) = SQL NULL
+    expect(bodyOf(res).notify_daily_cap).toBe(null);
+    // ...and a stored NULL means the notify run never limits this person (the send-side rule).
+    expect(isOverDailyCap(1_000, bodyOf(res).notify_daily_cap as number | null)).toBe(false);
+  });
+});
+
+describe('subscriptionPost — notify_daily_cap: explicit choices', () => {
+  it('null means "без ограничения": bound as the 0 sentinel, stored (and echoed) as null', async () => {
+    const { fn, calls } = makeSqlStoring(null);
+    vi.mocked(getSql).mockReturnValue(fn);
+    const res = makeRes();
+
+    await subscriptionPost(makeReq({ notify: true, notify_daily_cap: null }), res as unknown as ResLike);
+
+    // 0, not null — null on the wire would be indistinguishable from "absent" and silently ignored.
+    expect(capValuesParam(calls)).toBe(0);
+    expect(capUpdateParam(calls)).toBe(0);
+    expect(calls.find((c) => /insert into subscriptions/.test(c.text))!.text).toContain('nullif(');
+    expect(bodyOf(res).notify_daily_cap).toBe(null);
+  });
+
+  it('0 is accepted as the same "no limit" choice as null', async () => {
+    const { fn, calls } = makeSqlStoring(null);
+    vi.mocked(getSql).mockReturnValue(fn);
+    const res = makeRes();
+
+    await subscriptionPost(makeReq({ notify_daily_cap: 0 }), res as unknown as ResLike);
+
+    expect(res.statusCode).toBe(200);
+    expect(capValuesParam(calls)).toBe(0);
+    expect(bodyOf(res).notify_daily_cap).toBe(null);
+  });
+
+  for (const choice of [5, 10, 20, 50]) {
+    it(`stores and echoes the ${choice}/day option from the settings screen`, async () => {
+      const { fn, calls } = makeSqlStoring(choice);
+      vi.mocked(getSql).mockReturnValue(fn);
+      const res = makeRes();
+
+      await subscriptionPost(makeReq({ notify: true, notify_daily_cap: choice }), res as unknown as ResLike);
+
+      expect(res.statusCode).toBe(200);
+      expect(capValuesParam(calls)).toBe(choice);
+      expect(capUpdateParam(calls)).toBe(choice);
+      expect(bodyOf(res).notify_daily_cap).toBe(choice);
+    });
+  }
+
+  it('the echo comes from RETURNING, so it can never disagree with what the DB stored', async () => {
+    const { fn } = makeSqlStoring(50); // DB says 50 (e.g. a concurrent save won)
+    vi.mocked(getSql).mockReturnValue(fn);
+    const res = makeRes();
+
+    await subscriptionPost(makeReq({ notify_daily_cap: 5 }), res as unknown as ResLike);
+
+    expect(bodyOf(res).notify_daily_cap).toBe(50);
+  });
+});
+
+describe('subscriptionPost — notify_daily_cap: a malformed value is rejected, not fixed up', () => {
+  for (const bad of [-1, 501, 1.5, '10', true, [], {}] as unknown[]) {
+    it(`400 for ${JSON.stringify(bad) ?? String(bad)} — and NOTHING is written`, async () => {
+      const { fn, calls } = makeSqlStoring(null);
+      vi.mocked(getSql).mockReturnValue(fn);
+      const res = makeRes();
+
+      await subscriptionPost(makeReq({ notify: true, notify_daily_cap: bad }), res as unknown as ResLike);
+
+      expect(res.statusCode).toBe(400);
+      expect(calls).toHaveLength(0); // the whole save is refused before any DB work
+    });
+  }
 });

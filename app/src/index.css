@@ -466,6 +466,51 @@ a {
   width: 100%;
 }
 
+/* Settings: "how many messages a day" chips, folded under the mailing toggle.
+   Same 0fr↔1fr grid fold as the province list. Kept in the DOM so the fold can
+   animate; `visibility: hidden` while folded also drops the chips out of the tab
+   order (transitioned with the same duration, so it flips at the right moment). */
+.notifycap {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition: grid-template-rows 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease,
+    visibility 0.28s;
+}
+.notifycap.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+}
+.notifycap__inner {
+  overflow: hidden;
+  min-height: 0;
+}
+/* Reads as a CHILD of the toggle above (no hairline between them), while the next
+   row keeps its own separator — `.row + .row` no longer matches across the fold. */
+.notifycap__row {
+  padding-top: 4px;
+  padding-bottom: 12px;
+  min-height: 0;
+}
+.notifycap + .row::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: var(--kj-separator);
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No fold: the block just appears/disappears (the global rule already zeroes
+     durations; spelled out here so the intent survives future edits). */
+  .notifycap {
+    transition: none;
+  }
+}
+
 /* ── Checkbox ──────────────────────────────────────────────────────────── */
 .check {
   width: 22px;

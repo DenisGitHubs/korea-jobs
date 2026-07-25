@@ -195,3 +195,77 @@ describe('meGet — an unsubscribed user is reported as OFF, not as on', () => {
     expect(r2.statusCode).toBe(401);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// notify_daily_cap (owner, 2026-07-26) — the settings screen renders the chosen value from here.
+// Contract: a number = "at most that many DMs a day"; null = «без ограничения».
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A full subscription row with the cap set to `cap`. */
+const rowWithCap = (cap: number | null): Row => ({
+  city_ids: [],
+  region_slugs: [],
+  work_types: [],
+  notify: true,
+  digest_enabled: false,
+  no_city: true,
+  visa_types: [],
+  placement_fee: null,
+  require_housing: null,
+  require_meals: null,
+  notify_daily_cap: cap,
+});
+
+describe('meGet — notify_daily_cap', () => {
+  it('a chosen limit is passed through as a number', async () => {
+    vi.mocked(getSql).mockReturnValue(makeSql(rowWithCap(20)));
+    const res = makeRes();
+    await meGet(makeReq(), res as unknown as ResLike);
+
+    expect(subOf(res).notify_daily_cap).toBe(20);
+  });
+
+  it('a stored NULL is reported as null = «без ограничения» (what an untouched row holds)', async () => {
+    // draft_0026 adds no column default and backfills nobody, so every user reads as unlimited
+    // until they pick a value — /me must say exactly that, not invent a limit.
+    vi.mocked(getSql).mockReturnValue(makeSql(rowWithCap(null)));
+    const res = makeRes();
+    await meGet(makeReq(), res as unknown as ResLike);
+
+    expect(subOf(res).notify_daily_cap).toBe(null);
+  });
+
+  it('NO subscription row: reports null = «без ограничения», the state a save would actually store', async () => {
+    // Owner, 2026-07-26: «всем без ограничений. Захотят изменить — то изменят в настройках кол-во».
+    // A cold settings screen must therefore show "без ограничения", and POST /api/subscription does
+    // create the fresh row with NULL — the screen and the DB tell the same story.
+    vi.mocked(getSql).mockReturnValue(makeSql(null));
+    const res = makeRes();
+    await meGet(makeReq(), res as unknown as ResLike);
+
+    expect(subOf(res).notify_daily_cap).toBe(null);
+  });
+
+  it('reads the column through to_jsonb, so a pre-migration database cannot 500 the endpoint', async () => {
+    const seen: string[] = [];
+    const fn = (strings: TemplateStringsArray | string, ...params: unknown[]): Promise<Row[]> => {
+      const text = Array.isArray(strings) ? (strings as unknown as string[]).join('?') : String(strings);
+      void params;
+      seen.push(text);
+      if (/from subscriptions/.test(text)) return Promise.resolve([rowWithCap(5)]);
+      if (/from cities/.test(text)) return Promise.resolve([]);
+      if (/from users/.test(text))
+        return Promise.resolve([{ terms_accepted_at: null, terms_version: null, onboarded_at: null }]);
+      if (/from referral_points_ledger/.test(text)) return Promise.resolve([{ points_total: 0 }]);
+      return Promise.resolve([]);
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(getSql).mockReturnValue(fn as any);
+    const res = makeRes();
+    await meGet(makeReq(), res as unknown as ResLike);
+
+    expect(subOf(res).notify_daily_cap).toBe(5);
+    const subQuery = seen.find((t) => /from subscriptions/.test(t))!;
+    expect(subQuery).toContain("(to_jsonb(s) ->> 'notify_daily_cap')");
+  });
+});

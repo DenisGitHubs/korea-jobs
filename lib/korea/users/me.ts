@@ -33,10 +33,15 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
     // collapse to [] (the owner's "no saved filters" bug). Cast them to text[] (OID 1009 is
     // parsed) so the driver returns real JS arrays. city_ids is uuid[] — a BUILT-IN array OID
     // the driver already parses to an array (verified live), so it needs no cast.
+    //
+    // notify_daily_cap (draft_0026) is read through to_jsonb(s) so this endpoint keeps working on a
+    // database where the migration has not landed yet: an unknown key yields NULL, which is exactly
+    // the column's "no limit" meaning and today's behaviour — /me can never 500 over the new field.
     const subRows = (await sql`
-      select city_ids, region_slugs, work_types::text[] as work_types, notify, digest_enabled, no_city,
-             visa_types::text[] as visa_types, placement_fee, require_housing, require_meals
-      from subscriptions where user_id = ${user.id}::uuid limit 1`) as unknown as {
+      select s.city_ids, s.region_slugs, s.work_types::text[] as work_types, s.notify, s.digest_enabled, s.no_city,
+             s.visa_types::text[] as visa_types, s.placement_fee, s.require_housing, s.require_meals,
+             (to_jsonb(s) ->> 'notify_daily_cap')::int as notify_daily_cap
+      from subscriptions s where s.user_id = ${user.id}::uuid limit 1`) as unknown as {
       city_ids: string[] | null;
       region_slugs: string[] | null;
       work_types: string[] | null;
@@ -47,6 +52,7 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
       placement_fee: string | null;
       require_housing: boolean | null;
       require_meals: boolean | null;
+      notify_daily_cap: number | null;
     }[];
 
     let citySlugs: string[] = [];
@@ -68,10 +74,18 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
     let placementFee: string | null = null;
     let requireHousing: boolean | null = null;
     let requireMeals: boolean | null = null;
+    // How many notification DMs a day this person receives (LETTERS, not vacancies; null = no limit).
+    // COLD value (no subscription row) is null = «без ограничения» — the owner's rule is that nobody
+    // is limited until they choose a number, and POST /api/subscription creates a fresh row with NULL
+    // too, so the settings screen shows exactly what a save would store.
+    let notifyDailyCap: number | null = null;
 
     const sub = subRows[0];
     if (sub) {
       notify = sub.notify === true;
+      // A stored NULL is "no limit": either the chosen «без ограничения» or simply the untouched
+      // state of a row nobody has limited (the migration adds no default and backfills nobody).
+      notifyDailyCap = sub.notify_daily_cap ?? null;
       // Opt-in semantics all the way down: a NULL digest flag (only possible in a
       // deploy-before-migration window) reads as OFF, never as on.
       digestEnabled = sub.digest_enabled === true;
@@ -153,6 +167,7 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
         region_slugs: regionSlugs,
         work_types: workTypes,
         notify,
+        notify_daily_cap: notifyDailyCap,
         digest_enabled: digestEnabled,
         no_city: noCity,
         visa_types: visaTypes,

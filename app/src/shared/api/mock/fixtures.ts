@@ -403,6 +403,10 @@ export const DEFAULT_ME: Me = {
     require_housing: null,
     require_meals: null,
     digest_enabled: false,
+    // No cap by default (owner rule): everyone starts unlimited and picks a
+    // number themselves if the flow gets noisy. Set a number here to preview
+    // the capped state.
+    notify_daily_cap: null,
     no_city: true,
   },
 };

@@ -235,6 +235,16 @@ export interface Subscription {
    */
   digest_enabled?: boolean;
   /**
+   * How many realtime job MESSAGES (DMs) the bot may send per day, counted in
+   * Seoul time. A number = the cap (one message can carry several offers);
+   * `null` = no limit. OPTIONAL for backward compat: an ABSENT field means the
+   * backend has not shipped the cap yet and must be read as "no limit" (exactly
+   * today's behaviour) — never as a silently imposed limit. POST /subscription
+   * REPLACES the whole row, so the client always sends the field once it knows a
+   * value.
+   */
+  notify_daily_cap?: number | null;
+  /**
    * Also notify about / show offers with no city when the city filter is set.
    * Defaults to true (optional so older payloads default to "included").
    */
@@ -268,6 +278,13 @@ export interface Me {
   subscription: Subscription;
   /** Additive server switches; absent === everything off. */
   flags?: MeFlags;
+  /**
+   * Convenience MIRROR of `subscription.notify_daily_cap` (number = cap on daily
+   * job DMs, null = no limit). The source of truth is the field inside
+   * `subscription`; this one is only read when the subscription omits it, so a
+   * backend that surfaces the cap at the top level still works.
+   */
+  notify_daily_cap?: number | null;
   /** Loyalty points balance (referral program). */
   points_total: number;
   /** First-run onboarding completed (server-persisted, so it never repeats cross-device). */

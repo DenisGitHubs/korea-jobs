@@ -396,6 +396,15 @@ export async function handleMock(method: string, path: string, body?: unknown): 
       require_housing: typeof b.require_housing === 'boolean' ? b.require_housing : null,
       require_meals: typeof b.require_meals === 'boolean' ? b.require_meals : null,
       digest_enabled: typeof b.digest_enabled === 'boolean' ? b.digest_enabled : false,
+      // Daily cap on job DMs. Mirrors the real endpoint (lib/korea/notify/cap.ts):
+      // ABSENT keeps the stored value (an old client must never lift someone's
+      // limit), null/0 = "no limit", a positive integer = the cap.
+      notify_daily_cap:
+        b.notify_daily_cap === undefined
+          ? (me.subscription.notify_daily_cap ?? null)
+          : typeof b.notify_daily_cap === 'number' && b.notify_daily_cap > 0
+            ? Math.floor(b.notify_daily_cap)
+            : null,
       no_city: typeof b.no_city === 'boolean' ? b.no_city : true,
     };
     me = { ...me, subscription: next };

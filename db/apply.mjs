@@ -216,6 +216,19 @@ const files = [
   // flags.hide_unverified so the app can hide the tab — all without a deploy. Depends on config
   // (draft_0001_init.sql).
   'draft_0025_hide_unverified.sql',
+
+  // Per-user daily notification cap (0026) — ADDITIVE / idempotent (ADD COLUMN IF NOT EXISTS +
+  // SET DEFAULT + guarded CHECK + CREATE INDEX IF NOT EXISTS). Adds subscriptions.notify_daily_cap
+  // (integer, NULL = NO LIMIT, new rows default 10) so a person can choose how many notification
+  // DMs a day they receive, plus idx_notif_user_sent_at for the per-run "letters already sent
+  // today (Asia/Seoul)" count in lib/korea/notify/run.ts. EXISTING ROWS ARE NOT TOUCHED: the column
+  // is added WITHOUT a default first (a default on ADD COLUMN would materialise 10 onto every old
+  // row) and the default is attached afterwards, so today's subscribers stay unlimited until the
+  // owner decides otherwise. Unit is LETTERS, not vacancies (a DM carries up to notify_group_cap
+  // offers); the daily digest is a separate channel and is unaffected. MUST be applied BEFORE the
+  // matching code deploy (subscriptions/rw.ts + users/me.ts name the column directly). Depends on
+  // subscriptions + notifications_sent (draft_0001_init.sql, draft_0010_ads_notify.sql).
+  'draft_0026_notify_daily_cap.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

@@ -20,6 +20,18 @@ import { Segmented } from '../components/Segmented';
 import { ChipSelect, type ChipOption } from '../components/ChipSelect';
 import { Modal } from '../components/Modal';
 
+/**
+ * How many job MESSAGES a day the bot may send (Seoul time). `null` = no limit.
+ * One message can carry several offers, so this caps the pings, not the vacancies.
+ */
+const CAP_CHOICES: ReadonlyArray<number | null> = [5, 10, 20, 50, null];
+/** Chip value for "no limit" (chips are string-keyed). */
+const CAP_OFF = 'off';
+
+function capToChip(cap: number | null): string {
+  return cap === null ? CAP_OFF : String(cap);
+}
+
 function sameSet(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
   const sb = new Set(b);
@@ -67,6 +79,7 @@ export default function SettingsScreen() {
   const sMeals = useSubscriptionStore((s) => s.requireMeals);
   const sNotify = useSubscriptionStore((s) => s.notify);
   const sDigest = useSubscriptionStore((s) => s.digestEnabled);
+  const sCap = useSubscriptionStore((s) => s.notifyDailyCap);
 
   const [work, setWork] = useState<WorkType[]>(() => sWork);
   const [visa, setVisa] = useState<VisaType[]>(() => sVisa);
@@ -77,6 +90,12 @@ export default function SettingsScreen() {
   const [meals, setMeals] = useState<boolean>(() => sMeals === true);
   const [notify, setNotify] = useState<boolean>(() => sNotify);
   const [digest, setDigest] = useState<boolean>(() => sDigest);
+  // Display value: an UNKNOWN cap (a backend that does not report the field yet)
+  // shows as "no limit" — that is what actually happens today.
+  const [cap, setCap] = useState<number | null>(() => sCap ?? null);
+  // Whether the user actually touched the chips. Only then may an unknown cap be
+  // written; otherwise the save omits the field and the server keeps its value.
+  const [capTouched, setCapTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   // Info popup shown every time the user picks the 'auto' theme, explaining the
   // Korean-time schedule. Purely informational — the mode is applied instantly.
@@ -120,6 +139,11 @@ export default function SettingsScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // With a known cap it is a plain comparison; while it is unknown, any touch of
+  // the chips counts (the user's explicit choice must be sendable even when it
+  // equals what the screen was showing).
+  const capDirty = sCap === undefined ? capTouched : cap !== sCap;
+
   const dirty =
     !sameSet(work, sWork) ||
     !sameSet(visa, sVisa) ||
@@ -127,6 +151,7 @@ export default function SettingsScreen() {
     housing !== (sHousing === true) ||
     meals !== (sMeals === true) ||
     notify !== sNotify ||
+    capDirty ||
     digest !== sDigest;
 
   const save = useCallback(async () => {
@@ -141,6 +166,10 @@ export default function SettingsScreen() {
         noCity: sNoCity,
         workTypes: work,
         notify,
+        // Sent as soon as the client knows a cap (from /me) or the user picked
+        // one; null = "no limit". Left out while it is unknown and untouched, so
+        // a save from this screen cannot wipe a cap the client never saw.
+        notifyDailyCap: sCap !== undefined || capTouched ? cap : undefined,
         visaTypes: visa,
         placementFee: paid,
         requireHousing: housing ? true : null,
@@ -149,12 +178,15 @@ export default function SettingsScreen() {
       });
       const saved = await api.saveSubscription(body);
       apply(saved);
+      // The chosen cap is now stored server-side: later saves may go back to
+      // omitting it (keep-on-absent), and the button can settle on "Сохранено".
+      setCapTouched(false);
     } catch {
       /* keep local edits; the user can retry */
     } finally {
       setSaving(false);
     }
-  }, [saving, sCities, sNoCity, work, notify, visa, paid, housing, meals, digest, apply]);
+  }, [saving, sCities, sRegions, sNoCity, work, notify, cap, capTouched, sCap, visa, paid, housing, meals, digest, apply]);
 
   const citiesLabel = citiesSummary(sCities, sRegions, sNoCity, bySlug, lang, t);
 
@@ -164,6 +196,16 @@ export default function SettingsScreen() {
   );
   const visaOptions = useMemo<ChipOption<VisaType>[]>(
     () => VISA_TYPES.map((v) => ({ value: v, label: t(visaKey(v)) })),
+    [t],
+  );
+  // Daily message cap: plain numbers + an explicit "no limit" chip (the title
+  // above them carries the unit, so bare digits read fine and stay on one row).
+  const capOptions = useMemo<ChipOption<string>[]>(
+    () =>
+      CAP_CHOICES.map((n) => ({
+        value: capToChip(n),
+        label: n === null ? t('settings.notifyCapUnlimited') : String(n),
+      })),
     [t],
   );
   const paidOptions: ChipOption<'free' | 'paid'>[] = [
@@ -193,6 +235,32 @@ export default function SettingsScreen() {
                 <div className="row__sub">{t('settings.notificationsHint')}</div>
               </div>
               <Switch checked={notify} onChange={setNotify} label={t('settings.notifications')} />
+            </div>
+            {/* Child of the toggle above: how many DMs a day the bot may send.
+                Stays MOUNTED and folds open/closed (grid-rows 0fr↔1fr + fade); while
+                folded it is `visibility: hidden`, so its chips leave the tab order and
+                aria-hidden keeps them off screen readers. Hiding beats disabling here —
+                a greyed-out five-chip row under an off switch is just noise. */}
+            <div className={`notifycap ${notify ? 'is-open' : ''}`} aria-hidden={!notify}>
+              <div className="notifycap__inner">
+                <div className="row row--stack notifycap__row">
+                  <div className="row__label">{t('settings.notifyCapTitle')}</div>
+                  <ChipSelect
+                    single
+                    options={capOptions}
+                    value={[capToChip(cap)]}
+                    onChange={(next) => {
+                      // Radio semantics: SOME cap is always in effect (a number or
+                      // "no limit"), so tapping the active chip must not clear it.
+                      const picked = next[0];
+                      if (picked === undefined) return;
+                      setCap(picked === CAP_OFF ? null : Number(picked));
+                      setCapTouched(true);
+                    }}
+                  />
+                  <div className="row__sub row__sub--block">{t('settings.notifyCapHint')}</div>
+                </div>
+              </div>
             </div>
             <div className="row">
               <div className="row__label">
