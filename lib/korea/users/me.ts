@@ -2,12 +2,20 @@
 //
 // GET /api/me — the caller's public id, language, and current subscription
 // (chosen cities + work types + notify). User is resolved from verified initData.
+//
+// MAILING IS OPT-IN (owner rule 2026-07-25): a caller with NO subscription row gets nothing from
+// either cron (both INNER JOIN subscriptions), so this endpoint reports notify=false /
+// digest_enabled=false for them — the settings screen must not show an enabled toggle for mail
+// that is never sent. `no_city` is NOT a mailing switch and keeps its true default.
+//
+// Also carries `flags` — server-side switches the client needs to render correctly (currently only
+// hide_unverified, the «Не проверено» kill-switch; enforcement itself lives in raw/read.ts).
 
 import { getSql } from '../core/db.js';
 import { type ReqLike, type ResLike, send, sendError } from '../core/http.js';
 import { ApiErrorCode } from '../core/errors.js';
 import { authenticate } from '../core/context.js';
-import { getConfigString, getConfigNumber } from '../config.js';
+import { getConfigString, getConfigNumber, getConfigBool } from '../config.js';
 import { readStreakSummary } from '../streaks/update.js';
 import { reveals24h } from '../vacancies/read.js';
 
@@ -44,13 +52,17 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
     let citySlugs: string[] = [];
     let regionSlugs: string[] = [];
     let workTypes: string[] = [];
-    let notify = true;
-    // digest_enabled / no_city are `boolean not null default true` (draft_0017 / draft_0020) and
-    // absent (no subscription row) means "on" — mirror POST /api/subscription's absent-default AND
-    // the client's `s.no_city ?? true`, so a cold GET returns the SAME truth the client stores. When
-    // these were missing from the echo the client fell back to `?? true` and silently flipped a
-    // user's OFF toggle back ON on cold load (Censor/Olya major). `?? true` keeps null -> on too.
-    let digestEnabled = true;
+    // MAILING IS OPT-IN (owner rule 2026-07-25). A user with NO subscription row receives NOTHING
+    // (both notify/run.ts and digest/run.ts INNER JOIN subscriptions), so reporting notify/digest as
+    // "on" was a lie: the settings screen showed enabled toggles while no mail was ever sent. The
+    // honest cold value is OFF — the same absent-means-off rule POST /api/subscription now applies.
+    let notify = false;
+    let digestEnabled = false;
+    // no_city is NOT a mailing switch: it is a FEED/geo widening rule ("also show offers with no
+    // city"), `boolean not null default true` (draft_0020). Its absent-default stays TRUE, mirroring
+    // POST /api/subscription and the client's `s.no_city ?? true`, so a cold GET returns the SAME
+    // truth the client stores (when it was missing from the echo the client's `?? true` silently
+    // flipped a user's OFF toggle back ON on cold load — Censor/Olya major).
     let noCity = true;
     let visaTypes: string[] = [];
     let placementFee: string | null = null;
@@ -60,7 +72,9 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
     const sub = subRows[0];
     if (sub) {
       notify = sub.notify === true;
-      digestEnabled = sub.digest_enabled ?? true;
+      // Opt-in semantics all the way down: a NULL digest flag (only possible in a
+      // deploy-before-migration window) reads as OFF, never as on.
+      digestEnabled = sub.digest_enabled === true;
       noCity = sub.no_city ?? true;
       // region_slugs is text[] (built-in OID, driver-parsed): stored slugs, echoed straight back.
       regionSlugs = Array.isArray(sub.region_slugs) ? sub.region_slugs : [];
@@ -118,6 +132,14 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
     }
     const revealsLeft = Math.max(0, revealCap - revealsUsed);
 
+    // Server-side feature flags the CLIENT needs to render correctly. hide_unverified (config,
+    // default false) is the owner's kill-switch for the «Не проверено» stream: when it is on the
+    // server already returns an EMPTY GET /api/raw and 404s POST /api/raw/reveal (raw/read.ts,
+    // raw/reveal.ts — the enforcement never depends on the client), and this flag lets the app hide
+    // the tab entirely instead of showing an always-empty one. Additive field: an older client that
+    // does not read `flags` keeps working (it just shows an empty tab).
+    const hideUnverified = await getConfigBool('hide_unverified', false);
+
     send(res, 200, {
       public_id: user.publicId,
       lang: user.lang,
@@ -125,6 +147,7 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
       points_total: pointsTotal,
       reveals_left: revealsLeft,
       onboarded,
+      flags: { hide_unverified: hideUnverified },
       subscription: {
         city_slugs: citySlugs,
         region_slugs: regionSlugs,

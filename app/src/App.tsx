@@ -102,7 +102,10 @@ export default function App() {
           subscription: {
             city_slugs: [],
             work_types: [],
-            notify: true,
+            // Mailing is opt-in: an unknown profile is shown as "not subscribed",
+            // never as a pre-enabled toggle.
+            notify: false,
+            digest_enabled: false,
             visa_types: [],
             placement_fee: null,
             require_housing: null,

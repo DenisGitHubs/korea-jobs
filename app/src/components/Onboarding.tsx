@@ -69,7 +69,9 @@ export function Onboarding() {
   const [step, setStep] = useState(0); // 0 welcome · 1 work · 2 visa · 3 notify · 4 done
   const [workTypes, setWorkTypes] = useState<WorkType[]>([]);
   const [visa, setVisa] = useState<VisaType[]>([]);
-  const [notify, setNotify] = useState(true);
+  // Owner rule (2026-07-25): notifications are OPT-IN — the toggle starts OFF, so
+  // nobody is subscribed to DMs by a pre-checked box they never touched.
+  const [notify, setNotify] = useState(false);
   const [busy, setBusy] = useState(false);
 
   // Hide the TabBar while the overlay is up (restored on close/unmount).
@@ -103,6 +105,11 @@ export function Onboarding() {
       city_slugs: [],
       work_types: workTypes,
       notify,
+      // ALWAYS sent explicitly: an omitted field used to be read as "on" by the
+      // server, which switched the daily digest on for people who had just turned
+      // notifications off. Onboarding has a single "send me jobs" question, so the
+      // digest mirrors that answer; both are editable in Settings afterwards.
+      digest_enabled: notify,
       visa_types: visa,
       placement_fee: null,
       require_housing: null,

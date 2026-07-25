@@ -229,7 +229,10 @@ export interface Subscription {
   /** true = require housing (or unstated); null/false = no filter. */
   require_housing: boolean | null;
   require_meals: boolean | null;
-  /** Daily digest opt-in (bot sends one summary message a day). Defaults to true. */
+  /**
+   * Daily digest opt-in (bot sends one summary message a day). OPT-IN: an absent
+   * flag means "off" — always send it explicitly when saving a subscription.
+   */
   digest_enabled?: boolean;
   /**
    * Also notify about / show offers with no city when the city filter is set.
@@ -244,11 +247,27 @@ export interface TermsState {
   version: string;
 }
 
+/**
+ * Server-side feature switches carried by GET /api/me. Additive and OPTIONAL:
+ * an absent object (or an absent key) always means "off", so an older backend
+ * degrades to today's behaviour.
+ */
+export interface MeFlags {
+  /**
+   * true = the "⚠ Не проверено" (raw) feed segment is switched off for everyone.
+   * The server already serves an empty /api/raw and 404s /api/raw/reveal; the
+   * client must additionally not render the tab at all (an empty tab looks broken).
+   */
+  hide_unverified?: boolean;
+}
+
 export interface Me {
   public_id: string;
   lang: string;
   terms: TermsState;
   subscription: Subscription;
+  /** Additive server switches; absent === everything off. */
+  flags?: MeFlags;
   /** Loyalty points balance (referral program). */
   points_total: number;
   /** First-run onboarding completed (server-persisted, so it never repeats cross-device). */

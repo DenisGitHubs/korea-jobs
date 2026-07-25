@@ -387,16 +387,22 @@ export const DEFAULT_ME: Me = {
   // Remaining contact reveals for today (out of a 50/day budget). Drives the thin
   // "reveals left" hint on the vacancy screen; the mock decrements it per reveal.
   reveals_left: 47,
+  // Server switches. `hide_unverified: false` keeps the browser preview exactly as
+  // before (the "⚠ Не проверено" segment stays visible with its RAW_ITEMS fixtures);
+  // flip it to true here to exercise the "tab is gone" path locally.
+  flags: { hide_unverified: false },
   subscription: {
     city_slugs: [],
     region_slugs: [],
     work_types: [],
-    notify: true,
+    // Opt-in mailing: a fresh demo user is NOT subscribed (mirrors the real
+    // backend, and lets the feed's notify nudge be exercised in mock mode).
+    notify: false,
     visa_types: [],
     placement_fee: null,
     require_housing: null,
     require_meals: null,
-    digest_enabled: true,
+    digest_enabled: false,
     no_city: true,
   },
 };

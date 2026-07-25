@@ -43,6 +43,12 @@ export const ru = {
     inviteBannerTitle: 'Приглашай друзей — получай баллы',
     inviteBannerCta: 'Пригласить',
     inviteBannerClose: 'Скрыть',
+    notifyNudge: {
+      title: 'Присылать новые вакансии?',
+      sub: 'Будем сообщать, когда появится подходящая',
+      cta: 'Настроить',
+      close: 'Скрыть',
+    },
     searchPlaceholder: 'Поиск: город, профессия, слово',
     searchClear: 'Очистить поиск',
     aggFrom: 'из',

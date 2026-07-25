@@ -24,7 +24,7 @@ import { getSql } from '../core/db.js';
 import { type ReqLike, type ResLike, send, sendError, readJsonBody } from '../core/http.js';
 import { ApiErrorCode } from '../core/errors.js';
 import { authenticate } from '../core/context.js';
-import { getConfigNumber } from '../config.js';
+import { getConfigNumber, getConfigBool } from '../config.js';
 import { reveals24h } from '../vacancies/read.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -45,6 +45,12 @@ export async function rawReveal(req: ReqLike, res: ResLike): Promise<void> {
   if (!rawId || !UUID_RE.test(rawId)) return sendError(res, ApiErrorCode.BadRequest);
 
   try {
+    // KILL-SWITCH (config 'hide_unverified', DEFAULT FALSE = nothing changes today). While the
+    // UNVERIFIED stream is hidden, a row that is no longer listed must not stay revealable through a
+    // remembered / cached id — same reasoning as the already-published guard below. 404 (not 403):
+    // a hidden row is indistinguishable from a non-existent one (007). Checked BEFORE any DB work.
+    if (await getConfigBool('hide_unverified', false)) return sendError(res, ApiErrorCode.NotFound);
+
     const sql = getSql();
     // Same freshness window as the GET stream (clamped >= 1 like read.ts), so a row that has
     // aged out of the UNVERIFIED feed is not revealable either.

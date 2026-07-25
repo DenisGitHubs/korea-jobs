@@ -50,13 +50,19 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
   const inSlugs = stringArray(body?.city_slugs);
   const inRegions = stringArray(body?.region_slugs);
   const workTypes = stringArray(body?.work_types).filter((w) => WORK_TYPE_SET.has(w));
-  const notify = body?.notify === undefined ? true : body?.notify === true;
+  // MAILING IS OPT-IN (owner rule 2026-07-25): nothing may be "already on" that the user did not
+  // explicitly turn on. An ABSENT notify/digest_enabled is therefore OFF, not on. This also fixes the
+  // live bug where a client that omitted digest_enabled silently opted the user INTO the daily digest
+  // even with notify=false (the digest run does not look at notify — digest/run.ts).
+  const notify = body?.notify === true;
   // digest_enabled: the once-a-day summary opt-in (separate from realtime `notify`). Mirrors
-  // notify — absent defaults to true, so the client should always send the current toggle.
-  const digestEnabled = body?.digest_enabled === undefined ? true : body?.digest_enabled === true;
+  // notify — absent means OFF, so the client must always send the current toggle.
+  const digestEnabled = body?.digest_enabled === true;
   // no_city (MULTI-CITY): when the user HAS picked cities, whether to ALSO see city-less offers.
-  // Mirrors digest_enabled — absent defaults to true. Ignored server-side when no city is chosen
-  // (kj_city_match returns all). Fed to the feed (buildFilterWhere) + the digest (has_filters).
+  // NOT a mailing switch — it WIDENS what the user sees, so it deliberately does NOT follow the
+  // opt-in rule above: absent still defaults to TRUE (dropping it to false would silently NARROW an
+  // existing user's feed). Ignored server-side when no city is chosen (kj_geo_match returns all).
+  // Fed to the feed (buildFilterWhere) + the digest (has_filters).
   const noCity = body?.no_city === undefined ? true : body?.no_city === true;
   const visaTypes = [...new Set(stringArray(body?.visa_types).filter((v) => VISA_TYPE_SET.has(v)))];
   const placementFee =

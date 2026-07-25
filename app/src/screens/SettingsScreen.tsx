@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api } from '../shared/api/client';
 import type { VisaType, WorkType } from '../shared/types/api';
@@ -40,6 +40,7 @@ function ShareIcon() {
 export default function SettingsScreen() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const lang = useSettingsStore((s) => s.lang);
   const setLang = useSettingsStore((s) => s.setLang);
@@ -88,6 +89,36 @@ export default function SettingsScreen() {
     },
     [setThemeMode],
   );
+
+  // Anchor for the feed's mailing nudge: /settings?focus=notify brings the mailing
+  // toggle to the MIDDLE of the screen and glows it for ~1.8s, so the user sees at
+  // once what he was sent here for.
+  const notifyRowRef = useRef<HTMLDivElement | null>(null);
+  const [notifyFocus, setNotifyFocus] = useState(false);
+  useEffect(() => {
+    // Mount-only ([] deps on purpose): consuming the query param below re-renders the
+    // screen, and a searchParams dependency would tear this down mid-scroll.
+    if (searchParams.get('focus') !== 'notify') return;
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    // Two frames: the router's ScrollToTop zeroes the document in a layout effect on
+    // entry, so a same-frame scrollIntoView gets overwritten (desktop especially).
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        notifyRowRef.current?.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' });
+        setNotifyFocus(true);
+      });
+    });
+    const off = window.setTimeout(() => setNotifyFocus(false), 1800);
+    // Drop ?focus=notify so a re-render / Back from a sub-screen never replays it.
+    setSearchParams({}, { replace: true });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      window.clearTimeout(off);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const dirty =
     !sameSet(work, sWork) ||
@@ -156,7 +187,7 @@ export default function SettingsScreen() {
 
         <div className="region">
           <div className="section">
-            <div className="row">
+            <div className={`row ${notifyFocus ? 'row--focus' : ''}`} ref={notifyRowRef}>
               <div className="row__label">
                 <div>{t('settings.notifications')}</div>
                 <div className="row__sub">{t('settings.notificationsHint')}</div>

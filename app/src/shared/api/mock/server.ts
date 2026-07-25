@@ -388,12 +388,14 @@ export async function handleMock(method: string, path: string, body?: unknown): 
       city_slugs: Array.isArray(b.city_slugs) ? b.city_slugs.map(String) : [],
       region_slugs: Array.isArray(b.region_slugs) ? b.region_slugs.map(String) : [],
       work_types: Array.isArray(b.work_types) ? b.work_types.map(String) : [],
-      notify: typeof b.notify === 'boolean' ? b.notify : true,
+      // Opt-in mailing (owner rule 2026-07-25) — mirror the real server: an absent
+      // flag is OFF, never "on by omission".
+      notify: typeof b.notify === 'boolean' ? b.notify : false,
       visa_types: Array.isArray(b.visa_types) ? (b.visa_types as VisaType[]) : [],
       placement_fee: b.placement_fee ?? null,
       require_housing: typeof b.require_housing === 'boolean' ? b.require_housing : null,
       require_meals: typeof b.require_meals === 'boolean' ? b.require_meals : null,
-      digest_enabled: typeof b.digest_enabled === 'boolean' ? b.digest_enabled : true,
+      digest_enabled: typeof b.digest_enabled === 'boolean' ? b.digest_enabled : false,
       no_city: typeof b.no_city === 'boolean' ? b.no_city : true,
     };
     me = { ...me, subscription: next };

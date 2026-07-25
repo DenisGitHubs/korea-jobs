@@ -3870,6 +3870,119 @@ a {
   }
 }
 
+/* ── Mailing opt-in nudge (FeedScreen, a few cards down) ─────────────────
+   Same Liquid Glass recipe as .nudge-share, but with a two-line label; it sits
+   inside .feed-list, so it carries the card's bottom margin itself. */
+.nudge-notify {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 var(--kj-space-3);
+  padding: 12px 14px;
+  border-radius: var(--kj-radius);
+  background: var(--lg-card);
+  border: 1px solid var(--lg-brd);
+  box-shadow: var(--lg-shadow-sm), var(--lg-rim);
+  animation: kj-nudge-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .nudge-notify {
+    backdrop-filter: blur(18px) saturate(150%);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+  }
+}
+.nudge-notify__icon {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--kj-brand-tint);
+  color: var(--kj-brand-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.nudge-notify__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nudge-notify__title {
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.nudge-notify__sub {
+  color: var(--kj-hint);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.nudge-notify__cta {
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: var(--kj-brand-tint);
+  color: var(--kj-brand-strong);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.nudge-notify__close {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--kj-hint);
+  font-size: 14px;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nudge-notify {
+    animation: kj-fade-in 0.15s ease both;
+  }
+}
+
+/* Spotlight on the settings row the feed nudge points at (~1.8s, class removed by
+   JS afterwards). Painted as an inset overlay: .section clips overflow, so an outer
+   glow would be cut off. */
+.row--focus::after {
+  content: '';
+  position: absolute;
+  inset: 4px 8px;
+  border-radius: 14px;
+  pointer-events: none;
+  background: var(--kj-brand-tint);
+  animation: kj-focus-glow 1.8s ease-in-out both;
+}
+@keyframes kj-focus-glow {
+  0% {
+    opacity: 0;
+  }
+  14% {
+    opacity: 1;
+  }
+  55% {
+    opacity: 0.55;
+  }
+  78% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No pulse: a flat tint that simply disappears when the class is dropped. */
+  .row--focus::after {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 /* ── Referral: progress to next badge + celebration card ────────────────── */
 .ref-progress {
   margin-top: 10px;

@@ -14,6 +14,7 @@ vi.mock('../core/db.js', () => ({ getSql: vi.fn() }));
 vi.mock('../core/context.js', () => ({ authenticate: vi.fn() }));
 vi.mock('../config.js', () => ({
   getConfigNumber: vi.fn(async (_k: string, fallback: number) => fallback),
+  getConfigBool: vi.fn(async (_k: string, fallback: boolean) => fallback),
 }));
 // reveals24h IS the shared budget. Mock it so this suite controls the cap gate directly; its 3-table
 // SQL is characterized in vacancies/read.test.ts.
@@ -22,6 +23,7 @@ vi.mock('../vacancies/read.js', () => ({ reveals24h: vi.fn() }));
 import type { ReqLike, ResLike } from '../core/http.js';
 import { getSql } from '../core/db.js';
 import { authenticate } from '../core/context.js';
+import { getConfigBool } from '../config.js';
 import { reveals24h } from '../vacancies/read.js';
 import { rawReveal } from './reveal.js';
 
@@ -69,6 +71,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(authenticate).mockResolvedValue({ ok: true, user: { id: 'user-1' } } as never);
   vi.mocked(reveals24h).mockResolvedValue(0);
+  vi.mocked(getConfigBool).mockImplementation(async (_k: string, fallback: boolean) => fallback);
 });
 
 describe('rawReveal — shared daily cap, free repeat, race-safe insert', () => {
@@ -142,6 +145,21 @@ describe('rawReveal — shared daily cap, free repeat, race-safe insert', () => 
     expect(r2.statusCode).toBe(400);
 
     expect(calls).toHaveLength(0); // never reached the DB
+  });
+
+  it('hide_unverified ON: 404 and NO database work — a remembered id cannot outlive the hidden stream', async () => {
+    vi.mocked(getConfigBool).mockImplementation(async (k: string, fallback: boolean) =>
+      k === 'hide_unverified' ? true : fallback,
+    );
+    const { fn, calls } = makeSql({ rawRow: { id: RID, text: 'звоните 010-1111-2222' } });
+    vi.mocked(getSql).mockReturnValue(fn);
+    const res = makeRes();
+
+    await rawReveal(makeReq({ raw_id: RID }), res as unknown as ResLike);
+
+    expect(res.statusCode).toBe(404); // 404, not 403: a hidden row is indistinguishable from a missing one (007)
+    expect(calls).toHaveLength(0);
+    expect(vi.mocked(reveals24h)).not.toHaveBeenCalled(); // budget untouched
   });
 
   it('404 for a non-POST method', async () => {

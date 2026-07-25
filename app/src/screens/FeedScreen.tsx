@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -18,9 +18,17 @@ import { VacancyCard, HeartIcon } from '../components/VacancyCard';
 import { RawCard } from '../components/RawCard';
 import { FilterSheet } from '../components/FilterSheet';
 import { ReferralBanner } from '../components/ReferralBanner';
+import { NotifyNudge } from '../components/NotifyNudge';
 import { IconCheckCircle, IconSearch, IconWarn } from '../components/icons/StateIcons';
 
 type Segment = FeedSegment;
+
+/**
+ * The mailing nudge rides INSIDE the list, after this many cards, and only when the
+ * page is longer than that — so it is met once the user has scrolled a bit, never on
+ * the first screen, and never as the dangling last row of a short feed.
+ */
+const NUDGE_AFTER_CARDS = 4;
 
 function FilterIcon() {
   return (
@@ -152,10 +160,23 @@ export default function FeedScreen() {
   const sig = filterSignature(filter);
   const active = isFilterActive(filter);
 
+  // Server switch: when on, the "⚠ Не проверено" (raw) segment does not exist for
+  // the user at all — the backend already serves an empty /raw and 404s the reveal,
+  // and the tab itself must not be rendered (an empty tab looks like a bug).
+  const hideUnverified = useSubscriptionStore((s) => s.hideUnverified);
+
   // Remember the last-viewed tab across navigations (session store): returning
   // from a card restores the segment; the per-segment feed cache restores scroll.
-  const segment = useUiStore((s) => s.feedSegment);
+  const storedSegment = useUiStore((s) => s.feedSegment);
   const setSegment = useUiStore((s) => s.setFeedSegment);
+  // Anti-stuck guard, in two halves. READ: a remembered/current 'raw' is read as
+  // 'all' the moment the flag is on, so this render already fetches the normal feed
+  // (no flash of a dead tab, no request to the disabled endpoint). WRITE: the stored
+  // value is normalized right after, so other screens/returns see 'all' too.
+  const segment: Segment = hideUnverified && storedSegment === 'raw' ? 'all' : storedSegment;
+  useEffect(() => {
+    if (hideUnverified && storedSegment === 'raw') setSegment('all');
+  }, [hideUnverified, storedSegment, setSegment]);
   const [items, setItems] = useState<FeedItem[]>([]);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [hasMore, setHasMore] = useState(true);
@@ -343,10 +364,12 @@ export default function FeedScreen() {
     </button>
   );
 
-  const segOptions = [
-    { value: 'all' as const, label: t('feed.segAll') },
-    { value: 'saved' as const, label: `♥ ${t('feed.segSaved')}` },
-    { value: 'raw' as const, label: `⚠ ${t('feed.segRaw')}` },
+  // The unverified tab is dropped entirely when the server switch is on — only
+  // "Все" and "Сохранённые" remain.
+  const segOptions: Array<{ value: Segment; label: string }> = [
+    { value: 'all', label: t('feed.segAll') },
+    { value: 'saved', label: `♥ ${t('feed.segSaved')}` },
+    ...(hideUnverified ? [] : [{ value: 'raw' as const, label: `⚠ ${t('feed.segRaw')}` }]),
   ];
 
   return (
@@ -399,8 +422,14 @@ export default function FeedScreen() {
             <div className="feed-list">
               {segment === 'raw'
                 ? (items as RawView[]).map((r) => <RawCard key={r.id} raw={r} />)
-                : (items as VacancyView[]).map((v) => (
-                    <VacancyCard key={v.id} vacancy={v} onOpen={openVacancy} onToggleSave={toggleSave} />
+                : (items as VacancyView[]).map((v, i) => (
+                    <Fragment key={v.id}>
+                      <VacancyCard vacancy={v} onOpen={openVacancy} onToggleSave={toggleSave} />
+                      {/* Soft mailing offer — self-hides unless the mailing is off (NotifyNudge). */}
+                      {segment === 'all' && i === NUDGE_AFTER_CARDS - 1 && items.length > NUDGE_AFTER_CARDS ? (
+                        <NotifyNudge />
+                      ) : null}
+                    </Fragment>
                   ))}
             </div>
             <div ref={sentinelRef} />

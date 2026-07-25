@@ -47,6 +47,11 @@
 //   * source_id / tg_chat_id / sender_id / sender_username / raw payload are NEVER
 //     projected — the source does not leak out (007). source_kind is a constant 'raw'.
 //
+// KILL-SWITCH (owner, 2026-07-25): config 'hide_unverified' (boolean, DEFAULT FALSE) closes this
+// whole stream without a deploy — this endpoint returns an empty page, POST /api/raw/reveal 404s,
+// and GET /api/me reports flags.hide_unverified so the app can hide the tab. Default false = the
+// behaviour described above is EXACTLY what runs today. See db/migrations/draft_0025_hide_unverified.sql.
+//
 // Cursor pagination over (fetched_at, id) — fetched_at is the server-authoritative,
 // NOT-NULL timestamp (posted_at from Telegram can be null), so the tuple order is stable.
 // Same tma auth as the feed; no per-user scope (this is a shared "not sorted yet" pool
@@ -56,7 +61,7 @@ import { getSql } from '../core/db.js';
 import { type ReqLike, type ResLike, send, sendError, queryParam } from '../core/http.js';
 import { ApiErrorCode } from '../core/errors.js';
 import { authenticate } from '../core/context.js';
-import { getConfigNumber } from '../config.js';
+import { getConfigNumber, getConfigBool } from '../config.js';
 import { scrubContacts } from '../core/scrub.js';
 
 const PAGE_SIZE = 20;
@@ -112,6 +117,16 @@ export async function rawFeed(req: ReqLike, res: ResLike): Promise<void> {
   const cur = decodeCursor(queryParam(req, 'cursor'));
 
   try {
+    // KILL-SWITCH (config 'hide_unverified', DEFAULT FALSE = current behaviour unchanged): when the
+    // owner turns it on, the UNVERIFIED stream is closed WITHOUT a deploy — the endpoint keeps its
+    // shape (200 + the same page envelope) and simply has nothing in it, so an older client shows an
+    // empty tab instead of an error. /me exposes the same flag (flags.hide_unverified) so the app can
+    // hide the tab outright, and POST /api/raw/reveal 404s under the same flag — the server is the
+    // enforcement point, never the client. Read BEFORE any query: flag on => no DB work at all.
+    if (await getConfigBool('hide_unverified', false)) {
+      return send(res, 200, { items: [], next_cursor: null });
+    }
+
     // Freshness window (only recent unsorted messages). Clamp to >= 1 day so a mis-seeded
     // 0/negative config can never break make_interval or blank the stream unintentionally.
     const maxAge = Math.max(1, Math.floor(await getConfigNumber('raw_max_age_days', 14)));

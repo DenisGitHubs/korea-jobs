@@ -201,6 +201,21 @@ const files = [
   // db/backfill_source_link.mts AFTER this to fill existing rows whose raw still survives. Depends on
   // vacancies (draft_0001_init.sql).
   'draft_0023_source_post_url.sql',
+
+  // Mailing is OPT-IN (0024) — ADDITIVE / idempotent (ALTER COLUMN SET DEFAULT). Flips the DEFAULT of
+  // subscriptions.notify and subscriptions.digest_enabled from true to false, so a row inserted without
+  // naming those columns can never silently opt a user into mail. EXISTING ROWS ARE NOT TOUCHED (no
+  // UPDATE): a choice already made stays. Pairs with the server-side change in lib/korea/subscriptions/rw.ts
+  // (an ABSENT flag now means OFF) and lib/korea/users/me.ts (a user with no subscription reports OFF).
+  // Depends on subscriptions.notify (draft_0001_init.sql) + subscriptions.digest_enabled (draft_0017_digest.sql).
+  'draft_0024_notify_default_off.sql',
+
+  // «Не проверено» kill-switch (0025) — ADDITIVE / idempotent (INSERT ... ON CONFLICT DO NOTHING).
+  // Seeds config 'hide_unverified' = false (= today's behaviour, nothing changes). When the owner flips
+  // it to true, GET /api/raw returns an empty page, POST /api/raw/reveal 404s and GET /api/me reports
+  // flags.hide_unverified so the app can hide the tab — all without a deploy. Depends on config
+  // (draft_0001_init.sql).
+  'draft_0025_hide_unverified.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

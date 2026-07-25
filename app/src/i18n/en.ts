@@ -46,6 +46,12 @@ export const en: typeof ru = {
     inviteBannerTitle: 'Invite friends — earn points',
     inviteBannerCta: 'Invite',
     inviteBannerClose: 'Dismiss',
+    notifyNudge: {
+      title: 'Get new jobs?',
+      sub: 'We’ll ping you when something fits',
+      cta: 'Set up',
+      close: 'Dismiss',
+    },
     searchPlaceholder: 'Search: city, job, keyword',
     searchClear: 'Clear search',
     aggFrom: 'from',

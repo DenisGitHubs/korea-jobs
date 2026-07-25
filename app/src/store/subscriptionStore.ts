@@ -12,7 +12,7 @@ export interface SubscriptionValue {
   placementFee: PlacementFee | null;
   requireHousing: boolean | null;
   requireMeals: boolean | null;
-  /** Daily digest opt-in (bot sends one summary a day). Defaults to true. */
+  /** Daily digest opt-in (bot sends one summary a day). Opt-in: defaults to false. */
   digestEnabled: boolean;
   /** Include offers with no city (used with the city filter). Defaults to true. */
   noCity: boolean;
@@ -30,6 +30,11 @@ interface SubscriptionState extends SubscriptionValue {
    * `null` = unknown (backend has not shipped the field) → the UI hides the hint.
    */
   revealsLeft: number | null;
+  /**
+   * Server switch `flags.hide_unverified` (from /me): the "⚠ Не проверено" feed
+   * segment is off. Additive/optional field — absent === false (segment shown).
+   */
+  hideUnverified: boolean;
   hydrate: (m: Me) => void;
   apply: (s: Subscription) => void;
   setNotify: (b: boolean) => void;
@@ -40,16 +45,19 @@ interface SubscriptionState extends SubscriptionValue {
   setRevealsLeft: (n: number | undefined) => void;
 }
 
+// Owner rule (2026-07-25): mailing is OPT-IN. Nothing may look "already on" before
+// the real subscription arrives from /me — neither the settings toggles nor the
+// feed nudge (which is driven by `notify`).
 const EMPTY: SubscriptionValue = {
   citySlugs: [],
   regionSlugs: [],
   workTypes: [],
-  notify: true,
+  notify: false,
   visaTypes: [],
   placementFee: null,
   requireHousing: null,
   requireMeals: null,
-  digestEnabled: true,
+  digestEnabled: false,
   noCity: true,
 };
 
@@ -63,7 +71,8 @@ function fromSubscription(s: Subscription): SubscriptionValue {
     placementFee: s.placement_fee ?? null,
     requireHousing: s.require_housing ?? null,
     requireMeals: s.require_meals ?? null,
-    digestEnabled: s.digest_enabled ?? true,
+    // Absent === off (opt-in): a missing flag must never be shown as an enabled toggle.
+    digestEnabled: s.digest_enabled ?? false,
     noCity: s.no_city ?? true,
   };
 }
@@ -110,6 +119,8 @@ export const useSubscriptionStore = create<SubscriptionState>((set) => ({
   // flashes before hydrate and a failed /me does not trap the user in onboarding.
   onboarded: true,
   revealsLeft: null,
+  // Safe default: the segment stays visible unless the server explicitly hides it.
+  hideUnverified: false,
   hydrate: (m) =>
     set({
       ...fromSubscription(m.subscription),
@@ -118,6 +129,8 @@ export const useSubscriptionStore = create<SubscriptionState>((set) => ({
       termsVersion: m.terms?.version ?? '',
       onboarded: m.onboarded ?? true,
       revealsLeft: typeof m.reveals_left === 'number' ? m.reveals_left : null,
+      // Additive flag: absent object / absent key === off.
+      hideUnverified: m.flags?.hide_unverified === true,
       loaded: true,
     }),
   apply: (s) => set({ ...fromSubscription(s), loaded: true }),

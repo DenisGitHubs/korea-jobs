@@ -14,6 +14,11 @@ interface UiState {
    * Last-viewed feed segment (Все / Сохранённые / Не проверено). Persisted in the
    * session store so returning from a card restores the tab (scroll is restored by
    * the feed cache keyed per segment). Resets on a full app reload.
+   *
+   * NOTE: 'raw' is conditional — the server switch `flags.hide_unverified` (/me)
+   * removes that tab. FeedScreen therefore READS a stored 'raw' as 'all' while the
+   * flag is on and normalizes the stored value, so nobody can get stuck on a tab
+   * that no longer exists.
    */
   feedSegment: FeedSegment;
   setFeedSegment: (v: FeedSegment) => void;
