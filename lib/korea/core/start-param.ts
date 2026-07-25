@@ -34,6 +34,13 @@ const REF_CODE_RE = /^[0-9a-f]{16}$/i;
  */
 const SHARE_RE = /^v([0-9a-f]{32})(?:r([0-9a-f]{16}))?$/i;
 
+/** Canonical dashed UUID (8-4-4-4-12), the shape the vacancy id arrives in from the DB / client. */
+const UUID_DASHED_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Deep-link tags — kept next to SHARE_RE so the builder and parser share one format. */
+const VACANCY_TAG = 'v';
+const REF_TAG = 'r';
+
 export interface StartParam {
   /** Inviter referral code (16 lowercase hex), when the link carried one. */
   refCode?: string;
@@ -63,6 +70,22 @@ export function parseStartParam(raw: string | null | undefined): StartParam {
   if (REF_CODE_RE.test(s)) return { refCode: s.toLowerCase() };
 
   return {};
+}
+
+/**
+ * Build the vacancy-share `startapp` payload `v<vacancyHex32>[r<refCode16>]` — the inverse of
+ * `parseStartParam`, and the server-side twin of the front-end's `buildShareStartParam`
+ * (app/src/lib/shareLink.ts). `vacancyId` is a canonical dashed UUID; the dashes are stripped to
+ * the 32-hex form. The referral code is appended ONLY when it is a valid 16-hex `public_id`, so a
+ * missing/garbage code degrades to a vacancy-only link (still opens the card, no attribution).
+ * Returns null when the vacancy id is not a UUID, letting the caller fall back to a plain link.
+ */
+export function buildShareStartParam(vacancyId: string, refCode?: string | null): string | null {
+  const s = vacancyId.trim().toLowerCase();
+  if (!UUID_DASHED_RE.test(s)) return null;
+  let sp = `${VACANCY_TAG}${s.replace(/-/g, '')}`;
+  if (refCode && REF_CODE_RE.test(refCode)) sp += `${REF_TAG}${refCode.toLowerCase()}`;
+  return sp;
 }
 
 /**

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { postEvent } from '@telegram-apps/sdk-react';
+import { postEvent, shareMessage } from '@telegram-apps/sdk-react';
 import { api, ApiError } from '../shared/api/client';
 import type { VacancyContact, VacancyView } from '../shared/types/api';
 import { feeKey, genderKey, regionKey, visaKey, workTypeKey } from '../shared/labels';
@@ -195,12 +195,13 @@ export default function VacancyScreen() {
     });
   }, [id]);
 
-  // Share THIS vacancy. Reuses the exact ReferralScreen mechanism: real client opens
+  // The CURRENT share path — kept byte-for-byte in behaviour and used as the graceful
+  // fallback below. Reuses the exact ReferralScreen mechanism: real client opens
   // Telegram's native "share to a chat" sheet via `web_app_open_tg_link` on
   // /share/url?url=…&text=…; browser/mock (or a failed postEvent) copies the link so
   // the preview still works. The link carries a combined startapp (vacancy id + my
   // referral code) — the app deep-navigates to the card, the backend binds the referral.
-  const shareVacancy = useCallback(async () => {
+  const shareFallback = useCallback(async () => {
     const v = vacancy;
     if (!v) return;
     const ref = await loadReferral();
@@ -235,6 +236,39 @@ export default function VacancyScreen() {
       setShareToast(link);
     }
   }, [vacancy, isReal, lang, t]);
+
+  // Share THIS vacancy. Preferred path (Bot API 8.0+): ask the backend to mint a
+  // "prepared inline message" and hand it to Telegram's native rich-card share sheet
+  // via WebApp.shareMessage. This DEGRADES SILENTLY to the current link-share
+  // (`shareFallback`) on every failure mode, so nothing regresses on older clients:
+  //   • shareMessage.isAvailable() === false  → client < 8.0 / unsupported / no SDK env
+  //     (the endpoint is never even called), or
+  //   • the backend opts out ({ fallback: true }) or returns no preparedMessageId, or
+  //   • the endpoint errors / the network fails, or
+  //   • the native share dialog rejects (shareMessage promise throws).
+  // The referral binding rides inside the prepared card server-side; the fallback link
+  // still carries the combined startapp (vacancy id + ref code) as before.
+  const shareVacancy = useCallback(async () => {
+    const v = vacancy;
+    if (!v) return;
+    // Feature-detect the 8.0 prepared-message API (this also gates on a known TMA env
+    // + an initialized SDK). Anything short of "available" → straight to the fallback.
+    if (shareMessage.isAvailable()) {
+      try {
+        const prep = await api.sharePrepare({ vacancyId: v.id });
+        if (prep.ok && !prep.fallback && prep.preparedMessageId) {
+          // Resolves on `prepared_message_sent`, rejects on `prepared_message_failed`
+          // (or a dismissed dialog) → the catch below falls back.
+          await shareMessage(prep.preparedMessageId);
+          setShareToast(t('vacancy.shareSent'));
+          return;
+        }
+      } catch {
+        /* backend/network/dialog failure → fall through to the link-share */
+      }
+    }
+    await shareFallback();
+  }, [vacancy, shareFallback, t]);
 
   // Open the source-channel post for listings with no direct contact. Reuses the
   // exact same relative-path mechanism as writeTelegram: raw `web_app_open_tg_link`

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { postEvent } from '@telegram-apps/sdk-react';
+import { postEvent, shareMessage } from '@telegram-apps/sdk-react';
 import { api } from '../shared/api/client';
 import type { ReferralView, StreakStat } from '../shared/types/api';
 import { useBackButton } from '../hooks/useBackButton';
@@ -76,6 +76,8 @@ export default function ReferralScreen() {
   const [reloadKey, setReloadKey] = useState(0);
   const [copied, setCopied] = useState(false);
   const [gain, setGain] = useState<number | null>(null);
+  // Transient banner for the app-share success ("Sent"). Null = hidden.
+  const [shareToast, setShareToast] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -116,6 +118,13 @@ export default function ReferralScreen() {
     return () => window.clearTimeout(id);
   }, [gain]);
 
+  // Auto-dismiss the app-share toast.
+  useEffect(() => {
+    if (shareToast == null) return;
+    const id = window.setTimeout(() => setShareToast(null), 2200);
+    return () => window.clearTimeout(id);
+  }, [shareToast]);
+
   const goBack = useCallback(() => navigate(-1), [navigate]);
   useBackButton(true, goBack);
 
@@ -131,9 +140,10 @@ export default function ReferralScreen() {
       });
   }, []);
 
-  // Open Telegram's native "share to a chat" sheet. The link travels ONLY in the
-  // `url` param (so it never duplicates inside the text); `text` is the pitch.
-  const share = useCallback(
+  // The CURRENT app-invite share path — kept intact as the graceful fallback below.
+  // Opens Telegram's native "share to a chat" sheet; the link travels ONLY in the
+  // `url` param (so it never duplicates inside the text), `text` is the pitch.
+  const shareFallback = useCallback(
     (link: string) => {
       const pathFull = `/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(
         t('referral.shareText'),
@@ -151,6 +161,38 @@ export default function ReferralScreen() {
     [isReal, t],
   );
 
+  // Share the APP itself. Preferred path (Bot API 8.0+): the backend mints a
+  // "prepared inline message" (rich invite card) handed to Telegram's native share
+  // sheet via WebApp.shareMessage. DEGRADES SILENTLY to the current link-share
+  // (`shareFallback`) on every failure mode, so nothing regresses on older clients:
+  //   • shareMessage.isAvailable() === false → client < 8.0 / unsupported / no SDK env
+  //     (the endpoint is never even called), or
+  //   • the backend opts out ({ fallback:true }) or returns no preparedMessageId, or
+  //   • the endpoint errors / the network fails, or
+  //   • the native share dialog rejects (shareMessage promise throws).
+  // The referral binding rides inside the prepared card server-side; the fallback
+  // link still carries the ref code as before.
+  const share = useCallback(
+    async (link: string) => {
+      if (shareMessage.isAvailable()) {
+        try {
+          const prep = await api.sharePrepare({ kind: 'app' });
+          if (prep.ok && !prep.fallback && prep.preparedMessageId) {
+            // Resolves on `prepared_message_sent`, rejects on `prepared_message_failed`
+            // (or a dismissed dialog) → the catch below falls back.
+            await shareMessage(prep.preparedMessageId);
+            setShareToast(t('referral.shareSent'));
+            return;
+          }
+        } catch {
+          /* backend/network/dialog failure → fall through to the link-share */
+        }
+      }
+      shareFallback(link);
+    },
+    [shareFallback, t],
+  );
+
   return (
     <div className="app">
       <AppBar title={t('referral.title')} onBack={goBack} />
@@ -158,6 +200,11 @@ export default function ReferralScreen() {
         {gain != null ? (
           <div className="ref-toast" role="status">
             {t('referral.pointsGained', { count: gain })}
+          </div>
+        ) : null}
+        {shareToast != null ? (
+          <div className="ref-toast" role="status">
+            {shareToast}
           </div>
         ) : null}
 

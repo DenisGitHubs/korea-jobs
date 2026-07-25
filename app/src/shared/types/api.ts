@@ -397,3 +397,33 @@ export interface Stats {
   vacancies_count: number;
   sources_count: number;
 }
+
+/**
+ * Body for POST /api/share/prepare. Two shapes, discriminated by `kind`:
+ *   • a VACANCY card — { vacancyId } (kind defaults to 'vacancy' server-side), or
+ *   • the APP-invite card — { kind: 'app' } (no vacancy).
+ * The backend treats an absent `kind` as 'vacancy' for backward compat.
+ */
+export type SharePrepareInput =
+  | { kind?: 'vacancy'; vacancyId: string }
+  | { kind: 'app' };
+
+/**
+ * POST /api/share/prepare — mint a Telegram "prepared inline message" for the rich
+ * shared card (Bot API 8.0 `savePreparedInlineMessage`) — either a vacancy card or
+ * the app-invite card (see SharePrepareInput). On success the backend returns
+ * `preparedMessageId` (handed to WebApp.shareMessage) plus its `expiresAt`. On the
+ * opt-out path it returns `{ fallback: true }` — the client then uses the existing
+ * plain link-share instead (older clients / browser mock / any backend-side reason
+ * to skip the rich card). The referral binding lives inside the prepared card's
+ * button server-side; the client never does attribution here.
+ */
+export interface SharePrepareResult {
+  ok: true;
+  /** Present on the success path only — pass straight to WebApp.shareMessage(). */
+  preparedMessageId?: string;
+  /** Unix timestamp (seconds) when the prepared message expires (informational). */
+  expiresAt?: number;
+  /** true = the client must fall back to the plain link-share. */
+  fallback?: boolean;
+}

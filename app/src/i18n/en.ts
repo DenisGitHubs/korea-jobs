@@ -183,6 +183,7 @@ export const en: typeof ru = {
     shareAria: 'Share this vacancy',
     shareText: 'A job in Korea — take a look: {{subject}} 👇',
     shareCopied: 'Link copied',
+    shareSent: 'Sent',
     shareUnavailable: 'Could not prepare the link. Please try again.',
   },
   settings: {
@@ -625,6 +626,7 @@ export const en: typeof ru = {
     soonBadge: 'planned',
     myLink: 'Your link',
     share: 'Share link',
+    shareSent: 'Sent',
     copy: 'Copy',
     copied: 'Copied',
     statsTitle: 'Your network',

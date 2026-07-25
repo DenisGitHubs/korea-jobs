@@ -20,29 +20,13 @@ import { getSql } from '../core/db.js';
 import { type ReqLike, type ResLike, send, sendError } from '../core/http.js';
 import { ApiErrorCode } from '../core/errors.js';
 import { authenticate } from '../core/context.js';
-import { getConfigNumber, getConfigString } from '../config.js';
+import { getConfigNumber } from '../config.js';
+import { buildMiniAppDeepLink } from '../core/deep-link.js';
 import { readStreakSummary } from '../streaks/update.js';
 
-/**
- * Build the canonical Mini App deep link `https://t.me/<bot>/<app>?startapp=<code>`.
- * bot username + app short-name come from config (`referral_bot_username`,
- * `referral_app_shortname`) or the matching env vars.
- *
- * TODO (open item — see draft_0004_referral.sql): until those are set, fall back to APP_URL
- * with the code as a startapp query. That URL is NOT a proper t.me deep link, so the share
- * flow will not auto-open the Mini App — set the config/env once the bot + short-name are
- * final. This is intentional and flagged rather than hardcoding a bot name here.
- */
-async function buildReferralLink(code: string): Promise<string> {
-  const bot = process.env.REFERRAL_BOT_USERNAME || (await getConfigString('referral_bot_username', ''));
-  const app = process.env.REFERRAL_APP_SHORTNAME || (await getConfigString('referral_app_shortname', ''));
-  if (bot && app) {
-    return `https://t.me/${bot}/${app}?startapp=${encodeURIComponent(code)}`;
-  }
-  const appUrl = process.env.APP_URL ?? '';
-  const sep = appUrl.includes('?') ? '&' : '?';
-  return appUrl ? `${appUrl}${sep}startapp=${encodeURIComponent(code)}` : `?startapp=${encodeURIComponent(code)}`;
-}
+// The invite link is the canonical Mini App deep link `https://t.me/<bot>/<app>?startapp=<code>`,
+// built by the SHARED core/deep-link.js helper (single source of truth, also used by the vacancy
+// share card) — bot username + app short-name from config/env, falling back to APP_URL when unset.
 
 /** GET /api/referral — invite code/link, loyalty balance, per-tier counters. */
 export async function referralGet(req: ReqLike, res: ResLike): Promise<void> {
@@ -129,7 +113,7 @@ export async function referralGet(req: ReqLike, res: ResLike): Promise<void> {
     ]);
 
     const code = auth.user.publicId;
-    const link = await buildReferralLink(code);
+    const link = await buildMiniAppDeepLink(code);
 
     send(res, 200, {
       code,

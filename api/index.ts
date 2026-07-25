@@ -45,6 +45,7 @@ import { adsCreate, adsMine, adsModerate } from '../lib/korea/ads/rw.js';
 import { adBump, adArchive, adUnarchive, adItem } from '../lib/korea/ads/manage.js';
 import { cooperationPost } from '../lib/korea/cooperation/rw.js';
 import { referralGet } from '../lib/korea/referral/read.js';
+import { sharePrepare } from '../lib/korea/share/prepare.js';
 
 type Handler = (req: ReqLike, res: ResLike) => Promise<void> | void;
 
@@ -104,6 +105,9 @@ const ROUTES: Route[] = [
   { segments: ['cooperation'], handler: cooperationPost },
   // Referral / loyalty (Authorization: tma <initData>)
   { segments: ['referral'], handler: referralGet },
+  // "Красивая ссылка" share: mint a Telegram prepared inline message (branded photo card) for a
+  // vacancy so the Mini App can pop it via the native share dialog. tma auth; body { vacancyId }.
+  { segments: ['share', 'prepare'], handler: sharePrepare },
   // Telegram bot webhook (X-Telegram-Bot-Api-Secret-Token)
   { segments: ['bot', 'webhook'], handler: botWebhook },
   // Cron (bearer CRON_SECRET)

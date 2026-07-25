@@ -180,6 +180,7 @@ export const ru = {
     shareAria: 'Поделиться вакансией',
     shareText: 'Вакансия в Корее — глянь: {{subject}} 👇',
     shareCopied: 'Ссылка скопирована',
+    shareSent: 'Отправлено',
     shareUnavailable: 'Не удалось подготовить ссылку. Попробуй ещё раз.',
   },
   settings: {
@@ -621,6 +622,7 @@ export const ru = {
     soonBadge: 'в планах',
     myLink: 'Твоя ссылка',
     share: 'Поделиться ссылкой',
+    shareSent: 'Отправлено',
     copy: 'Скопировать',
     copied: 'Скопировано',
     statsTitle: 'Твоя сеть',

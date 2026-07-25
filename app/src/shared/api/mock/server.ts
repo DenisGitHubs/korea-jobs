@@ -363,6 +363,15 @@ export async function handleMock(method: string, path: string, body?: unknown): 
     return DEFAULT_REFERRAL;
   }
 
+  // POST /share/prepare — the rich shared-card endpoint (Bot API 8.0 prepared
+  // message), for BOTH kinds (vacancy card and { kind:'app' } invite). The browser
+  // mock cannot mint a real prepared message and there is no native client for
+  // WebApp.shareMessage to talk to, so it always signals the link-share fallback —
+  // the preview keeps working without ever calling shareMessage.
+  if (method === 'POST' && p === '/share/prepare') {
+    return { ok: true, fallback: true };
+  }
+
   if (method === 'POST' && p === '/terms/accept') {
     me = { ...me, terms: { ...me.terms, required: false } };
     return { ok: true, version: me.terms.version };

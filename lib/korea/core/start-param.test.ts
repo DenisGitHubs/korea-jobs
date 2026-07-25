@@ -11,7 +11,7 @@
 //   * garbage/absent    -> {} (fail-closed, never a partial match).
 
 import { describe, it, expect } from 'vitest';
-import { parseStartParam, normalizeRefCode } from './start-param.js';
+import { parseStartParam, normalizeRefCode, buildShareStartParam } from './start-param.js';
 
 const REF = 'a1b2c3d4e5f60718'; // 16 hex == users.public_id
 const REF2 = '00112233445566ff';
@@ -79,6 +79,42 @@ describe('parseStartParam — garbage / malformed -> {}', () => {
     ['injection attempt', `${REF}';drop table users;--`],
   ])('%s -> {}', (_label, input) => {
     expect(parseStartParam(input)).toEqual({});
+  });
+});
+
+describe('buildShareStartParam — inverse of parseStartParam (share card link)', () => {
+  const UUID = '0f8c2a1b-3d4e-4f5a-6b7c-8d9e0f1a2b3c'; // dashed UUID whose hex is VAC
+
+  it('builds v<hex>r<ref> from a dashed UUID + valid ref code', () => {
+    expect(buildShareStartParam(UUID, REF)).toBe(`v${VAC}r${REF}`);
+  });
+
+  it('builds a vacancy-only link when the ref code is absent', () => {
+    expect(buildShareStartParam(UUID, null)).toBe(`v${VAC}`);
+    expect(buildShareStartParam(UUID)).toBe(`v${VAC}`);
+  });
+
+  it('drops an invalid ref code but still returns the vacancy-only link', () => {
+    expect(buildShareStartParam(UUID, 'not-a-ref')).toBe(`v${VAC}`);
+    expect(buildShareStartParam(UUID, `${REF}00`)).toBe(`v${VAC}`);
+  });
+
+  it('lowercases and strips dashes; result stays Telegram-legal and <= 512', () => {
+    const sp = buildShareStartParam(UUID.toUpperCase(), REF.toUpperCase());
+    expect(sp).toBe(`v${VAC}r${REF}`);
+    expect(sp).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(sp!.length).toBe(50);
+  });
+
+  it('round-trips through parseStartParam', () => {
+    const sp = buildShareStartParam(UUID, REF)!;
+    expect(parseStartParam(sp)).toEqual({ vacancyId: VAC, refCode: REF });
+  });
+
+  it('returns null when the vacancy id is not a UUID', () => {
+    expect(buildShareStartParam('v01', REF)).toBeNull();
+    expect(buildShareStartParam(VAC, REF)).toBeNull(); // 32-hex without dashes is not accepted here
+    expect(buildShareStartParam('', REF)).toBeNull();
   });
 });
 

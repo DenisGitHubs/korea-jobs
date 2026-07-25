@@ -16,6 +16,8 @@ import type {
   RawRevealView,
   RawView,
   ReferralView,
+  SharePrepareInput,
+  SharePrepareResult,
   Stats,
   Subscription,
   TermsAcceptResult,
@@ -206,6 +208,15 @@ export const api = {
 
   /** GET /referral — invite code/link, loyalty balance and per-tier counters. */
   referral: () => request<ReferralView>('GET', '/referral'),
+
+  /**
+   * POST /share/prepare — request a Bot API 8.0 "prepared inline message" for the
+   * rich shared card: a vacancy ({ vacancyId }) or the app invite ({ kind: 'app' }).
+   * Success: { preparedMessageId, expiresAt }; opt-out: { fallback: true } (client
+   * then uses the existing plain link-share).
+   */
+  sharePrepare: (input: SharePrepareInput) =>
+    request<SharePrepareResult>('POST', '/share/prepare', { body: input }),
 
   /** GET /stats — feed-wide totals for the aggregator bar. */
   stats: () => request<Stats>('GET', '/stats'),
