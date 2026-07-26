@@ -387,16 +387,54 @@ export const en: typeof ru = {
   },
   partners: {
     title: 'Partners',
-    heroTitle: 'Cooperation',
-    heroText: 'An agency, channel or employer? Tell us about yourself — we will discuss postings and partnership.',
-    messageLabel: 'Message',
-    messagePlaceholder: 'Who you are and what you offer',
-    contactLabel: 'Your Telegram contact',
-    contactPlaceholder: '@username',
-    contactHint: 'How to reach you.',
-    send: 'Send',
+    heroTitle: 'Partner with us',
+    heroText:
+      "We're an information platform about jobs in Korea for Russian-speaking workers. Here's how businesses can work with us.",
+    sectionTitle: 'Ways to work together',
+    discussFormat: "Let's discuss",
+    cta: 'Submit a request',
+    jobs: {
+      title: 'Job listings',
+      audience: 'For employers and staffing agencies',
+      body: "Your listing goes into the shared feed among other job posts — seen by workers looking for jobs in Korea. We'll agree on the format and timing individually.",
+      payNote:
+        "You pay for visibility, not results: a fixed spot in the feed for a chosen period. We don't guarantee responses or hires.",
+      verifyNote:
+        "Paying for a placement doesn't mean we've checked the employer or the job conditions. We only verify who places the ad.",
+      agencyNote: "For agencies: please provide your registration and confirm you don't charge workers any fees.",
+    },
+    promo: {
+      title: 'Promo codes for points',
+      audience: 'For shops, cargo services, courses',
+      body: "Offer our users a discount — they'll redeem it with points earned by inviting friends. Works for shops, cargo services, courses, and other services for workers in Korea.",
+      benefit: 'You get a mention in the app and clicks from an interested audience.',
+      pointsNote: "Points aren't money: they can't be cashed out, exchanged, or transferred. The partner sets the discount.",
+      link: 'How users earn points',
+    },
+    ads: {
+      title: 'Service ads',
+      audience: 'Transfers, insurance and other services for migrant workers',
+      badge: 'Ad',
+      body: "Money transfers, insurance, and other useful services for people already in Korea — we'll list them for you.",
+      disclaimer:
+        "Advertisement. Terms and delivery are the partner's responsibility — we are not a party to the deal.",
+    },
+    form: {
+      title: 'Tell us about your offer',
+      subtitle: "Describe what you're offering — we'll get back to you.",
+      messageLabel: 'Message',
+      messagePlaceholder: "Who you are and what you're offering",
+      send: 'Send',
+      error: "Couldn't send. Check your connection and try again.",
+    },
     sentTitle: 'Thank you!',
-    sentSubtitle: 'We received your message and will get back to you.',
+    sentSubtitle: "We've received your message and will get in touch.",
+    disclaimer: {
+      status:
+        "We are an information platform. We are not an employer, staffing agency, or employment intermediary: we don't match candidates and don't take part in negotiations or hiring paperwork.",
+      free: 'The service is free for job seekers — we never take money from workers.',
+      adsMark: 'All paid placements on the platform are labeled as an ad.',
+    },
   },
   work: {
     factory: 'Factory',

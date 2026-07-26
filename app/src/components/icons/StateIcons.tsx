@@ -96,3 +96,36 @@ export function IconSent() {
     </svg>
   );
 }
+
+/** Briefcase — "job listings" partnership option. */
+export function IconBriefcase() {
+  return (
+    <svg {...base}>
+      <rect x="3" y="7" width="18" height="13" rx="2" />
+      <path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7" />
+      <path d="M3 12.5h18" />
+    </svg>
+  );
+}
+
+/** Ticket with a percent sign — "promo codes for points" partnership option. */
+export function IconTicketPercent() {
+  return (
+    <svg {...base}>
+      <path d="M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v1.5a2.5 2.5 0 0 0 0 5V16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1.5a2.5 2.5 0 0 0 0-5z" />
+      <path d="m14.5 9.5-5 5" />
+      <path d="M9.6 9.6h.01" />
+      <path d="M14.4 14.4h.01" />
+    </svg>
+  );
+}
+
+/** Megaphone — "service ads" partnership option. */
+export function IconMegaphone() {
+  return (
+    <svg {...base}>
+      <path d="m3 10.5 17-5v13l-17-5z" />
+      <path d="M7 13v3a2.5 2.5 0 0 0 4.9.7" />
+    </svg>
+  );
+}
