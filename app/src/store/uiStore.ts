@@ -11,7 +11,7 @@ interface UiState {
   tourReplay: boolean;
   setTourReplay: (v: boolean) => void;
   /**
-   * Last-viewed feed segment (Все / Сохранённые / Не проверено). Persisted in the
+   * Last-viewed feed segment (Все / Сохранённые / Не разобрано). Persisted in the
    * session store so returning from a card restores the tab (scroll is restored by
    * the feed cache keyed per segment). Resets on a full app reload.
    *

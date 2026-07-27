@@ -388,7 +388,7 @@ export const DEFAULT_ME: Me = {
   // "reveals left" hint on the vacancy screen; the mock decrements it per reveal.
   reveals_left: 47,
   // Server switches. `hide_unverified: false` keeps the browser preview exactly as
-  // before (the "⚠ Не проверено" segment stays visible with its RAW_ITEMS fixtures);
+  // before (the "⚠ Не разобрано" segment stays visible with its RAW_ITEMS fixtures);
   // flip it to true here to exercise the "tab is gone" path locally.
   flags: { hide_unverified: false },
   subscription: {

@@ -563,6 +563,12 @@ a {
   font-weight: 600;
   padding: 0 4px 6px;
 }
+/* In the ad wizard the province list starts fully collapsed, so "expand all" is
+   the main way to reach the long lists — give it link colour there so the step
+   never reads as "the cities are gone". */
+.citypicker--compact .citypicker__toggleall {
+  color: var(--kj-link);
+}
 
 /* "City not specified" special card — muted (hint) left accent, NOT brand. */
 .nocity {

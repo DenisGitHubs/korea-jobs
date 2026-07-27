@@ -41,7 +41,7 @@ interface SubscriptionState extends SubscriptionValue {
    */
   revealsLeft: number | null;
   /**
-   * Server switch `flags.hide_unverified` (from /me): the "⚠ Не проверено" feed
+   * Server switch `flags.hide_unverified` (from /me): the "⚠ Не разобрано" feed
    * segment is off. Additive/optional field — absent === false (segment shown).
    */
   hideUnverified: boolean;

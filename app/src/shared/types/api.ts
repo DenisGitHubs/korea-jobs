@@ -264,7 +264,7 @@ export interface TermsState {
  */
 export interface MeFlags {
   /**
-   * true = the "⚠ Не проверено" (raw) feed segment is switched off for everyone.
+   * true = the "⚠ Не разобрано" (raw) feed segment is switched off for everyone.
    * The server already serves an empty /api/raw and 404s /api/raw/reveal; the
    * client must additionally not render the tab at all (an empty tab looks broken).
    */

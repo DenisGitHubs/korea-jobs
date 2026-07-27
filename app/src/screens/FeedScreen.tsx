@@ -131,7 +131,7 @@ function FeedAggBar() {
   );
 }
 
-/** Amber notice atop the "Не разобрано" segment. */
+/** Amber notice atop the "Не разобрано" (raw) segment. */
 function RawNote() {
   const { t } = useTranslation();
   return (
@@ -160,7 +160,7 @@ export default function FeedScreen() {
   const sig = filterSignature(filter);
   const active = isFilterActive(filter);
 
-  // Server switch: when on, the "⚠ Не проверено" (raw) segment does not exist for
+  // Server switch: when on, the "⚠ Не разобрано" (raw) segment does not exist for
   // the user at all — the backend already serves an empty /raw and 404s the reveal,
   // and the tab itself must not be rendered (an empty tab looks like a bug).
   const hideUnverified = useSubscriptionStore((s) => s.hideUnverified);

@@ -73,8 +73,14 @@ export function CityPicker({
   const multiSet = useMemo(() => new Set(multiProvinces), [multiProvinces]);
 
   // Which multi-city provinces are expanded. Seeded once (when cities first load)
-  // from the incoming selection: provinces with a selected city open, rest closed.
-  // Runs in both modes so the wizard opens straight to the already-picked city.
+  // from the incoming selection: a province opens ONLY when it already holds a
+  // selected city, everything else starts collapsed. Same rule in all three hosts
+  // (feed filter, settings, ad wizard) — owner's call: 167 cities must never open
+  // as one wall, and coming back to a screen still shows the choice already made.
+  // The step never looks empty even fully collapsed: the frequent-city chips and
+  // every single-city province (Seoul, Busan, Incheon …) render inline, the folded
+  // provinces keep their name + city count + chevron, and "expand all" sits in the
+  // section head.
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const seeded = useRef(false);
   useEffect(() => {
@@ -83,13 +89,7 @@ export function CityPicker({
     const init: Record<string, boolean> = {};
     for (const g of grouped) {
       if (g.items.length > 1) {
-        // single (ad wizard): expand EVERY province so the full city list is
-        // visible for the radio pick. The shared accordion otherwise defaults to
-        // "all collapsed", which in the compact wizard step hid every multi-city
-        // province and made the list look empty (regression from the accordion
-        // rework). multi (filter/settings) keeps collapsed-by-default, opening
-        // only a province that already holds a selected city.
-        init[g.region] = single ? true : g.items.some((c) => value.includes(c.slug));
+        init[g.region] = g.items.some((c) => value.includes(c.slug));
       }
     }
     setOpen(init);
