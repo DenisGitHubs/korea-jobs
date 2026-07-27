@@ -32,7 +32,17 @@
 //      ai_reject_stats counters are kept (not purged);
 //  10. purge ai_verdict_cache older than 7 days by last_seen (owner rule 2026-07-21) — the reject-verdict
 //      reuse cache (parser/verdict-cache.ts) is a rolling, self-refreshing memory: a hash not seen again
-//      within 7 days ages out. Best-effort (deploy-before-migrate window may lack the table).
+//      within 7 days ages out. Best-effort (deploy-before-migrate window may lack the table);
+//  11. purge bot_inbox rows older than 30 days (draft_0028) — the anti-spam ledger behind
+//      «написали в бот» (lib/korea/bot/inbox.ts). It stores NO message text, only sender/chat/
+//      update ids + a length, and its counters look at most 24h back, so anything older is dead
+//      weight. Best-effort (the table may be missing in a deploy-before-migrate window);
+//  12. INACTIVITY ERASURE (cleanup/inactive.ts): erase the personal data of accounts dormant for
+//      inactive_delete_months (default 12) — the mechanism behind the Privacy Policy promise
+//      «удаляем данные через 12 месяцев без входа». Runs here so it needs no new schedule; it is
+//      a single cached-config read while the `inactive_delete_enabled` master switch is false
+//      (the shipped default). Best-effort — a failure there must never cost us the retention
+//      steps above. Also exposed as POST /api/cron/inactive-erase for a controlled run.
 //
 // NOTE FK: vacancies.raw_message_id -> raw_messages(id) ON DELETE SET NULL (draft_0001_init.sql
 // line 322). Deleting a raw row never cascades to a vacancy: the card keeps living and its
@@ -42,6 +52,7 @@
 
 import { getSql } from '../core/db.js';
 import { getConfigNumber } from '../config.js';
+import { runInactiveErase } from './inactive.js';
 
 export interface CleanupResult {
   deactivated: number;
@@ -54,6 +65,10 @@ export interface CleanupResult {
   moderationExamplesPurged: number;
   rejectSamplesPurged: number;
   verdictCachePurged: number;
+  /** Rows dropped from the bot inbox anti-spam ledger (metadata only, 30-day retention). */
+  botInboxPurged: number;
+  /** Accounts whose personal data was erased by the inactivity sweep (0 while the switch is off). */
+  inactiveErased: number;
 }
 
 export async function runCleanup(): Promise<CleanupResult> {
@@ -156,6 +171,33 @@ export async function runCleanup(): Promise<CleanupResult> {
     console.error('[cleanup] ai_verdict_cache purge failed (table missing?):', err instanceof Error ? err.message : String(err));
   }
 
+  // BOT INBOX ledger (draft_0028): the anti-spam counters only look 1h/24h back, so a row is dead
+  // weight after a day. It holds NO message text — just sender/chat/update ids and a length — but a
+  // Telegram id is still a person, so it is time-boxed at 30 days. Best-effort like the two purges
+  // above (the table may not exist in a deploy-before-migrate window).
+  let botInboxPurged: unknown[] = [];
+  try {
+    botInboxPurged = await sql`
+      delete from bot_inbox
+      where created_at < now() - interval '30 days'
+      returning id`;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[cleanup] bot_inbox purge failed (table missing?):', err instanceof Error ? err.message : String(err));
+  }
+
+  // INACTIVITY ERASURE — the tail step (see §12 in the header). Best-effort on purpose: it owns
+  // the ONLY destructive-to-a-person statements in the file, so a fault there (missing
+  // deleted_at column in a deploy-before-migrate window, a timeout) must not swallow the
+  // retention counters above. A no-op while inactive_delete_enabled is false.
+  let inactiveErased = 0;
+  try {
+    inactiveErased = (await runInactiveErase()).usersErased;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[cleanup] inactive erase failed:', err instanceof Error ? err.message : String(err));
+  }
+
   return {
     deactivated: deact.length,
     takedownEnforced: takedown.length,
@@ -167,5 +209,7 @@ export async function runCleanup(): Promise<CleanupResult> {
     moderationExamplesPurged: modPurged.length,
     rejectSamplesPurged: rejectSamplesPurged.length,
     verdictCachePurged: verdictCachePurged.length,
+    botInboxPurged: botInboxPurged.length,
+    inactiveErased,
   };
 }

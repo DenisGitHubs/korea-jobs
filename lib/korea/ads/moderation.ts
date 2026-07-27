@@ -9,6 +9,10 @@
 // SECURITY (007 + Sanya §5.2): the user's text is DATA, never an instruction. The base
 // prompt already tells the model to ignore embedded commands; the few-shot examples are
 // likewise framed as data. Never log the text or extracted contacts.
+//
+// PRIVACY: what goes INTO the learning set is scrubbed of contacts first (see
+// recordModerationExample) — those rows outlive the ad by 180 days and carry no author, so a raw
+// phone number in there would be an orphaned copy nothing could later erase.
 
 import Anthropic from '@anthropic-ai/sdk';
 import { getSql } from '../core/db.js';
@@ -16,6 +20,7 @@ import { getConfigBool, getConfigNumber, getConfigString } from '../config.js';
 import { buildSystemPrompt, type CityRef, type ParsedVacancy } from '../parser/prompt.js';
 import { extractJson } from '../parser/extract-json.js';
 import { recordAiUsage } from '../ai-usage.js';
+import { scrubContacts } from '../core/scrub.js';
 import { looksLikeAdSpam } from './adspam.js';
 
 const MODEL_ALIASES: Record<string, string> = {
@@ -218,7 +223,17 @@ export async function decideAdModeration(modText: string): Promise<AdDecision> {
   return { status, rejectReason, item, cityIdBySlug, aiConfidence };
 }
 
-/** Record a decision into the learning set (best-effort; caller ignores failure). */
+/**
+ * Record a decision into the learning set (best-effort; caller ignores failure).
+ *
+ * The text is SCRUBBED first (007 minor). moderation_examples keeps up to 4000 characters of an
+ * ad's text for 180 days with NO link to its author, and people type phone numbers and @handles
+ * straight into a description — so without this the learning set slowly became a private, orphaned
+ * store of contacts that no erasure could reach (there is nothing to key a deletion on). Scrubbing
+ * costs the classifier nothing: the few-shot examples calibrate is_vacancy/confidence on the SHAPE
+ * of a post, and a redaction marker carries that shape as well as the raw digits did — the parser
+ * already stores descriptions scrubbed the same way.
+ */
 export async function recordModerationExample(
   text: string,
   decision: 'approved' | 'rejected',
@@ -226,9 +241,11 @@ export async function recordModerationExample(
 ): Promise<void> {
   try {
     const sql = getSql();
+    // Scrub BEFORE the length cap, so a contact can never survive by sitting past the cut point.
+    const safe = (scrubContacts(text) ?? '').slice(0, 4000);
     await sql`
       insert into moderation_examples (kind, text, decision, reason)
-      values ('user_ad', ${text.slice(0, 4000)}, ${decision}, ${reason})`;
+      values ('user_ad', ${safe}, ${decision}, ${reason})`;
   } catch {
     // eslint-disable-next-line no-console
     console.error('[ads] failed to record moderation example');

@@ -6,6 +6,7 @@ import type { VisaType, WorkType } from '../shared/types/api';
 import { VISA_TYPES, WORK_TYPES, visaKey, workTypeKey } from '../shared/labels';
 import { useShareApp } from '../hooks/useShareApp';
 import { loadReferral } from '../lib/shareLink';
+import { SUPPORT_BOT, openSupportChat } from '../lib/support';
 import { WorkTypeIcon } from '../components/icons/WorkTypeIcon';
 import { toSubscription, useSubscriptionStore } from '../store/subscriptionStore';
 import { useSettingsStore } from '../store/settingsStore';
@@ -56,6 +57,7 @@ export default function SettingsScreen() {
 
   const lang = useSettingsStore((s) => s.lang);
   const setLang = useSettingsStore((s) => s.setLang);
+  const isReal = useSettingsStore((s) => s.isReal);
   const themeMode = useSettingsStore((s) => s.themeMode);
   const setThemeMode = useSettingsStore((s) => s.setThemeMode);
   const setTourReplay = useUiStore((s) => s.setTourReplay);
@@ -384,6 +386,18 @@ export default function SettingsScreen() {
               <div className="row__label">
                 <div>{t('settings.privacy')}</div>
                 <div className="row__sub">{t('settings.privacyHint')}</div>
+              </div>
+              <span className="row__chevron" aria-hidden>
+                ›
+              </span>
+            </button>
+            {/* The one visible way to reach a human — the same @-handle every legal
+                text points at. Sits under Rules/Privacy on purpose: that is where a
+                reader lands with a data-removal or "who are you" question. */}
+            <button className="row row--nav" onClick={() => openSupportChat(isReal)}>
+              <div className="row__label">
+                <div>{t('settings.contact')}</div>
+                <div className="row__sub">{t('settings.contactHint', { bot: `@${SUPPORT_BOT}` })}</div>
               </div>
               <span className="row__chevron" aria-hidden>
                 ›

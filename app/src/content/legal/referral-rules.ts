@@ -1,22 +1,22 @@
 import type { LegalDocByLang } from './types';
 
 /**
- * DRAFT Referral Program Rules (RU + EN). Source: _docs/legal/referral-rules.draft.md.
- * Placeholders `*[...]*` are kept visible on screen; the owner fills them later.
- * Do not treat as final legal text — pending owner + lawyer review.
+ * Referral Program Rules (RU + EN), version 1.0 — the text the owner approved for
+ * publication. Every "write to us" pointer resolves to the project bot
+ * @korea_rabota_bot (Settings also exposes it as a tappable row).
  */
 export const REFERRAL_RULES: LegalDocByLang = {
   ru: {
-    meta: 'Версия: черновик 0.1 · Дата вступления в силу: *[заполнить]* · Применимое право: законодательство РФ *[уточнить у владельца/юриста]* · Язык: программа ведётся на русском и английском, при расхождении текстов приоритет имеет *[уточнить — вероятно русский]*.',
-    draftNote:
-      'ЧЕРНОВИК — для проверки владельцем и юристом. Не является юридическим заключением и не публичной офертой.',
+    meta: 'Версия: 1.0 · Дата вступления в силу: 27.07.2026 · Применимое право: законодательство РФ, с оговоркой — если закон страны, где ты проживаешь, даёт тебе больше прав, эти права сохраняются · Язык: правила ведутся на русском и английском; при расхождении текстов приоритет имеет русский.',
+    intro:
+      'Эти правила мы написали сами, простым языком, без привлечения профессионального юриста, — специально, чтобы их было легко прочитать и понять. Если что-то осталось неясным или вызывает вопросы — напиши нам: @korea_rabota_bot.',
     sections: [
       {
         heading: '1. Кто проводит программу',
         blocks: [
           {
             type: 'p',
-            text: 'Организатор — *[ФИО/статус владельца — заполнить, например «Иванов Иван Иванович, физическое лицо»]*, оператор приложения «Корея — вакансии» и бота @korea_rabota_bot. По вопросам программы: *[контакт оператора — заполнить]*.',
+            text: 'Организатор программы — физическое лицо, без статуса ИП и без образования компании, оператор приложения «Корея — вакансии» и бота @korea_rabota_bot. По вопросам программы пиши: @korea_rabota_bot.',
           },
         ],
       },
@@ -34,7 +34,7 @@ export const REFERRAL_RULES: LegalDocByLang = {
               'это не деньги и не электронные денежные средства;',
               'у баллов нет номинальной (денежной) стоимости;',
               'баллы нельзя вывести, обменять на деньги или на что-либо ценное;',
-              'баллы нельзя передать, подарить или продать другому пользователю — они привязаны только к вашему аккаунту.',
+              'баллы нельзя передать, подарить или продать другому пользователю — они привязаны только к твоему аккаунту.',
             ],
           },
         ],
@@ -44,11 +44,11 @@ export const REFERRAL_RULES: LegalDocByLang = {
         blocks: [
           {
             type: 'p',
-            text: 'Баллы начисляются, когда приглашённый вами человек совершает целевое действие — впервые открывает контакт работодателя в приложении.',
+            text: 'Баллы начисляются, когда приглашённый тобой человек совершает целевое действие — впервые открывает контакт работодателя в приложении.',
           },
           {
             type: 'p',
-            text: 'Баллы могут начисляться не только за тех, кого вы пригласили напрямую, но и за цепочку из приглашённых ими людей — до трёх уровней вглубь.',
+            text: 'Баллы могут начисляться не только за тех, кого ты пригласил напрямую, но и за цепочку из приглашённых ими людей — до трёх уровней вглубь.',
           },
           { type: 'p', text: 'Уточнения:' },
           {
@@ -67,11 +67,11 @@ export const REFERRAL_RULES: LegalDocByLang = {
         blocks: [
           {
             type: 'p',
-            text: 'Сейчас баллы можно только накапливать — они отражают ваш вклад в развитие сообщества.',
+            text: 'Сейчас баллы можно только накапливать — они отражают твой вклад в развитие сообщества.',
           },
           {
             type: 'p',
-            text: 'В будущем мы планируем ввести дополнительные внутренние бонусы за накопленные баллы (например, *[примеры — уточнить у владельца]*). Это предварительные планы: мы не гарантируем их появление, не называем сроков и вправе изменить или отменить их.',
+            text: 'В будущем мы планируем ввести дополнительные внутренние бонусы за накопленные баллы — например, промокоды и скидки от партнёров сервиса. Это предварительные планы: мы не гарантируем их появление, не называем сроков и вправе изменить или отменить их.',
           },
         ],
       },
@@ -99,7 +99,7 @@ export const REFERRAL_RULES: LegalDocByLang = {
           { type: 'p', text: 'Участие в программе бесплатное и не требует вложений или покупок.' },
           {
             type: 'p',
-            text: 'Баллы — это не заработок, не доход и не инвестиция. Участвуя в программе, вы не заключаете с организатором сделку об оплате труда, инвестировании или получении дохода.',
+            text: 'Баллы — это не заработок, не доход и не инвестиция. Участвуя в программе, ты не заключаешь с организатором сделку об оплате труда, инвестировании или получении дохода.',
           },
           {
             type: 'p',
@@ -131,7 +131,7 @@ export const REFERRAL_RULES: LegalDocByLang = {
         blocks: [
           {
             type: 'p',
-            text: 'Работа программы связана с обработкой ваших персональных данных (кто кого пригласил, факт активации). Подробности — в нашей Политике конфиденциальности [ссылка]. Участвуя в программе, вы соглашаетесь с этой политикой.',
+            text: 'Работа программы связана с обработкой твоих персональных данных (кто кого пригласил, факт активации). Подробности — в нашей Политике конфиденциальности, которая доступна в этом же разделе приложения. Участвуя в программе, ты соглашаешься с этой политикой.',
           },
         ],
       },
@@ -140,7 +140,7 @@ export const REFERRAL_RULES: LegalDocByLang = {
         blocks: [
           {
             type: 'p',
-            text: 'Организатор не отвечает за действия, вакансии и обещания работодателей и других третьих лиц, размещённые или упомянутые в приложении — см. общий дисклеймер приложения [ссылка/раздел].',
+            text: 'Организатор не отвечает за действия, вакансии и обещания работодателей и других третьих лиц, размещённые или упомянутые в приложении — подробнее о статусе площадки читай в других информационных разделах приложения.',
           },
         ],
       },
@@ -149,11 +149,15 @@ export const REFERRAL_RULES: LegalDocByLang = {
         blocks: [
           {
             type: 'p',
-            text: 'Программа доступна пользователям приложения независимо от страны *[уточнить у владельца, нужно ли ограничение]*. Правила ведутся на русском и английском. К отношениям по программе применяется законодательство РФ *[уточнить у юриста с учётом пользователей вне РФ]*.',
+            text: 'Программа доступна пользователям приложения независимо от страны, кроме случаев, когда участие в подобных программах запрещено законом страны, где ты живёшь, — тогда участвовать нельзя. Правила ведутся на русском и английском; при расхождении текстов приоритет имеет русский.',
           },
           {
             type: 'p',
-            text: 'Дата вступления в силу текущей редакции: *[заполнить]*. Версия: *[заполнить]*. Об изменениях сообщаем в приложении и/или боте; продолжение использования программы после изменений означает согласие с новой редакцией.',
+            text: 'К отношениям по программе применяется законодательство Российской Федерации. Если закон страны, где ты живёшь, даёт тебе как участнику больше прав, чем эта редакция правил, — эти права за тобой сохраняются.',
+          },
+          {
+            type: 'p',
+            text: 'Дата вступления в силу текущей редакции: 27.07.2026. Версия: 1.0. Об изменениях сообщаем в приложении и/или боте; продолжение использования программы после изменений означает согласие с новой редакцией.',
           },
         ],
       },
@@ -162,23 +166,23 @@ export const REFERRAL_RULES: LegalDocByLang = {
         blocks: [
           {
             type: 'p',
-            text: 'Участвовать может пользователь, достигший совершеннолетия по законодательству страны своего проживания (по умолчанию — 18 лет). *[Уточнить у владельца/юриста итоговую формулировку и нужен ли отдельный чек-бокс подтверждения возраста.]*',
+            text: 'Участвовать в программе может пользователь, которому есть 18 лет. Присоединяясь к программе, ты подтверждаешь, что тебе есть 18 лет.',
           },
         ],
       },
     ],
   },
   en: {
-    meta: 'Version: draft 0.1 · Effective date: *[to be filled in]* · Governing law: laws of the Russian Federation *[to confirm with owner/lawyer]* · Language: the program runs in Russian and English; in case of discrepancy, *[likely Russian]* prevails.',
-    draftNote:
-      'DRAFT — for owner and lawyer review. This is not legal advice and not a public offer.',
+    meta: 'Version: 1.0 · Effective date: 27 July 2026 · Governing law: laws of the Russian Federation, with the reservation that if the law of your country of residence gives you more rights, those rights remain in force · Language: the program runs in Russian and English; in case of discrepancy, the Russian text prevails.',
+    intro:
+      "We wrote these rules ourselves, in plain language, without hiring a professional lawyer — specifically so they'd be easy to read and understand. If anything is unclear or raises questions, write to us: @korea_rabota_bot.",
     sections: [
       {
         heading: '1. Who runs the program',
         blocks: [
           {
             type: 'p',
-            text: 'The organizer is *[owner\'s name/status — to be filled in, e.g. "Ivan Ivanov, private individual"]*, operator of the "Korea Jobs" app and the @korea_rabota_bot. For questions about the program: *[operator contact — to be filled in]*.',
+            text: 'The organizer is a private individual, with no registered business entity, operating the "Korea Jobs" app and the @korea_rabota_bot. For questions about the program, write to: @korea_rabota_bot.',
           },
         ],
       },
@@ -233,7 +237,7 @@ export const REFERRAL_RULES: LegalDocByLang = {
           },
           {
             type: 'p',
-            text: 'In the future, we plan to introduce additional in-app bonuses redeemable with accumulated points (for example, *[examples — owner to confirm]*). These are preliminary plans: we do not guarantee these bonuses will appear, we set no timeline, and we may change or cancel these plans at any time.',
+            text: 'In the future, we plan to introduce additional in-app bonuses redeemable with accumulated points — for example, promo codes and discounts from partners. These are preliminary plans: we do not guarantee these bonuses will appear, we set no timeline, and we may change or cancel these plans at any time.',
           },
         ],
       },
@@ -293,7 +297,7 @@ export const REFERRAL_RULES: LegalDocByLang = {
         blocks: [
           {
             type: 'p',
-            text: 'Running the program involves processing your personal data (who invited whom, the fact of activation). See our Privacy Policy [link] for details. By participating in the program, you agree to that policy.',
+            text: 'Running the program involves processing your personal data (who invited whom, the fact of activation). See our Privacy Policy, available in the same section of the app, for details. By participating in the program, you agree to that policy.',
           },
         ],
       },
@@ -302,7 +306,7 @@ export const REFERRAL_RULES: LegalDocByLang = {
         blocks: [
           {
             type: 'p',
-            text: "The organizer is not responsible for the actions, job postings, or promises of employers and other third parties listed or mentioned in the app — see the app's general disclaimer [link/section].",
+            text: "The organizer is not responsible for the actions, job postings, or promises of employers and other third parties listed or mentioned in the app — see the app's other informational sections for more on the platform's status.",
           },
         ],
       },
@@ -311,11 +315,15 @@ export const REFERRAL_RULES: LegalDocByLang = {
         blocks: [
           {
             type: 'p',
-            text: 'The program is available to app users regardless of country *[owner to confirm whether a restriction is needed]*. Rules are maintained in Russian and English. Relations under the program are governed by the laws of the Russian Federation *[to confirm with a lawyer, given users outside Russia]*.',
+            text: 'The program is available to app users regardless of country, except where participating in such a program is prohibited by the law of the country where you live — in that case, you may not participate. Rules are maintained in Russian and English; in case of discrepancy, the Russian text prevails.',
           },
           {
             type: 'p',
-            text: 'Effective date of the current version: *[to be filled in]*. Version: *[to be filled in]*. We announce rule changes in the app and/or bot; continued use of the program after changes means acceptance of the new version.',
+            text: 'Relations under the program are governed by the laws of the Russian Federation. If the law of the country where you live gives you, as a participant, more rights than this version of the rules, those rights remain yours.',
+          },
+          {
+            type: 'p',
+            text: 'Effective date of the current version: 27 July 2026. Version: 1.0. We announce rule changes in the app and/or bot; continued use of the program after changes means acceptance of the new version.',
           },
         ],
       },
@@ -324,7 +332,7 @@ export const REFERRAL_RULES: LegalDocByLang = {
         blocks: [
           {
             type: 'p',
-            text: 'Participation is open to users who have reached the age of majority under the laws of their country of residence (default: 18 years old). *[Owner/lawyer to confirm final wording and whether a separate age-confirmation checkbox is needed.]*',
+            text: 'Participation is open to users who are at least 18 years old. By joining the program, you confirm that you are at least 18.',
           },
         ],
       },

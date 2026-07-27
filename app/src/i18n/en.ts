@@ -240,6 +240,8 @@ export const en: typeof ru = {
     rulesHint: 'Points, referrals and terms of participation',
     privacy: 'Privacy Policy',
     privacyHint: 'How we handle your data',
+    contact: 'Contact us',
+    contactHint: 'Questions, data removal, partnership — {{bot}}',
   },
   terms: {
     title: 'A word before you start',

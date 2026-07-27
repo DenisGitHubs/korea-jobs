@@ -9,6 +9,7 @@
 //   POST /api/cron/notify  -> lib/korea/notify/run.ts (realtime per-item push)
 //   POST /api/cron/digest  -> lib/korea/digest/run.ts (once-a-day matched-vacancy summary)
 //   POST /api/cron/cleanup -> lib/korea/cleanup/run.ts (TTL retention / takedown)
+//   POST /api/cron/inactive-erase -> lib/korea/cleanup/inactive.ts (erase dormant accounts)
 
 import {
   type ReqLike,
@@ -23,6 +24,7 @@ import { runParse } from '../parser/run.js';
 import { runNotify } from '../notify/run.js';
 import { runDigest } from '../digest/run.js';
 import { runCleanup } from '../cleanup/run.js';
+import { runInactiveErase } from '../cleanup/inactive.js';
 import { runReferralConfirm } from '../referral/confirm.js';
 
 function authorized(req: ReqLike): boolean {
@@ -77,6 +79,23 @@ export async function cronCleanup(req: ReqLike, res: ResLike): Promise<void> {
   if (!authorized(req)) return unauthorized(res);
   try {
     const result = await runCleanup();
+    send(res, 200, { ok: true, ...result });
+  } catch {
+    sendError(res, ApiErrorCode.Internal);
+  }
+}
+
+/** POST /api/cron/inactive-erase — erase the personal data of accounts dormant for
+ *  `inactive_delete_months` (default 12). Guarded by the `inactive_delete_enabled` master
+ *  switch (default OFF: returns { enabled: false } and touches nothing). Idempotent and
+ *  batched, so a missed or repeated tick is harmless. The same sweep also runs as the tail
+ *  step of /api/cron/cleanup, so it needs no separate schedule — this endpoint exists for a
+ *  controlled/manual run. */
+export async function cronInactiveErase(req: ReqLike, res: ResLike): Promise<void> {
+  if ((req.method ?? 'GET') !== 'POST') return sendError(res, ApiErrorCode.NotFound);
+  if (!authorized(req)) return unauthorized(res);
+  try {
+    const result = await runInactiveErase();
     send(res, 200, { ok: true, ...result });
   } catch {
     sendError(res, ApiErrorCode.Internal);

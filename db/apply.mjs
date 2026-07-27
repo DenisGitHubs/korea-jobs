@@ -229,6 +229,46 @@ const files = [
   // matching code deploy (subscriptions/rw.ts + users/me.ts name the column directly). Depends on
   // subscriptions + notifications_sent (draft_0001_init.sql, draft_0010_ads_notify.sql).
   'draft_0026_notify_daily_cap.sql',
+
+  // Inactivity erasure (0027) — ADDITIVE / idempotent (ADD COLUMN IF NOT EXISTS + DROP NOT NULL +
+  // CREATE INDEX IF NOT EXISTS + INSERT ... ON CONFLICT DO NOTHING). Backs the Privacy Policy
+  // promise «удаляем данные через 12 месяцев без входа» with a real mechanism: adds
+  // users.deleted_at (the erased-account tombstone), makes users.telegram_id NULLABLE (erasure
+  // must be able to remove the identifier itself — no row has a NULL today and none can appear
+  // until the switch below is turned on), adds idx_users_last_seen_live for the sweep's scan, and
+  // seeds the config knobs with the MASTER SWITCH OFF ('inactive_delete_enabled' = false), so
+  // applying this file changes NO behaviour and deletes NOTHING. The sweep itself is
+  // lib/korea/cleanup/inactive.ts (tail step of cron/cleanup + POST /api/cron/inactive-erase).
+  // Apply BEFORE the matching code deploy (the sweep names users.deleted_at directly). Depends on
+  // users + config (draft_0001_init.sql, extended by 0003_consent / 0004_referral / 0005_onboarding
+  // / 0018_streaks).
+  'draft_0027_inactive_erase.sql',
+
+  // Bot inbox anti-spam ledger (0028) — ADDITIVE / idempotent (CREATE TABLE IF NOT EXISTS +
+  // CREATE INDEX IF NOT EXISTS + INSERT ... ON CONFLICT DO NOTHING). Backs the Privacy Policy
+  // promise «напиши нам @korea_rabota_bot … ответим в течение 3 рабочих дней»: the webhook now
+  // FORWARDS a plain private message to the admins (lib/korea/bot/inbox.ts) instead of dropping
+  // it, and this table meters that forwarding — at most user_inbox_per_hour (5) per sender per
+  // hour and inbox_global_per_day (200) in 24h across everyone, both seeded here as config keys
+  // so they change without a deploy. METADATA ONLY: sender/chat/update ids, message LENGTH and a
+  // forwarded flag — the text is never stored (takedown requests carry phone numbers; the message
+  // itself lives in the admin's Telegram chat). Rows older than 30 days are purged by
+  // cleanup/run.ts. Apply BEFORE the matching code deploy; if the code lands first it degrades to
+  // counting bot_updates and still forwards. Depends on config + pgcrypto (draft_0001_init.sql).
+  'draft_0028_bot_inbox.sql',
+
+  // Inbox newcomer reserve + owner warning (0029) — ADDITIVE / idempotent (ADD COLUMN IF NOT
+  // EXISTS with a default + CREATE INDEX IF NOT EXISTS + INSERT ... ON CONFLICT DO NOTHING). Adds
+  // bot_inbox.kind ('message' | 'reserve' | 'alert') and seeds config
+  // 'inbox_newcomer_reserve_per_day' = 30. Closes the hole 007 found in 0028: two flooders could
+  // hold the global 200/day window shut, after which a REAL takedown request was answered politely
+  // but never forwarded and never stored (we keep no text) — it vanished silently. Now a sender
+  // with ZERO forwards in 24h passes over a full window against a small separate ceiling, and the
+  // FIRST time the window is exhausted the admins get ONE DM about it (itself metered to once per
+  // 24h via an 'alert' marker row). Apply BEFORE the matching code deploy; if the code lands first
+  // it retries the pre-0029 claim and behaves exactly like 0028 until this runs. Depends on
+  // bot_inbox (draft_0028_bot_inbox.sql) + config (draft_0001_init.sql).
+  'draft_0029_inbox_reserve.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

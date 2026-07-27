@@ -2,8 +2,8 @@ import type { ReactNode } from 'react';
 import type { LegalBlock, LegalDoc as LegalDocData } from '../content/legal/types';
 
 /**
- * Render `**bold**` spans inline. Single-asterisk placeholders such as `*[...]*`
- * are NOT matched, so they render literally and stay visible for the owner.
+ * Render `**bold**` spans inline. A single asterisk is not markup here — it is
+ * printed as-is, so stray asterisks in the legal copy never swallow text.
  */
 function inline(text: string): ReactNode[] {
   return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
@@ -29,8 +29,8 @@ function Block({ block }: { block: LegalBlock }) {
 export function LegalDoc({ doc }: { doc: LegalDocData }) {
   return (
     <div className="legal">
-      <div className="legal__draft" role="note">
-        {doc.draftNote}
+      <div className="legal__intro" role="note">
+        {doc.intro}
       </div>
       <p className="legal__meta">{doc.meta}</p>
       {doc.sections.map((s, i) => (

@@ -15,13 +15,21 @@
 //   /api/ingest, /api/sources                         -> Bearer INGEST_SECRET
 //   /api/cities|vacancies|me|subscription|terms|ads|cooperation|referral -> tma <initData>
 //   /api/vacancies/:id/takedown, /api/ads/:id/moderate-> admin (CRON_SECRET | ADMIN_TELEGRAM_IDS)
+//   /api/admin/erase-user, /api/admin/takedown-contact-> admin (CRON_SECRET | ADMIN_TELEGRAM_IDS)
 //   /api/bot/webhook                                  -> X-Telegram-Bot-Api-Secret-Token
-//   /api/cron/parse|notify|digest|cleanup|referral-confirm -> Bearer CRON_SECRET
+//   /api/cron/parse|notify|digest|cleanup|referral-confirm|inactive-erase -> Bearer CRON_SECRET
 
 import { type ReqLike, type ResLike, send, sendError } from '../lib/korea/core/http.js';
 import { ApiErrorCode, httpStatusFor, makeError } from '../lib/korea/core/errors.js';
 import { sourcesGet, ingestPost } from '../lib/korea/ingest/handler.js';
-import { cronParse, cronNotify, cronDigest, cronCleanup, cronReferralConfirm } from '../lib/korea/cron/handler.js';
+import {
+  cronParse,
+  cronNotify,
+  cronDigest,
+  cronCleanup,
+  cronReferralConfirm,
+  cronInactiveErase,
+} from '../lib/korea/cron/handler.js';
 import { botWebhook } from '../lib/korea/bot/webhook.js';
 import { citiesGet } from '../lib/korea/cities/read.js';
 import {
@@ -44,6 +52,8 @@ import { termsAccept } from '../lib/korea/terms/rw.js';
 import { adsCreate, adsMine, adsModerate } from '../lib/korea/ads/rw.js';
 import { adBump, adArchive, adUnarchive, adItem } from '../lib/korea/ads/manage.js';
 import { cooperationPost } from '../lib/korea/cooperation/rw.js';
+import { adminEraseUser } from '../lib/korea/admin/erase.js';
+import { contactTakedown } from '../lib/korea/admin/takedown.js';
 import { referralGet } from '../lib/korea/referral/read.js';
 import { sharePrepare } from '../lib/korea/share/prepare.js';
 
@@ -103,6 +113,16 @@ const ROUTES: Route[] = [
   { segments: ['ads', ':id', 'archive'], handler: adArchive },
   { segments: ['ads', ':id', 'unarchive'], handler: adUnarchive },
   { segments: ['cooperation'], handler: cooperationPost },
+  // Privacy Policy execution tools (admin: Bearer CRON_SECRET or an admin's initData).
+  // erase-user: «выполняем просьбу об удалении в течение 3 рабочих дней» — runs the SAME erasure
+  // as the 12-month sweep on one named account. Body { telegram_id } ONLY — the id Telegram itself
+  // put in the forwarded «Написали в бот» DM; { dry_run: true } only looks. A public_id (referral
+  // code) is refused: its owner publishes it, so it proves nothing about who is asking.
+  { segments: ['admin', 'erase-user'], handler: adminEraseUser },
+  // takedown-contact: «уберём контакт из приложения» for a THIRD PARTY who has no account —
+  // body { contact } (phone/@handle) and/or { vacancy } (uuid / 32-hex / share link). Takes down
+  // every card + user ad carrying that contact and records the block so a repost cannot return it.
+  { segments: ['admin', 'takedown-contact'], handler: contactTakedown },
   // Referral / loyalty (Authorization: tma <initData>)
   { segments: ['referral'], handler: referralGet },
   // "Красивая ссылка" share: mint a Telegram prepared inline message (branded photo card) for a
@@ -115,6 +135,10 @@ const ROUTES: Route[] = [
   { segments: ['cron', 'digest'], handler: cronDigest },
   { segments: ['cron', 'cleanup'], handler: cronCleanup },
   { segments: ['cron', 'referral-confirm'], handler: cronReferralConfirm },
+  // Inactivity erasure (the Privacy Policy's "12 months without a login" promise). Runs as the
+  // tail step of cron/cleanup too, so this route is for a controlled/manual run; it is a no-op
+  // while config inactive_delete_enabled is false (the shipped default).
+  { segments: ['cron', 'inactive-erase'], handler: cronInactiveErase },
 ];
 
 function splitPath(pathname: string): string[] {

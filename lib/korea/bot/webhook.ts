@@ -20,6 +20,7 @@ import {
 } from '../core/http.js';
 import { ApiErrorCode } from '../core/errors.js';
 import { sendMessage, answerCallbackQuery, editMessageText, maskToken } from './telegram.js';
+import { isInboxText, handleInboxMessage } from './inbox.js';
 import { isAdminTelegram } from '../admin/auth.js';
 import { gatherStats, renderStats } from '../admin/stats.js';
 import { moderateAd } from '../ads/rw.js';
@@ -54,6 +55,15 @@ interface ParsedUpdate {
   chatType: string | null;
   text: string | null;
   callback: CallbackData | null;
+  /** Sender identity — used ONLY to label an inbox forward and pick its reply language. */
+  firstName: string | null;
+  lastName: string | null;
+  username: string | null;
+  lang: string | null;
+}
+
+function str(v: unknown): string | null {
+  return typeof v === 'string' ? v : null;
 }
 
 function parseUpdate(body: unknown): ParsedUpdate | null {
@@ -79,6 +89,10 @@ function parseUpdate(body: unknown): ParsedUpdate | null {
         data: typeof cq.data === 'string' ? cq.data : null,
         messageId: typeof cqMsg?.message_id === 'number' ? cqMsg.message_id : null,
       },
+      firstName: str(cqFrom?.first_name),
+      lastName: str(cqFrom?.last_name),
+      username: str(cqFrom?.username),
+      lang: str(cqFrom?.language_code),
     };
   }
 
@@ -90,8 +104,15 @@ function parseUpdate(body: unknown): ParsedUpdate | null {
     fromId: typeof from?.id === 'number' ? from.id : null,
     chatId: typeof chat?.id === 'number' ? chat.id : null,
     chatType: typeof chat?.type === 'string' ? chat.type : null,
-    text: typeof msg?.text === 'string' ? msg.text : null,
+    // A photo/document sent with a caption is still someone writing to us: fall back to the
+    // caption so «уберите мой номер» + a screenshot does not vanish. Media with no caption
+    // stays null and is ignored, exactly as before.
+    text: str(msg?.text) ?? str(msg?.caption),
     callback: null,
+    firstName: str(from?.first_name),
+    lastName: str(from?.last_name),
+    username: str(from?.username),
+    lang: str(from?.language_code),
   };
 }
 
@@ -224,7 +245,11 @@ async function dispatchCallback(u: ParsedUpdate): Promise<void> {
   if (cb.id) await answerCallbackQuery(cb.id);
 }
 
-/** Handle a parsed update. /start (message) or ad moderation (callback_query). */
+/**
+ * Handle a parsed update: an admin command (/stats, /broadcast), /start (with an optional referral
+ * deep link), a plain private message (→ bot/inbox.ts, forwarded to the admins) or a callback_query
+ * (ad moderation / report / broadcast confirm).
+ */
 async function dispatch(u: ParsedUpdate): Promise<void> {
   if (u.callback) return dispatchCallback(u);
   if (u.chatId === null || u.fromId === null) return;
@@ -296,6 +321,27 @@ async function dispatch(u: ParsedUpdate): Promise<void> {
       console.error('[bot] /broadcast draft error:', maskToken(String(err)));
       await sendMessage(u.chatId, 'Не удалось создать рассылку');
     }
+    return;
+  }
+
+  // A plain (non-command) message in a private chat = a person writing to us. The Privacy Policy
+  // sends takedown / consent / data questions here and promises an answer in 3 business days, so
+  // this MUST reach the admins instead of being dropped. Rate-limited + answered inside
+  // handleInboxMessage, which never throws. Commands other than the ones handled above stay
+  // silent, exactly as before.
+  if (isInboxText(text)) {
+    await handleInboxMessage(getSql(), {
+      updateId: u.updateId,
+      chatId: u.chatId,
+      sender: {
+        id: u.fromId,
+        firstName: u.firstName,
+        lastName: u.lastName,
+        username: u.username,
+        lang: u.lang,
+      },
+      text,
+    });
     return;
   }
 
