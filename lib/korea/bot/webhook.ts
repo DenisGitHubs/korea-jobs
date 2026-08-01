@@ -39,6 +39,23 @@ import {
   cancelBroadcast,
   runBroadcast,
 } from '../broadcast/run.js';
+import {
+  postBody,
+  parsePostCommand,
+  parsePostCallback,
+  previewText as postPreviewText,
+  scheduleSentence,
+  scheduleLine,
+} from '../scheduled/parse.js';
+import {
+  resolveCity,
+  resolveAuthorId,
+  insertScheduleDraft,
+  activateSchedule,
+  cancelSchedule,
+  listSchedules,
+} from '../scheduled/store.js';
+import { pickLargestPhoto, storeTelegramPhoto, type PickedPhoto } from '../media/store.js';
 
 const RATE_LIMIT_PER_MINUTE = 20;
 
@@ -55,6 +72,9 @@ interface ParsedUpdate {
   chatType: string | null;
   text: string | null;
   callback: CallbackData | null;
+  /** The LARGEST size of an attached photo (owner's /post cover), or null. Never used for anything
+   *  but the admin-only /post command — an ordinary user's photo is still just an inbox caption. */
+  photo: PickedPhoto | null;
   /** Sender identity — used ONLY to label an inbox forward and pick its reply language. */
   firstName: string | null;
   lastName: string | null;
@@ -89,6 +109,7 @@ function parseUpdate(body: unknown): ParsedUpdate | null {
         data: typeof cq.data === 'string' ? cq.data : null,
         messageId: typeof cqMsg?.message_id === 'number' ? cqMsg.message_id : null,
       },
+      photo: null,
       firstName: str(cqFrom?.first_name),
       lastName: str(cqFrom?.last_name),
       username: str(cqFrom?.username),
@@ -109,6 +130,9 @@ function parseUpdate(body: unknown): ParsedUpdate | null {
     // stays null and is ignored, exactly as before.
     text: str(msg?.text) ?? str(msg?.caption),
     callback: null,
+    // message.photo[] is ONE picture in several sizes; we keep the largest (see media/store.ts).
+    // A photo with no /post caption changes nothing: the inbox path only ever looks at the text.
+    photo: pickLargestPhoto(msg?.photo),
     firstName: str(from?.first_name),
     lastName: str(from?.last_name),
     username: str(from?.username),
@@ -241,6 +265,37 @@ async function dispatchCallback(u: ParsedUpdate): Promise<void> {
     return;
   }
 
+  // (4) Scheduled post confirm/cancel: sp:ok / sp:cancel — the [Запланировать]/[Отмена] buttons
+  // under a /post preview, and the [Отменить] button next to a line of /posts. Both actions are
+  // ATOMIC claims in SQL (draft→active / draft|active→cancelled), so a re-tap or a replayed
+  // callback can never schedule the same post twice or undo a decision that already happened.
+  const spM = parsePostCallback(data);
+  if (spM) {
+    if (spM.action === 'cancel') {
+      const done = await cancelSchedule(sql, spM.id);
+      if (cb.id) await answerCallbackQuery(cb.id, done ? 'Отменено' : 'Уже обработано');
+      if (u.chatId !== null && cb.messageId !== null) {
+        await editMessageText(u.chatId, cb.messageId, done ? 'Публикация отменена' : 'Уже обработано');
+      }
+      return;
+    }
+    const activated = await activateSchedule(sql, spM.id);
+    if (!activated) {
+      if (cb.id) await answerCallbackQuery(cb.id, 'Уже обработано');
+      return;
+    }
+    if (cb.id) await answerCallbackQuery(cb.id, 'Запланировано');
+    if (u.chatId !== null && cb.messageId !== null) {
+      const when = scheduleSentence(activated.startAt, activated.intervalMinutes, activated.totalRuns);
+      const dm =
+        activated.kind === 'promo'
+          ? 'Реклама: только лента, в личку не уйдёт никому.'
+          : `Уведомление подписчикам: ${activated.notify ? 'да, по их фильтрам' : 'нет'}.`;
+      await editMessageText(u.chatId, cb.messageId, `Запланировано.\n${when}\n${dm}\nСписок: /posts`);
+    }
+    return;
+  }
+
   // Unknown callback → just stop the client spinner.
   if (cb.id) await answerCallbackQuery(cb.id);
 }
@@ -320,6 +375,102 @@ async function dispatch(u: ParsedUpdate): Promise<void> {
       // eslint-disable-next-line no-console
       console.error('[bot] /broadcast draft error:', maskToken(String(err)));
       await sendMessage(u.chatId, 'Не удалось создать рассылку');
+    }
+    return;
+  }
+
+  // Admin-only /post — ONE message (or the CAPTION of ONE photo) that prepares a publication for
+  // later. Deliberately stateless: everything is in this single update, so it can never collide
+  // with the inbox that catches ordinary messages (this branch runs BEFORE it) and a half-finished
+  // dialogue can never get stuck. Non-admins get NOTHING — the command does not exist for them.
+  // Nothing is published here: the row is a DRAFT until the owner taps [Запланировать].
+  if (command === '/post') {
+    if (!(await isAdminTelegram(getSql(), u.fromId))) return;
+    const parsed = parsePostCommand(postBody(text), new Date());
+    if (!parsed.ok) {
+      await sendMessage(u.chatId, parsed.error);
+      return;
+    }
+    const plan = parsed.plan;
+    try {
+      const sql = getSql();
+      // The published card needs a real author row (the same upsert /start does — never a second
+      // account): notify excludes the author from its own push and «Мои объявления» must show it.
+      const createdBy = await resolveAuthorId(sql, u.fromId);
+      const city = await resolveCity(sql, plan.payload.cityInput);
+      // The picture is downloaded from Telegram ONCE, now, and stored as bytes — a Telegram file
+      // URL carries the bot token and must never reach a client (media/store.ts). A failure here is
+      // NOT fatal: the post is still worth scheduling without a cover, we just say so.
+      let mediaId: string | null = null;
+      if (u.photo) {
+        const stored = await storeTelegramPhoto(sql, u.photo, createdBy);
+        mediaId = stored?.id ?? null;
+        if (!stored) await sendMessage(u.chatId, 'Фото не сохранилось — покажу и опубликую без картинки.');
+      }
+      const id = await insertScheduleDraft(sql, {
+        createdBy,
+        kind: plan.kind,
+        payload: plan.payload,
+        city,
+        mediaId,
+        startAt: plan.startAt,
+        intervalMinutes: plan.intervalMinutes,
+        totalRuns: plan.totalRuns,
+        notify: plan.notify,
+      });
+      try {
+        await sendMessage(u.chatId, postPreviewText(plan, { cityLabel: city.label, hasPhoto: mediaId !== null }), {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: 'Запланировать', callback_data: `sp:ok:${id}` },
+                { text: 'Отмена', callback_data: `sp:cancel:${id}` },
+              ],
+            ],
+          },
+        });
+      } catch (previewErr) {
+        // The draft row exists but its preview never arrived. Harmless: nothing points a callback at
+        // it, so it can never be activated — it just sits as a draft (out of /posts by default).
+        // eslint-disable-next-line no-console
+        console.error('[bot] /post preview error:', maskToken(String(previewErr)));
+        await sendMessage(u.chatId, 'Не удалось показать предпросмотр, отправь команду ещё раз');
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[bot] /post draft error:', maskToken(String(err)));
+      await sendMessage(u.chatId, 'Не удалось подготовить публикацию');
+    }
+    return;
+  }
+
+  // Admin-only /posts — what is still coming, one message per schedule so each carries its own
+  // [Отменить] button. `/posts all` (or «/posts все») also shows what has already been published,
+  // cancelled or failed. Same admin gate: a non-admin gets NOTHING.
+  if (command === '/posts') {
+    if (!(await isAdminTelegram(getSql(), u.fromId))) return;
+    // NOT `\b…\b`: a JavaScript word boundary is ASCII-only and would never fire around «все».
+    const all = /(?:^|\s)(?:all|все|всё)(?:\s|$)/i.test(text.slice(command.length));
+    try {
+      const sql = getSql();
+      const items = await listSchedules(sql, all);
+      if (items.length === 0) {
+        await sendMessage(u.chatId, all ? 'Публикаций пока не было.' : 'Ничего не запланировано. Новая публикация — /post');
+        return;
+      }
+      await sendMessage(u.chatId, all ? `Публикации: ${items.length}` : `Запланировано: ${items.length}`);
+      for (const it of items) {
+        const cancellable = it.status === 'active' || it.status === 'draft';
+        const extra = cancellable
+          ? { reply_markup: { inline_keyboard: [[{ text: 'Отменить', callback_data: `sp:cancel:${it.id}` }]] } }
+          : {};
+        const err = it.lastError ? `\nОшибка: ${it.lastError.slice(0, 200)}` : '';
+        await sendMessage(u.chatId, `${scheduleLine(it)}${err}`, extra);
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[bot] /posts list error:', maskToken(String(err)));
+      await sendMessage(u.chatId, 'Не удалось показать список');
     }
     return;
   }

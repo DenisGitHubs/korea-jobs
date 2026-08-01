@@ -12,13 +12,15 @@ import { applySaveToCaches, revertSaveInCaches } from '../store/feedStore';
 import { cityLabel } from '../lib/cities';
 import { buildShareStartParam, buildVacancyShareLink, loadReferral } from '../lib/shareLink';
 import { isStale, timeAgo } from '../lib/format';
+import { isPromo } from '../lib/vacancyMedia';
 import { AppBar } from '../components/AppBar';
 import { Loading } from '../components/Loading';
 import { EmptyState } from '../components/EmptyState';
 import { WorkTypeBadge } from '../components/WorkTypeBadge';
 import { HeartIcon } from '../components/VacancyCard';
+import { VacancyImage } from '../components/VacancyImage';
 import { ContactLines } from '../components/ContactLines';
-import { IconSearch } from '../components/icons/StateIcons';
+import { IconMegaphone, IconSearch } from '../components/icons/StateIcons';
 import { findPhone, findTelegramUsername, splitContacts } from '../lib/contacts';
 
 function ShieldIcon() {
@@ -359,6 +361,9 @@ export default function VacancyScreen() {
     v === true ? t('common.yes') : v === false ? t('common.no') : t('vacancy.notStated');
 
   const isRepost = Boolean((vacancy as { repost?: boolean } | null)?.repost);
+  // Paid placement → the «Реклама» label rides on the badge row (same as in the
+  // feed preview) AND the disclaimer plate below it.
+  const promo = isPromo(vacancy);
   // Resolved city list (multi-city first, `city` fallback) computed once — the hero
   // and the source-link condition both read it. Empty === city not specified.
   const cityList = vacancy
@@ -440,7 +445,9 @@ export default function VacancyScreen() {
               ) : null}
             </div>
 
-            <div className="card__badges" style={{ marginBottom: 16 }}>
+            <div className="card__badges" style={{ marginBottom: promo ? 12 : 16 }}>
+              {/* Mandatory paid-placement label — first, so it is read before the offer. */}
+              {promo ? <span className="badge badge--ad">{t('vacancy.adBadge')}</span> : null}
               <WorkTypeBadge type={vacancy.work_type} />
               <span className="badge badge--gender">{t(genderKey(vacancy.gender))}</span>
               {vacancy.source_kind === 'user' ? (
@@ -448,6 +455,25 @@ export default function VacancyScreen() {
               ) : null}
               {isRepost ? <span className="badge badge--repost">{t('vacancy.repost')}</span> : null}
             </div>
+
+            {/* Disclaimer plate for a paid placement: what the payment did and did
+                NOT buy. Both sentences are the ALREADY PUBLISHED wording from the
+                "Партнёрам" screen, reused verbatim — no new legal text here. */}
+            {promo ? (
+              <div className="adnote" role="note">
+                <span className="adnote__ico">
+                  <IconMegaphone />
+                </span>
+                <div>
+                  <div className="adnote__t">{t('vacancy.adBadge')}</div>
+                  <div className="adnote__s">{t('partners.jobs.verifyNote')}</div>
+                  <div className="adnote__s adnote__s--gap">{t('partners.ads.disclaimer')}</div>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Optional cover image (larger than in the feed). Absent → nothing renders. */}
+            <VacancyImage src={vacancy.image_url} variant="detail" />
 
             {/* Compact details: headline facts (employer, visa) span the full row;
                 the short yes/no pairs pack into a 2-column grid to keep the block

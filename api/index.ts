@@ -17,7 +17,9 @@
 //   /api/vacancies/:id/takedown, /api/ads/:id/moderate-> admin (CRON_SECRET | ADMIN_TELEGRAM_IDS)
 //   /api/admin/erase-user, /api/admin/takedown-contact-> admin (CRON_SECRET | ADMIN_TELEGRAM_IDS)
 //   /api/bot/webhook                                  -> X-Telegram-Bot-Api-Secret-Token
-//   /api/cron/parse|notify|digest|cleanup|referral-confirm|inactive-erase -> Bearer CRON_SECRET
+//   /api/cron/parse|notify|digest|cleanup|referral-confirm|inactive-erase|scheduled -> Bearer CRON_SECRET
+//   /api/media/:id                                    -> PUBLIC (unguessable id + per-request
+//                                                        visibility re-check; see the route below)
 
 import { type ReqLike, type ResLike, send, sendError } from '../lib/korea/core/http.js';
 import { ApiErrorCode, httpStatusFor, makeError } from '../lib/korea/core/errors.js';
@@ -29,6 +31,7 @@ import {
   cronCleanup,
   cronReferralConfirm,
   cronInactiveErase,
+  cronScheduled,
 } from '../lib/korea/cron/handler.js';
 import { botWebhook } from '../lib/korea/bot/webhook.js';
 import { citiesGet } from '../lib/korea/cities/read.js';
@@ -56,6 +59,7 @@ import { adminEraseUser } from '../lib/korea/admin/erase.js';
 import { contactTakedown } from '../lib/korea/admin/takedown.js';
 import { referralGet } from '../lib/korea/referral/read.js';
 import { sharePrepare } from '../lib/korea/share/prepare.js';
+import { mediaGet } from '../lib/korea/media/read.js';
 
 type Handler = (req: ReqLike, res: ResLike) => Promise<void> | void;
 
@@ -128,6 +132,14 @@ const ROUTES: Route[] = [
   // "Красивая ссылка" share: mint a Telegram prepared inline message (branded photo card) for a
   // vacancy so the Mini App can pop it via the native share dialog. tma auth; body { vacancyId }.
   { segments: ['share', 'prepare'], handler: sharePrepare },
+  // Listing image (draft_0030). PUBLIC BY NECESSITY: the mini app renders it with a plain
+  // <img src="/api/media/<uuid>">, and an <img> sends no Authorization header — an authenticated
+  // route could not be used at all. Two things carry the security instead: the id is an
+  // unguessable uuid handed out only inside an authenticated feed/detail response, and the handler
+  // RE-CHECKS VISIBILITY on every request (bytes come back only while an approved, unexpired card
+  // carries them). Everything else is a 404. It never redirects to api.telegram.org (that URL
+  // contains the bot token) — the bytes live in our own database.
+  { segments: ['media', ':id'], handler: mediaGet },
   // Telegram bot webhook (X-Telegram-Bot-Api-Secret-Token)
   { segments: ['bot', 'webhook'], handler: botWebhook },
   // Cron (bearer CRON_SECRET)
@@ -139,6 +151,10 @@ const ROUTES: Route[] = [
   // tail step of cron/cleanup too, so this route is for a controlled/manual run; it is a no-op
   // while config inactive_delete_enabled is false (the shipped default).
   { segments: ['cron', 'inactive-erase'], handler: cronInactiveErase },
+  // Owner tool «отложенные публикации»: publish whatever /post scheduled and is now due. Also runs
+  // as the tail step of cron/cleanup, so this route is for its own (finer) schedule or a manual run;
+  // both are safe together — a run is claimed on (schedule_id, run_no) before anything is published.
+  { segments: ['cron', 'scheduled'], handler: cronScheduled },
 ];
 
 function splitPath(pathname: string): string[] {

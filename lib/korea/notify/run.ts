@@ -378,6 +378,17 @@ export async function runNotify(): Promise<NotifyResult> {
   await sql`update vacancies set notify_pending = false where notify_pending and cardinality(city_ids) = 0 and cardinality(region_slugs) = 0`;
   await sql`update user_ads set notify_pending = false where notify_pending and cardinality(city_ids) = 0 and cardinality(region_slugs) = 0`;
 
+  // PAID PLACEMENTS ARE NEVER PUSHED (draft_0030, owner + Законник). A promo card lives in the feed
+  // and nowhere else: selling VISIBILITY is fine, mailing a paid ad into people's private messages
+  // is not. The publisher already writes notify_pending=false for a promo, so this clears only a row
+  // that somehow got the flag anyway — and clearing it (rather than just skipping) keeps such a row
+  // from being rescanned on every tick forever.
+  // The flag is read through to_jsonb so this also works on a database where draft_0030 has not been
+  // applied yet: no `promo` key -> NULL -> false -> today's behaviour, no error.
+  await sql`
+    update user_ads set notify_pending = false
+    where notify_pending and coalesce((to_jsonb(user_ads) ->> 'promo')::boolean, false)`;
+
   const batch = await getConfigNumber('notify_vacancy_batch', 10);
   const sendCap = await getConfigNumber('notify_send_cap', 200); // messages per run
   const groupCap = await getConfigNumber('notify_group_cap', 6); // items (buttons) per DM
@@ -401,6 +412,9 @@ export async function runNotify(): Promise<NotifyResult> {
            a.visa_types, a.placement_fee, a.has_housing, a.has_meals, a.author_user_id
     from user_ads a left join cities c on c.id = coalesce(a.city_id, a.city_ids[1])
     where a.notify_pending and a.status = 'approved'
+      -- A PAID placement is never pushed to anybody (see the clearing statement above). Read through
+      -- to_jsonb so a database without draft_0030 simply reports "not a promo" instead of erroring.
+      and not coalesce((to_jsonb(a) ->> 'promo')::boolean, false)
     order by a.created_at asc
     limit ${batch}`) as unknown as AdRow[];
 

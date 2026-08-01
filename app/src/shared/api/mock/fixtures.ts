@@ -127,6 +127,28 @@ const SOURCE_POST_URL: Record<string, string> = {
   v09: 'https://t.me/korea_daegu_jobs/1842',
 };
 
+/**
+ * PAID placements (`promo: true`). Two on purpose, so both shapes can be seen by
+ * eye: v12 also carries a cover image, v22 has none — the «Реклама» label must
+ * show on BOTH, on the feed preview and inside the open card (v12 is bookmarked
+ * as well, so the label is visible in the "Saved" segment too).
+ * Note where they sit: mid-feed, in plain chronological order — a paid card is
+ * never pinned to the top and never gets a frame/glow. Both are `gender: 'any'`
+ * on purpose: our own paid copy must not restrict by sex or age.
+ */
+const PROMO_IDS = new Set(['v12', 'v22']);
+
+/**
+ * Cover images (`image_url`). The real backend serves `/api/media/<uuid>`; the
+ * mock reuses the bundled share card so the layout can be reviewed in a plain
+ * browser. v07 is an ORDINARY listing with a picture (no ad label) — a picture
+ * is a property of a listing, not a privilege of a paid one.
+ */
+const IMAGE_BY_ID: Record<string, string> = {
+  v07: '/share-card.jpg',
+  v12: '/share-card.jpg',
+};
+
 const VISA_BY_WORK: Record<WorkType, VisaType[]> = {
   factory: ['e9', 'h2', 'f4'],
   construction: ['h2', 'f_series', 'f4'],
@@ -313,6 +335,8 @@ export function buildVacancies(): MockVacancy[] {
       is_revealed: INITIAL_REVEALED_IDS.includes(r.id),
       // No direct contact OR unresolved city → offer the source post (mirrors the backend rule).
       source_post_url: r.contact === null || c === null ? (SOURCE_POST_URL[r.id] ?? null) : null,
+      image_url: IMAGE_BY_ID[r.id] ?? null,
+      promo: PROMO_IDS.has(r.id),
       // Kept internally so the reveal endpoint can serve it; the feed strips it.
       contact: r.contact ?? undefined,
     };
@@ -381,9 +405,9 @@ export const RAW_REVEALS: Record<string, string> = {
 export const DEFAULT_ME: Me = {
   public_id: 'demo-user',
   lang: 'ru',
-  terms: { required: true, version: '2026-07-01' },
+  terms: { required: false, version: '2026-07-01' },
   points_total: 87,
-  onboarded: false,
+  onboarded: true,
   // Remaining contact reveals for today (out of a 50/day budget). Drives the thin
   // "reveals left" hint on the vacancy screen; the mock decrements it per reveal.
   reveals_left: 47,

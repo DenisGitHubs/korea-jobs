@@ -93,6 +93,14 @@ interface Row {
   // contact OR NO city (city_ids empty). null on user-ad rows (no such column) and on scraped rows that
   // fail the visibility gate. Never carries anything but the source username.
   source_post_url?: string | null;
+  // COVER IMAGE (draft_0030): the media_files id of the picture attached to a USER AD, as text.
+  // Always null on a scraped vacancy (they have no images). The view exposes it as a URL, never as
+  // a bare id, so a client never has to know how our media is addressed.
+  media_id?: string | null;
+  // PAID PLACEMENT (draft_0030): true = the card must be labelled «Реклама» wherever it is shown.
+  // Read through to_jsonb in SQL, so a database without draft_0030 answers "not a promo" instead of
+  // failing the whole feed in a deploy-before-migrate window.
+  promo?: boolean;
 }
 
 /** DB row -> VacancyView (feed/detail projection; never includes `contact`). */
@@ -129,6 +137,14 @@ function toView(r: Row) {
     // offer that is contactless OR city-less and has a PERSISTED link (draft_0023). Public link, no
     // reveal gate; user ads and gate-failing rows emit null.
     source_post_url: r.source_post_url ?? null,
+    // CONTRACT (frontend): `image_url` is a path on OUR origin — /api/media/<uuid> — or null. The
+    // endpoint re-checks on every request that a visible card still carries the image, so the link
+    // dies exactly when the card does. Never a Telegram URL (those carry the bot token).
+    image_url: r.media_id ? `/api/media/${r.media_id}` : null,
+    // CONTRACT (frontend): `promo` true = PAID placement. The app MUST show the word «Реклама» on
+    // every surface that shows this card. It is deliberately NOT a ranking/визуальная privilege:
+    // a promo sits in the ordinary chronological stream like everything else.
+    promo: r.promo === true,
   };
 }
 
@@ -251,6 +267,9 @@ function feedUnionSql(savedUserPh: string | null): string {
          -- context / to ask the author); otherwise NULL. Reads the STORED column — no raw_messages join.
          case when (v.contact_normalized is null or cardinality(v.city_ids) = 0)
               then v.source_post_url else null end as source_post_url,
+         -- A scraped card never has an image and is never a paid placement (literals keep the two
+         -- union branches type-compatible without touching the vacancies table).
+         null::text as media_id, false as promo,
          v.search_tsv
   from vacancies v
   left join cities c on c.id = v.city_id
@@ -272,7 +291,13 @@ function feedUnionSql(savedUserPh: string | null): string {
          (a.contact_raw is not null) as has_contact,
          a.visa_types, a.placement_fee::text as placement_fee, a.has_housing, a.has_meals,
          'user'::text as source_kind, false as repost, ${saSel} as is_saved,
-         ${arSel} as is_revealed, null::text as source_post_url, a.search_tsv
+         ${arSel} as is_revealed, null::text as source_post_url,
+         -- draft_0030 columns read through to_jsonb ON PURPOSE: the feed is the app's main screen,
+         -- and naming a not-yet-migrated column here would turn a deploy-before-migrate window into
+         -- a total feed outage. A missing key yields NULL -> no image / not a promo.
+         (to_jsonb(a) ->> 'media_id') as media_id,
+         coalesce((to_jsonb(a) ->> 'promo')::boolean, false) as promo,
+         a.search_tsv
   from user_ads a
   left join cities c on c.id = a.city_id
   ${saJoin}
@@ -303,6 +328,7 @@ function savedUnionSql(userPh: string): string {
          -- intentionally does NOT hide unreachable offers: a bookmark the user made stays visible.
          case when (v.contact_normalized is null or cardinality(v.city_ids) = 0)
               then v.source_post_url else null end as source_post_url,
+         null::text as media_id, false as promo,
          s.created_at as saved_at
   from saved_vacancies s
   join vacancies v on v.id = s.vacancy_id and v.is_active and v.duplicate_of is null
@@ -321,6 +347,9 @@ function savedUnionSql(userPh: string): string {
          'user'::text as source_kind, false as repost, true as is_saved,
          (ar.user_id is not null) as is_revealed,
          null::text as source_post_url,
+         -- Same to_jsonb read as the main feed (a bookmarked promo must still say «Реклама»).
+         (to_jsonb(a) ->> 'media_id') as media_id,
+         coalesce((to_jsonb(a) ->> 'promo')::boolean, false) as promo,
          s.created_at as saved_at
   from saved_ads s
   join user_ads a on a.id = s.ad_id and a.status = 'approved' and (a.expires_at is null or a.expires_at > now())
@@ -409,7 +438,8 @@ export async function vacanciesFeed(req: ReqLike, res: ResLike): Promise<void> {
              f.region_slug, f.region_slugs, f.work_type, f.gender,
              f.salary_text, f.salary_min, f.salary_max, f.salary_period, f.employer,
              f.description, f.posted_at, f.has_contact, f.visa_types::text[] as visa_types, f.placement_fee,
-             f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.is_revealed, f.source_post_url
+             f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.is_revealed, f.source_post_url,
+             f.media_id, f.promo
       from (${feedUnionSql(savedUserPh)}) f
       ${where}
       ${cursorClause}
@@ -499,7 +529,9 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
                when (v.contact_normalized is null or cardinality(v.city_ids) = 0)
                then v.source_post_url
                else null
-             end as source_post_url
+             end as source_post_url,
+             -- A scraped card carries no image and is never a paid placement.
+             null::text as media_id, false as promo
       from vacancies v
       left join cities c on c.id = v.city_id
       where v.id = ${id}::uuid and v.is_active and v.duplicate_of is null
@@ -526,7 +558,10 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
              (exists (select 1 from saved_ads s
                       where s.user_id = ${auth.user.id}::uuid and s.ad_id = a.id)) as is_saved,
              (exists (select 1 from ad_contact_reveals r
-                      where r.user_id = ${auth.user.id}::uuid and r.user_ad_id = a.id)) as is_revealed
+                      where r.user_id = ${auth.user.id}::uuid and r.user_ad_id = a.id)) as is_revealed,
+             -- draft_0030 through to_jsonb (see feedUnionSql): a missing column must not 500 the card.
+             (to_jsonb(a) ->> 'media_id') as media_id,
+             coalesce((to_jsonb(a) ->> 'promo')::boolean, false) as promo
       from user_ads a
       left join cities c on c.id = a.city_id
       where a.id = ${id}::uuid and a.status = 'approved' and (a.expires_at is null or a.expires_at > now())
@@ -703,7 +738,8 @@ export async function savedFeed(req: ReqLike, res: ResLike): Promise<void> {
              f.region_slug, f.region_slugs, f.work_type, f.gender,
              f.salary_text, f.salary_min, f.salary_max, f.salary_period, f.employer,
              f.description, f.posted_at, f.has_contact, f.visa_types::text[] as visa_types, f.placement_fee,
-             f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.is_revealed, f.source_post_url, f.saved_at
+             f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.is_revealed, f.source_post_url,
+             f.media_id, f.promo, f.saved_at
       from (${savedUnionSql(userPh)}) f
       where true
       ${cursorClause}

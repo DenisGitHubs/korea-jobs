@@ -178,6 +178,8 @@ export const en: typeof ru = {
     mayBeTaken: 'This posting may be outdated — the spot could already be taken.',
     fromUser: 'From a user',
     repost: 'Repost',
+    // Paid placement label (mirrors ru «Реклама»); same wording as partners.ads.badge.
+    adBadge: 'Ad',
     report: 'Report',
     reported: 'Thanks, your report was sent.',
     copy: 'Copy',

@@ -75,6 +75,11 @@ vi.mock('./telegram.js', () => ({
     return Promise.resolve({ ok: true });
   },
   maskToken: (s: string) => s,
+  // The webhook reaches telegram.ts for media too since /post can carry a photo (media/store.ts).
+  // These two are never exercised here (this file sends no photos) but MUST exist on the mock:
+  // media/store.ts binds them at module load, so a missing export would break importing the webhook.
+  getFile: () => Promise.resolve({ ok: false }),
+  downloadFile: () => Promise.reject(new Error('not used in this suite')),
 }));
 
 import { botWebhook } from './webhook.js';

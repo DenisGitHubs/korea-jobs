@@ -10,6 +10,7 @@
 //   POST /api/cron/digest  -> lib/korea/digest/run.ts (once-a-day matched-vacancy summary)
 //   POST /api/cron/cleanup -> lib/korea/cleanup/run.ts (TTL retention / takedown)
 //   POST /api/cron/inactive-erase -> lib/korea/cleanup/inactive.ts (erase dormant accounts)
+//   POST /api/cron/scheduled -> lib/korea/scheduled/run.ts (publish the owner's due posts)
 
 import {
   type ReqLike,
@@ -26,6 +27,7 @@ import { runDigest } from '../digest/run.js';
 import { runCleanup } from '../cleanup/run.js';
 import { runInactiveErase } from '../cleanup/inactive.js';
 import { runReferralConfirm } from '../referral/confirm.js';
+import { runScheduledPosts } from '../scheduled/run.js';
 
 function authorized(req: ReqLike): boolean {
   return constantTimeEquals(bearerToken(req), process.env.CRON_SECRET);
@@ -96,6 +98,22 @@ export async function cronInactiveErase(req: ReqLike, res: ResLike): Promise<voi
   if (!authorized(req)) return unauthorized(res);
   try {
     const result = await runInactiveErase();
+    send(res, 200, { ok: true, ...result });
+  } catch {
+    sendError(res, ApiErrorCode.Internal);
+  }
+}
+
+/** POST /api/cron/scheduled — publish the owner's «отложенные публикации» that have come due
+ *  (lib/korea/scheduled/run.ts). Idempotent by construction: a run is CLAIMED through the
+ *  (schedule_id, run_no) primary key before anything is published, so a duplicated tick — or the
+ *  copy of this step that runs at the tail of /api/cron/cleanup — can never publish twice. Never
+ *  throws out: a broken schedule is recorded on its own row and the rest still go out. */
+export async function cronScheduled(req: ReqLike, res: ResLike): Promise<void> {
+  if ((req.method ?? 'GET') !== 'POST') return sendError(res, ApiErrorCode.NotFound);
+  if (!authorized(req)) return unauthorized(res);
+  try {
+    const result = await runScheduledPosts();
     send(res, 200, { ok: true, ...result });
   } catch {
     sendError(res, ApiErrorCode.Internal);

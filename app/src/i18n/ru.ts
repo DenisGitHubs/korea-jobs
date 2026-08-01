@@ -175,6 +175,10 @@ export const ru = {
     mayBeTaken: 'Объявление могло устареть — место может быть уже занято.',
     fromUser: 'От пользователя',
     repost: 'Повторное',
+    // Paid placement. The word is fixed by law — not «промо», «спонсор» or «топ».
+    // Shown on the feed preview AND in the open card (plus the disclaimer plate,
+    // whose text is reused verbatim from the published `partners.*` strings).
+    adBadge: 'Реклама',
     report: 'Пожаловаться',
     reported: 'Спасибо, жалоба отправлена.',
     copy: 'Скопировать',

@@ -5,8 +5,11 @@
 // touches an outbound string — and it NEVER lets that token reach a log or an error
 // message (maskToken scrubs every error surface).
 //
-// Narrow surface: tgCall + sendMessage + setWebhook/setMyCommands + maskToken +
-// isUserUnavailable + retryAfterSeconds.
+// Narrow surface: tgCall + sendMessage/sendPhoto + getFile/downloadFile +
+// setWebhook/setMyCommands + maskToken + isUserUnavailable + retryAfterSeconds.
+//
+// FILE DOWNLOADS: getFile + downloadFile are the ONLY way media reaches us, and the file URL
+// (api.telegram.org/file/bot<TOKEN>/…) never leaves this module — see downloadFile's header.
 //
 // PROTOCOL (Susanin brief, verified by 007 — 2026-07-13):
 //   * BOT_TOKEN comes ONLY from process.env; the URL is a secret, never logged.
@@ -97,6 +100,71 @@ export function sendMessage(
   extra: Record<string, unknown> = {},
 ): Promise<TgResponse<{ message_id: number }>> {
   return tgCall('sendMessage', { chat_id: chatId, text, ...extra });
+}
+
+/**
+ * Send a photo. `photo` is a Telegram file_id (re-sending something Telegram already stores —
+ * no upload, no bytes) OR an https URL. `extra` carries caption / reply_markup / ….
+ */
+export function sendPhoto(
+  chatId: number | string,
+  photo: string,
+  extra: Record<string, unknown> = {},
+): Promise<TgResponse<{ message_id: number }>> {
+  return tgCall('sendPhoto', { chat_id: chatId, photo, ...extra });
+}
+
+/** The subset of Telegram's File object we use (getFile). */
+export interface TgFile {
+  file_id: string;
+  file_unique_id?: string;
+  file_size?: number;
+  /** Relative path on the file server; valid for ~1 hour, must be fetched with the token. */
+  file_path?: string;
+}
+
+/** getFile — resolve a file_id into a downloadable file_path (valid for about an hour). */
+export function getFile(fileId: string): Promise<TgResponse<TgFile>> {
+  return tgCall<TgFile>('getFile', { file_id: fileId });
+}
+
+/**
+ * Download the bytes of a file resolved by getFile.
+ *
+ * SECURITY — the reason this lives here and nowhere else: the download URL is
+ * https://api.telegram.org/file/bot<TOKEN>/<file_path>, i.e. it CONTAINS THE BOT TOKEN. It must
+ * never be logged, never be returned to a caller and never be handed to a client as a redirect
+ * (that would leak the token to every user's browser). This function is the only place it exists,
+ * it returns bytes only, and every error string is token-masked.
+ *
+ * `maxBytes` is enforced twice: on the declared content-length (cheap refusal) and on what
+ * actually arrived (a lying/absent header cannot get past it).
+ */
+export async function downloadFile(
+  filePath: string,
+  maxBytes: number,
+  opts: TgCallOptions = {},
+): Promise<{ bytes: Uint8Array; contentType: string | null }> {
+  const token = botToken();
+  const url = `${TELEGRAM_API_BASE}/file/bot${token}/${filePath}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 20_000);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`http ${res.status}`);
+    const declared = Number(res.headers.get('content-length') ?? '0');
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw new Error(`file too large (${declared} bytes)`);
+    }
+    const buf = new Uint8Array(await res.arrayBuffer());
+    if (buf.byteLength > maxBytes) throw new Error(`file too large (${buf.byteLength} bytes)`);
+    return { bytes: buf, contentType: res.headers.get('content-type') };
+  } catch (err) {
+    // The URL carries the token; NEVER let it leak through an error string.
+    throw new Error(`downloadFile failed: ${maskToken(errorMessage(err), token)}`);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Acknowledge a callback_query (stops the client spinner). Optional toast `text`. */

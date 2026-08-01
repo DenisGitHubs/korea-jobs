@@ -241,3 +241,40 @@ describe('runNotify — the budget lookup itself', () => {
     expect(r.capped).toBe(0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PAID PLACEMENTS (draft_0030) — the guard that must never bend
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A promo ad is a FEED-ONLY object: selling visibility is allowed, mailing a paid ad into people's
+// private messages is not. The ban lives in four independent places (parser -> store -> publisher ->
+// here). The publisher half is pinned in scheduled/run.test.ts (promo is written with
+// notify_pending=false); the half that belongs to THIS worker is SQL, so it is asserted as SQL —
+// the fake `sql` cannot evaluate a WHERE clause, and a test that pretended otherwise would prove
+// nothing.
+describe('runNotify — a promo ad is never pushed to anybody', () => {
+  it('excludes promo rows from the batch it fetches', async () => {
+    await runNotify();
+
+    const adFetch = h.state.calls.find((c) => /from user_ads a/.test(c.text))!;
+    expect(adFetch.text).toContain("to_jsonb(a) ->> 'promo'");
+    expect(adFetch.text).toContain('not coalesce');
+  });
+
+  it('clears notify_pending on a promo row instead of rescanning it every tick', async () => {
+    await runNotify();
+
+    const clear = h.state.calls.find(
+      (c) => /update user_ads set notify_pending = false/.test(c.text) && /promo/.test(c.text),
+    );
+    expect(clear).toBeDefined();
+  });
+
+  it('reads the flag through to_jsonb, so a database without draft_0030 still works', async () => {
+    await runNotify();
+
+    const adFetch = h.state.calls.find((c) => /from user_ads a/.test(c.text))!;
+    // No bare `a.promo` anywhere: naming a not-yet-migrated column would break the whole worker.
+    expect(adFetch.text).not.toMatch(/\ba\.promo\b/);
+  });
+});

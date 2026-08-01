@@ -149,6 +149,20 @@ export interface VacancyView {
    * unresolved (so the location can be clarified in the original); otherwise null.
    */
   source_post_url?: string | null;
+  /**
+   * Cover image served by the API (`/api/media/<uuid>`), or null when the listing
+   * has none. OPTIONAL: a backend that has not shipped the field yet degrades to
+   * today's card — no image, no layout change.
+   */
+  image_url?: string | null;
+  /**
+   * true = PAID placement. The word «Реклама» MUST then be shown everywhere this
+   * listing appears (feed preview AND the open card) — see `isPromo()`; the open
+   * card additionally shows the disclaimer plate. Absent === false.
+   * A promo listing is NOT ranked, framed or highlighted differently: paying may
+   * buy visibility, never a quality signal.
+   */
+  promo?: boolean;
 }
 
 /**

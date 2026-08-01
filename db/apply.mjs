@@ -269,6 +269,24 @@ const files = [
   // it retries the pre-0029 claim and behaves exactly like 0028 until this runs. Depends on
   // bot_inbox (draft_0028_bot_inbox.sql) + config (draft_0001_init.sql).
   'draft_0029_inbox_reserve.sql',
+
+  // Scheduled posts + listing images (0030) — ADDITIVE / idempotent (CREATE TABLE IF NOT EXISTS +
+  // ADD COLUMN IF NOT EXISTS with safe defaults + CREATE INDEX IF NOT EXISTS + INSERT ... ON
+  // CONFLICT DO NOTHING). Backs the owner tool «отложенные публикации»: he DMs the bot /post ONCE
+  // (text, or the caption of a photo), confirms a preview, and lib/korea/scheduled/run.ts publishes
+  // it at the appointed Seoul time — optionally repeating it, where every repeat is a NEW card that
+  // ARCHIVES the previous one (a repeat must never re-date an old card). Adds media_files (image
+  // BYTES, so the app serves /api/media/<id> from our own origin — a Telegram file URL carries the
+  // bot token and must never reach a browser), scheduled_posts, scheduled_post_runs (PK
+  // (schedule_id, run_no) IS the idempotency key: claim first, publish second), user_ads.media_id +
+  // user_ads.promo (kind='promo' = a PAID placement labelled «Реклама»: feed only, NEVER a DM), and
+  // four scheduled_* config knobs. Applying it changes NO existing behaviour: every current row
+  // keeps media_id NULL and promo=false, and nothing is scheduled yet. Apply BEFORE the matching
+  // code deploy (the worker names these tables directly); if the code lands first, /post answers an
+  // error, the feed/notify keep working (they read promo through to_jsonb, so a missing column is
+  // simply "not a promo") and nothing is published. Depends on users + user_ads + config + cities
+  // (draft_0001 / 0003 / 0010 / 0020 / 0021).
+  'draft_0030_scheduled_posts.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

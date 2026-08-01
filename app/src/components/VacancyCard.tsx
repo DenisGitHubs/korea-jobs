@@ -6,7 +6,9 @@ import { useFilterStore } from '../store/filterStore';
 import { cityLabel } from '../lib/cities';
 import { timeAgo } from '../lib/format';
 import { genderKey, regionKey } from '../shared/labels';
+import { isPromo } from '../lib/vacancyMedia';
 import { WorkTypeBadge } from './WorkTypeBadge';
+import { VacancyImage } from './VacancyImage';
 import { IconCheck } from './icons/StateIcons';
 
 /** Max badges shown on a card; the rest collapse into a "+N" chip. */
@@ -70,9 +72,19 @@ export function VacancyCard({
 
   const isRepost = Boolean((vacancy as { repost?: boolean }).repost);
   const fromUser = vacancy.source_kind === 'user';
+  const promo = isPromo(vacancy);
 
-  // Priority order: work-type + perks (housing/meals) rank above gender/source/repost.
-  const badges: ReactNode[] = [<WorkTypeBadge key="work" type={vacancy.work_type} />];
+  // Priority order: the paid-placement label FIRST — it is mandatory and must
+  // never be the one that falls into the "+N" overflow; then work-type + perks
+  // (housing/meals), then gender/source/repost.
+  const badges: ReactNode[] = [];
+  if (promo)
+    badges.push(
+      <span key="ad" className="badge badge--ad">
+        {t('vacancy.adBadge')}
+      </span>,
+    );
+  badges.push(<WorkTypeBadge key="work" type={vacancy.work_type} />);
   if (vacancy.has_housing === true)
     badges.push(
       <span key="housing" className="badge badge--perk">
@@ -157,6 +169,8 @@ export function VacancyCard({
         {visible}
         {overflow > 0 ? <span className="badge badge--count">+{overflow}</span> : null}
       </div>
+      {/* Optional cover image. Absent → the card renders exactly as before. */}
+      <VacancyImage src={vacancy.image_url} />
       <div className="card__desc">{vacancy.description}</div>
       {vacancy.employer ? <div className="card__employer">{vacancy.employer}</div> : null}
     </div>

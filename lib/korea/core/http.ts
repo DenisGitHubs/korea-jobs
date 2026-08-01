@@ -10,7 +10,10 @@ import { ApiErrorCode, type ApiErrorBody, httpStatusFor, makeError } from './err
 export interface ResLike {
   statusCode: number;
   setHeader(name: string, value: string): void;
-  end(body: string): void;
+  /** A string for JSON/text answers, or raw bytes for a binary body (see sendBytes). Node's
+   *  ServerResponse.end accepts both; test doubles that only declare the string form still
+   *  satisfy this (method parameters are bivariant in TypeScript). */
+  end(body: string | Uint8Array): void;
 }
 
 export interface ReqLike {
@@ -39,6 +42,25 @@ export function send(res: ResLike, status: number, body: unknown): void {
   res.statusCode = status;
   res.setHeader('content-type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(body));
+}
+
+/**
+ * Send a BINARY response (an image from /api/media/:id). Separate from send() because the body
+ * is bytes, not JSON: content-length is set explicitly and the caller chooses the cache policy.
+ * `contentType` must come from a server-side whitelist — never echoed from a request.
+ */
+export function sendBytes(
+  res: ResLike,
+  status: number,
+  contentType: string,
+  body: Uint8Array,
+  cacheControl?: string,
+): void {
+  res.statusCode = status;
+  res.setHeader('content-type', contentType);
+  res.setHeader('content-length', String(body.byteLength));
+  if (cacheControl) res.setHeader('cache-control', cacheControl);
+  res.end(body);
 }
 
 /**
