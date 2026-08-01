@@ -298,6 +298,21 @@ const files = [
   // deploy — both orders are safe: the auth upsert falls back to the plain (label-less) upsert if
   // the column is missing, and /stats simply omits the block. Depends on users (draft_0001).
   'draft_0031_acq_source.sql',
+
+  // Acquisition ALLOW-LIST (0032) — ADDITIVE / idempotent (INSERT ... ON CONFLICT DO NOTHING +
+  // CREATE TABLE IF NOT EXISTS). Closes the hole the legal review found in 0031: the parser only
+  // validates the SHAPE of a label, so anyone could put free text into their own row via a public
+  // `?startapp=…` tail (and that text survives account erasure), and a label could describe a
+  // PERSON (`s_uzbeki` — a special category of personal data) instead of a channel. From now on a
+  // label is stored ONLY if it is listed in config 'acq_sources_allowed' (seeded here with the four
+  // planned campaigns: ads_ru1/ads_ru2/ads_uz1/ads_uz2); everything else resolves to NULL and the
+  // person simply enters unlabelled. Also adds acq_rejects — a per-day COUNT of labels that missed
+  // the list (no value, no user: one date + one number), so a typo in the ad cabinet shows up in
+  // /stats instead of being silent. FAIL-CLOSED: until this runs the list is empty and NO label is
+  // recorded, so apply it BEFORE the ads start. Code: lib/korea/core/acq-source.ts (shared by the
+  // Mini App auth path and the bot /start). Depends on config (draft_0001) and, in meaning,
+  // users.acq_source (draft_0031).
+  'draft_0032_acq_allowlist.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

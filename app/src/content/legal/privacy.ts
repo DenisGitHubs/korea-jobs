@@ -1,13 +1,13 @@
 import type { LegalDocByLang } from './types';
 
 /**
- * Privacy Policy (RU + EN), version 1.0 — the text the owner approved for
+ * Privacy Policy (RU + EN), version 1.1 — the text the owner approved for
  * publication. Every "write to us" pointer resolves to the project bot
  * @korea_rabota_bot (Settings also exposes it as a tappable row).
  */
 export const PRIVACY_POLICY: LegalDocByLang = {
   ru: {
-    meta: 'Версия: 1.0 · Дата вступления в силу: 27.07.2026',
+    meta: 'Версия: 1.1 · Дата вступления в силу: 01.08.2026',
     intro:
       'Мы написали эту политику сами, простым языком, без привлечения профессионального юриста — специально, чтобы её было легко прочитать и понять. Если что-то осталось неясным или вызывает вопросы — напиши нам: @korea_rabota_bot.',
     sections: [
@@ -44,6 +44,7 @@ export const PRIVACY_POLICY: LegalDocByLang = {
               '**Что ты делал в приложении** — какие вакансии сохранил в избранное, какие контакты и когда открывал, какие уведомления мы тебе отправили. Это нужно, чтобы показывать избранное, не слать одно и то же дважды и соблюдать суточный лимит на открытие контактов.',
               '**Жалобы и обращения** — если ты жалуешься на вакансию, оставляешь заявку в разделе «Партнёрам» или пишешь нам в бот, мы сохраняем твоё сообщение и способ связи, чтобы разобраться и ответить. Сообщение, отправленное в бот, приходит в личный чат Telegram того, кто ведёт сервис.',
               '**Технические логи сервера** — IP-адрес и время твоих запросов к приложению, как у любого сайта или онлайн-сервиса. Это нужно для работы и защиты серверов; отдельно мы эти логи не анализируем и решений о тебе на их основе не принимаем.',
+              '**Откуда ты пришёл** — если ты открыл приложение по одной из наших ссылок (например, из рекламы или с флаера), мы сохраняем короткую пометку об этой ссылке (например, «ads_ru1»). Она одна на всех, кто пришёл оттуда же, записывается только при первом входе и больше не меняется. Мы не записываем в неё ничего о тебе и никому её не показываем — ни другим пользователям, ни рекламным площадкам: она нужна нам, чтобы считать, сколько людей приводит та или иная ссылка.',
             ],
           },
           { type: 'p', text: '**Если ты размещаешь своё объявление о работе**' },
@@ -108,6 +109,7 @@ export const PRIVACY_POLICY: LegalDocByLang = {
               '**Чтобы честно вести реферальную программу:** начислять баллы за приглашения и показывать твой прогресс.',
               '**Чтобы публиковать твои объявления:** показывать другим пользователям текст объявления и контакт, который ты указал при размещении, чтобы соискатели могли с тобой связаться.',
               '**Чтобы собирать вакансии из открытых источников:** разбирать сообщения из публичных телеграм-чатов и каналов и показывать их в приложении как вакансии.',
+              '**Чтобы понимать, откуда приходят люди:** считать, сколько человек пришло по каждой нашей ссылке, и не тратить силы на то, что не работает.',
             ],
           },
         ],
@@ -134,7 +136,7 @@ export const PRIVACY_POLICY: LegalDocByLang = {
           },
           {
             type: 'p',
-            text: 'Технически это выглядит так: мы стираем всё, что указывает на тебя — номер аккаунта в Telegram, имя, ник, твои объявления, подписки, избранное, историю открытий. Остаётся обезличенная запись без имени и номера — только чтобы не сбились счётчики у людей, которые тебя приглашали. Если вернёшься — это будет новый аккаунт.',
+            text: 'Технически это выглядит так: мы стираем всё, что указывает на тебя — номер аккаунта в Telegram, имя, ник, твои объявления, подписки, избранное, историю открытий. Остаётся обезличенная запись без имени и номера — только чтобы не сбились счётчики у людей, которые тебя приглашали. Если вернёшься — это будет новый аккаунт. Вместе с ней остаётся и пометка о том, по какой ссылке ты когда-то пришёл: она одинаковая у всех, кто пришёл оттуда же, узнать по ней тебя нельзя, а нужна она, чтобы не сбился счёт, сколько людей приводит каждая ссылка.',
           },
           {
             type: 'p',
@@ -180,7 +182,7 @@ export const PRIVACY_POLICY: LegalDocByLang = {
           },
           {
             type: 'p',
-            text: 'Технически это выглядит так: мы стираем всё, что указывает на тебя — номер аккаунта в Telegram, имя, ник, твои объявления, подписки, избранное, историю открытий. Остаётся обезличенная запись без имени и номера — только чтобы не сбились счётчики у людей, которые тебя приглашали. Если вернёшься — это будет новый аккаунт.',
+            text: 'Технически это выглядит так: мы стираем всё, что указывает на тебя — номер аккаунта в Telegram, имя, ник, твои объявления, подписки, избранное, историю открытий. Остаётся обезличенная запись без имени и номера — только чтобы не сбились счётчики у людей, которые тебя приглашали. Если вернёшься — это будет новый аккаунт. Вместе с ней остаётся и пометка о том, по какой ссылке ты когда-то пришёл: она одинаковая у всех, кто пришёл оттуда же, узнать по ней тебя нельзя, а нужна она, чтобы не сбился счёт, сколько людей приводит каждая ссылка.',
           },
           {
             type: 'p',
@@ -218,7 +220,7 @@ export const PRIVACY_POLICY: LegalDocByLang = {
     ],
   },
   en: {
-    meta: 'Version: 1.0 · Effective date: 27 July 2026',
+    meta: 'Version: 1.1 · Effective date: 1 August 2026',
     intro:
       'We wrote this policy ourselves, in plain language, without hiring a professional lawyer — specifically so it would be easy to read and understand. If anything is unclear or raises questions, write to us: @korea_rabota_bot.',
     sections: [
@@ -255,6 +257,7 @@ export const PRIVACY_POLICY: LegalDocByLang = {
               "**What you did in the app** — which jobs you saved to favorites, which contacts you opened and when, which notifications we sent you. We need this to show you your favorites, to avoid sending you the same thing twice, and to keep the daily limit on contact reveals.",
               '**Complaints and messages** — if you report a job listing, submit a request in the "Partners" section, or write to us in the bot, we store your message and the way to reach you, so we can look into it and reply. A message sent to the bot arrives in the personal Telegram chat of the person who runs the service.',
               "**Server technical logs** — IP address and the time of your requests to the app, same as any website or online service. This is needed to run and protect the servers; we don't separately analyze these logs or use them to make decisions about you.",
+              "**Where you came from** — if you opened the app through one of our links (for example, from an ad or a flyer), we save a short tag for that link (for example, 'ads_ru1'). It is the same for everyone who came from there, it is written only on your first visit and never changes. We put nothing about you into it and never show it to anyone — not to other users, not to ad platforms: we need it to count how many people each link brings.",
             ],
           },
           { type: 'p', text: '**If you post your own job ad**' },
@@ -319,6 +322,7 @@ export const PRIVACY_POLICY: LegalDocByLang = {
               '**To run the referral program fairly:** award points for referrals and show you your progress.',
               '**To publish your ads:** show other users the ad text and the contact you provided when posting, so job seekers can reach you.',
               '**To collect jobs from open sources:** parse messages from public Telegram chats and channels and show them in the app as job listings.',
+              '**To understand where people come from:** count how many people arrived through each of our links, so we do not keep spending effort on what does not work.',
             ],
           },
         ],
@@ -345,7 +349,7 @@ export const PRIVACY_POLICY: LegalDocByLang = {
           },
           {
             type: 'p',
-            text: "Technically it works like this: we erase everything that points to you — your Telegram account number, your name, your username, your ads, your subscriptions, your favorites, the history of contacts you opened. What stays is an anonymized record with no name and no number — only so that the counters of the people who invited you don't break. If you come back, it will be a new account.",
+            text: "Technically it works like this: we erase everything that points to you — your Telegram account number, your name, your username, your ads, your subscriptions, your favorites, the history of contacts you opened. What stays is an anonymized record with no name and no number — only so that the counters of the people who invited you don't break. If you come back, it will be a new account. Along with it we keep the tag for the link you once arrived through: it is the same for everyone who came from there, it cannot identify you, and we need it so the count of how many people each link brings stays correct.",
           },
           {
             type: 'p',
@@ -391,7 +395,7 @@ export const PRIVACY_POLICY: LegalDocByLang = {
           },
           {
             type: 'p',
-            text: "Technically it works like this: we erase everything that points to you — your Telegram account number, your name, your username, your ads, your subscriptions, your favorites, the history of contacts you opened. What stays is an anonymized record with no name and no number — only so that the counters of the people who invited you don't break. If you come back, it will be a new account.",
+            text: "Technically it works like this: we erase everything that points to you — your Telegram account number, your name, your username, your ads, your subscriptions, your favorites, the history of contacts you opened. What stays is an anonymized record with no name and no number — only so that the counters of the people who invited you don't break. If you come back, it will be a new account. Along with it we keep the tag for the link you once arrived through: it is the same for everyone who came from there, it cannot identify you, and we need it so the count of how many people each link brings stays correct.",
           },
           {
             type: 'p',

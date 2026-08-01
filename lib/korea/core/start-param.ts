@@ -30,6 +30,9 @@
 //        e.g.  ads_ru1 -> { source: 'ads_ru1' } · s_flyer -> { source: 's_flyer' }
 //        Written to users.acq_source ON INSERT ONLY (see core/context.ts) — it answers
 //        "where did this NEW person come from", never re-attributes an existing account.
+//        SHAPE IS NOT PERMISSION: since 02.08.2026 a parsed label is stored only if the owner
+//        approved it (allow-list in core/acq-source.ts). This module still says "this looks
+//        like a label"; whether that label may be RECORDED is decided there, in one place.
 //
 // WHY TWO PREFIXES, AND WHY THE LABEL IS THE WHOLE PARAM:
 //   * `ads_` is what the owner's Telegram Ads brief (_docs/ads/telegram-ads-brief.md) already
@@ -150,9 +153,14 @@ export function normalizeRefCode(raw: string | null | undefined): string | null 
 
 /**
  * Extract ONLY the acquisition label from any start_param, or null when the link carries none.
- * The twin of `normalizeRefCode`, and the sole input of the `users.acq_source` write in BOTH
- * entry paths (Mini App auth upsert + bot `/start`) — so the two can never disagree on what
- * counts as a campaign label.
+ * The twin of `normalizeRefCode`: it answers "does this link carry a well-FORMED label", nothing
+ * more.
+ *
+ * DO NOT WRITE users.acq_source FROM THIS. `startapp` is a public URL tail, so a well-formed
+ * label may still be a stranger's invention or a special category of personal data. The write
+ * paths (Mini App auth upsert + bot `/start`) both go through `resolveAcqSource`
+ * (core/acq-source.ts), which additionally checks the owner's allow-list. Keeping that check in
+ * ONE place is the only reason the two entry paths cannot drift apart.
  */
 export function normalizeAcqSource(raw: string | null | undefined): string | null {
   return parseStartParam(raw).source ?? null;

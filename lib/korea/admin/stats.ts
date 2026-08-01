@@ -13,6 +13,7 @@
 
 import { getSql } from '../core/db.js';
 import { getConfigNumber } from '../config.js';
+import { getAllowedAcqSources, ACQ_ALLOWLIST_ECHO_MAX } from '../core/acq-source.js';
 
 export interface Stats {
   usersTotal: number;
@@ -54,6 +55,15 @@ export interface Stats {
   // block is then omitted, which is DIFFERENT from "the column exists and nobody came yet".
   sourcesReady: boolean;
   sources: { source: string; total: number; week: number }[];
+  // The APPROVED labels currently in force (config acq_sources_allowed, normalized exactly as the
+  // gate normalizes them — core/acq-source.ts). Echoed back so the owner can compare the list with
+  // what he pasted into the ad cabinet: a label that is not printed here is not being counted.
+  // Empty = nothing is being labelled at all (fail-closed default).
+  sourcesAllowed: string[];
+  // How many well-formed labels arrived in the last 7 days but were NOT on the list (his typo, a
+  // label he forgot to add, or a stranger's experiment). COUNT ONLY — the values themselves are
+  // never stored anywhere, so there is nothing to print but the number.
+  sourceRejects7d: number;
 }
 
 /** Coerce a driver count (int4 -> number, but guard string/NULL) to a safe integer. */
@@ -219,6 +229,31 @@ export async function gatherStats(): Promise<Stats> {
     console.error('[stats] acq_source read failed (column missing?):', err instanceof Error ? err.message : String(err));
   }
 
+  // (5b) The allow-list actually in force + how many labels missed it this week (draft_0032).
+  // Both are DIAGNOSTICS for the owner: the list tells him which labels are being counted at all
+  // (a label he mistyped in the ad cabinet is simply absent from it), and the reject count tells
+  // him that SOMETHING is arriving with a label nobody approved — which is how a typo announces
+  // itself. The rejected strings themselves are not stored and are not shown: only the number.
+  // Best-effort like every block above (config read / a table from a later migration).
+  let sourcesAllowed: string[] = [];
+  let sourceRejects7d = 0;
+  try {
+    sourcesAllowed = (await getAllowedAcqSources()).slice(0, ACQ_ALLOWLIST_ECHO_MAX);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[stats] acq allow-list read failed:', err instanceof Error ? err.message : String(err));
+  }
+  try {
+    const rRows = (await sql`
+      select coalesce(sum(n), 0)::int as rejects
+        from acq_rejects
+       where day >= ((now() at time zone 'Asia/Seoul')::date - 6)`) as unknown as Record<string, unknown>[];
+    sourceRejects7d = n(rRows[0]?.rejects);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[stats] acq_rejects read failed (table missing?):', err instanceof Error ? err.message : String(err));
+  }
+
   return {
     usersTotal: n(u.total),
     usersNew24h: n(u.new_24h),
@@ -246,6 +281,8 @@ export async function gatherStats(): Promise<Stats> {
     slang,
     sourcesReady,
     sources,
+    sourcesAllowed,
+    sourceRejects7d,
   };
 }
 
@@ -296,6 +333,23 @@ export function renderStats(s: Stats): string {
         const week = s.sources.reduce((acc, x) => acc + x.week, 0);
         lines.push(`  Всего по меткам: ${total} ${people(total)} (за неделю ${week})`);
       }
+    }
+    // Which labels are being counted AT ALL. A label that is not in this line is not recorded —
+    // that is exactly how a typo in the ad cabinet (or a label he forgot to add to the list)
+    // becomes visible. Empty list = the mechanism is off and nothing is being labelled.
+    lines.push(
+      s.sourcesAllowed.length > 0
+        ? `  Считаются метки: ${s.sourcesAllowed.join(', ')}`
+        : '  Считаются метки: список пуст — ни одна метка не записывается ' +
+          '(нужно заполнить список acq_sources_allowed)',
+    );
+    // Somebody arrived with a label nobody approved. Number only: the values are third-party
+    // input, we neither store nor show them. Hidden while it is zero — a quiet report is good news.
+    if (s.sourceRejects7d > 0) {
+      lines.push(
+        `  Мимо списка за неделю: ${s.sourceRejects7d} ` +
+          '(метка была, но её нет в списке — проверь, что вписал в кабинете)',
+      );
     }
   }
   // AI-geo learning (only when there is something to show): unresolved city/region names + decoded slang.

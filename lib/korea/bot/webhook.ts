@@ -25,6 +25,7 @@ import { isAdminTelegram } from '../admin/auth.js';
 import { gatherStats, renderStats } from '../admin/stats.js';
 import { moderateAd } from '../ads/rw.js';
 import { parseStartParam } from '../core/context.js';
+import { resolveAcqSource, noteAcqRejectBestEffort } from '../core/acq-source.js';
 import { getConfigNumber } from '../config.js';
 import {
   type BroadcastRunResult,
@@ -514,10 +515,21 @@ async function dispatch(u: ParsedUpdate): Promise<void> {
   // which is not a hex digit), so an ad visitor never gets an inviter and never appears in the
   // referral numbers. The label is stored on INSERT ONLY: a second /start, another campaign
   // link, or an account that already existed can never (re)write it.
-  const sp = parseStartParam(text.slice('/start'.length).trim());
+  //
+  // …and it is ALLOW-LISTED through the SAME module the Mini App uses (core/acq-source.ts): a
+  // label counts only if the owner approved it in config.acq_sources_allowed. Anyone can send
+  // `/start s_whatever`, and the label outlives account erasure — so the two paths must agree
+  // on what is admissible, and they do by sharing one gate. Unknown label -> no label at all,
+  // the greeting and everything else are untouched.
+  const startPayload = text.slice('/start'.length).trim();
+  const sp = parseStartParam(startPayload);
   const refCode = sp.refCode ?? null;
-  const acqSource = refCode ? null : (sp.source ?? null);
   const sql = getSql();
+  const acq = refCode
+    ? { source: null, rejected: false }
+    : await resolveAcqSource(startPayload);
+  const acqSource = acq.source;
+  if (acq.rejected) await noteAcqRejectBestEffort(sql);
   // The label-less upsert, defined once: used both when no code is present and as the fallback
   // if the acq_source write fails (deploy-before-migrate window).
   const plainStartUpsert = (): Promise<unknown[]> =>

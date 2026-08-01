@@ -24,6 +24,8 @@ const h = vi.hoisted(() => {
     inboxClaim: [{ id: '11111111-2222-3333-4444-555555555555' }] as unknown[],
     /** true = users.acq_source does not exist yet (deploy landed before the migration). */
     noAcqColumn: false,
+    /** config.acq_sources_allowed — the labels the owner approved (draft_0032). */
+    allowed: ['ads_ru1', 'ads_ru2', 'ads_uz1', 'ads_uz2'] as string[],
     sent: [] as { chatId: number | string; text: string; argc: number }[],
     toasts: [] as (string | undefined)[],
     edits: [] as { chatId: number | string; messageId: number; text: string }[],
@@ -51,6 +53,8 @@ vi.mock('../config.js', () => ({
   getConfigNumber: async (_k: string, fb: number) => fb,
   getConfigString: async (_k: string, fb: string) => fb,
   getConfigBool: async (_k: string, fb: boolean) => fb,
+  getConfigStringArray: async (k: string, fb: string[]) =>
+    k === 'acq_sources_allowed' ? h.state.allowed : fb,
 }));
 vi.mock('../admin/auth.js', () => ({
   isAdminTelegram: async () => h.state.isAdmin,
@@ -155,6 +159,7 @@ beforeEach(() => {
   h.state.isAdmin = false;
   h.state.inboxClaim = [{ id: '11111111-2222-3333-4444-555555555555' }];
   h.state.noAcqColumn = false;
+  h.state.allowed = ['ads_ru1', 'ads_ru2', 'ads_uz1', 'ads_uz2'];
   h.state.sent = [];
   h.state.toasts = [];
   h.state.edits = [];
@@ -297,6 +302,47 @@ describe('webhook — /start with a campaign label', () => {
     expect(inserts[0]).toContain('acq_source');
     expect(inserts[1]).not.toContain('acq_source');
     expect(h.state.sent[0]!.text).toContain('Привет!');
+  });
+
+  // ── The allow-list, through the SAME gate the Mini App uses (core/acq-source.ts). Anyone can
+  //    send `/start s_whatever` to the bot, so this path needs the identical verdict.
+  const rejectCounted = (): boolean =>
+    h.state.queries.some((q) => q.includes('insert into acq_rejects'));
+
+  it('an UNAPPROVED label is not stored — the newcomer is greeted exactly as usual', async () => {
+    await post(privateMessage('/start s_ivan_petrov_seoul'));
+
+    expect(upsert()).not.toContain('acq_source');
+    expect(h.state.queries.filter((q) => q.includes('insert into users'))).toHaveLength(1);
+    expect(h.state.sent[0]!.text).toContain('Привет!');
+  });
+
+  it('counts the miss without keeping the value', async () => {
+    await post(privateMessage('/start ads_ru9'));
+    expect(rejectCounted()).toBe(true);
+    expect(h.state.queries.join(' | ')).not.toContain('ads_ru9');
+  });
+
+  it('an EMPTY list labels nobody (fail-closed) but still lets everyone in', async () => {
+    h.state.allowed = [];
+    await post(privateMessage('/start ads_ru1'));
+
+    expect(upsert()).not.toContain('acq_source');
+    expect(rejectCounted()).toBe(true);
+    expect(h.state.sent[0]!.text).toContain('Привет!');
+  });
+
+  it('the bot and the Mini App agree: the same label is approved on both paths', async () => {
+    h.state.allowed = ['ADS_RU-1']; // written loosely in the list…
+    await post(privateMessage('/start ads_ru-1')); // …and loosely in the link
+    expect(upsert()).toContain('acq_source');
+    expect(rejectCounted()).toBe(false);
+  });
+
+  it('a plain /start with no payload never counts a rejection', async () => {
+    h.state.allowed = [];
+    await post(privateMessage('/start'));
+    expect(rejectCounted()).toBe(false);
   });
 });
 

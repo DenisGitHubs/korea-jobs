@@ -11,7 +11,8 @@ import { type ReqLike, tmaInitData } from './http.js';
 import { getConfigNumber } from '../config.js';
 import { bumpVisitStreakBestEffort } from '../streaks/update.js';
 import { seoulDate, normalizeDbDate } from './time.js';
-import { normalizeRefCode, normalizeAcqSource } from './start-param.js';
+import { normalizeRefCode } from './start-param.js';
+import { resolveAcqSource, noteAcqRejectBestEffort } from './acq-source.js';
 
 // Re-exported so existing importers (bot webhook `/start`) keep resolving these from
 // core/context.js. The parsing itself lives in the shared, pure start-param module.
@@ -91,8 +92,21 @@ export async function authenticate(req: ReqLike): Promise<AuthResult> {
   // Acquisition label (`?startapp=ads_ru1`, e.g. a Telegram Ads campaign). Disjoint from a
   // referral link by construction, so the two branches below are mutually exclusive — an ad
   // visitor never gets an inviter and never disturbs the referral numbers.
+  //
+  // The label is ALLOW-LISTED (core/acq-source.ts, shared with the bot `/start` path): only a
+  // string the owner approved in config.acq_sources_allowed is stored. `startapp` is public —
+  // anybody could otherwise write free text into their own row, and that text survives account
+  // erasure. Unknown label -> null + a counter tick; the person is authenticated either way.
   const refCode = normalizeRefCode(idt.startParam ?? null);
-  const acqSource = refCode ? null : normalizeAcqSource(idt.startParam ?? null);
+  const acq = refCode
+    ? { source: null, rejected: false }
+    : await resolveAcqSource(idt.startParam ?? null);
+  const acqSource = acq.source;
+  if (acq.rejected) {
+    // Counted, never stored, never logged as a value (third-party input). /stats shows the
+    // weekly number so a typo in the ad cabinet becomes visible instead of silent.
+    await noteAcqRejectBestEffort(sql);
+  }
   const rows = refCode
     ? await (async () => {
         const bindWindowHours = await getConfigNumber('referral_bind_window_hours', 72);

@@ -29,6 +29,12 @@
 -- (lib/korea/cleanup/inactive.ts) deliberately leaves it in place: an erased account stays an
 -- anonymous node whose acquisition history other numbers depend on.
 --
+-- ⚠ THAT SENTENCE IS ONLY TRUE BECAUSE OF draft_0032. `?startapp=` is a public URL tail: on its
+-- own, this column would accept any well-formed string ANY visitor cared to invent about himself,
+-- and keep it past account erasure. draft_0032 adds the ALLOW-LIST (config acq_sources_allowed +
+-- the gate in lib/korea/core/acq-source.ts) that makes "a campaign label the owner invented"
+-- literally true — apply the two together, and never re-open the write path without it.
+--
 -- NO CHECK CONSTRAINT ON PURPOSE. The legal shape of a slug is defined once, in
 -- lib/korea/core/start-param.ts (SOURCE_RE). Restating it in SQL would give two definitions that
 -- drift apart on the first change; the column just stores what the single parser produced

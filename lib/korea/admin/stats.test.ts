@@ -21,12 +21,21 @@ const h = vi.hoisted(() => {
     sourceRows: [] as Record<string, unknown>[],
     /** true = users.acq_source does not exist yet. */
     noAcqColumn: false,
+    /** config.acq_sources_allowed — the labels being counted at all (draft_0032). */
+    allowed: ['ads_ru1', 'ads_uz1'] as string[],
+    /** rows the acq_rejects weekly sum returns; [] = the table is not there yet. */
+    rejectRows: [{ rejects: 0 }] as Record<string, unknown>[],
     queries: [] as string[],
   };
   const fakeSql = (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown[]> => {
     const q = strings.join(' ? ').replace(/\s+/g, ' ').trim();
     state.queries.push(q);
     void values;
+    if (q.includes('from acq_rejects')) {
+      return state.rejectRows.length === 0
+        ? Promise.reject(new Error('relation "acq_rejects" does not exist'))
+        : Promise.resolve(state.rejectRows);
+    }
     if (q.includes('acq_source')) {
       return state.noAcqColumn
         ? Promise.reject(new Error('column "acq_source" does not exist'))
@@ -63,6 +72,8 @@ vi.mock('../config.js', () => ({
   getConfigNumber: async (_k: string, fb: number) => fb,
   getConfigString: async (_k: string, fb: string) => fb,
   getConfigBool: async (_k: string, fb: boolean) => fb,
+  getConfigStringArray: async (k: string, fb: string[]) =>
+    k === 'acq_sources_allowed' ? h.state.allowed : fb,
 }));
 
 import { gatherStats, renderStats, type Stats } from './stats.js';
@@ -70,6 +81,8 @@ import { gatherStats, renderStats, type Stats } from './stats.js';
 beforeEach(() => {
   h.state.sourceRows = [];
   h.state.noAcqColumn = false;
+  h.state.allowed = ['ads_ru1', 'ads_uz1'];
+  h.state.rejectRows = [{ rejects: 0 }];
   h.state.queries = [];
 });
 
@@ -115,6 +128,45 @@ describe('gatherStats — acquisition labels', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The DIAGNOSTICS the allow-list needs (draft_0032): which labels are being counted at all, and
+// how many arrived that nobody approved. Without them a mistyped label in the ad cabinet is
+// indistinguishable from «реклама не приводит людей» — the owner would blame the campaign.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('gatherStats — allow-list diagnostics', () => {
+  it('reports the labels actually in force (normalized, as the gate sees them)', async () => {
+    h.state.allowed = ['ADS_RU1', 'ads_uz1', 'реклама'];
+    const s = await gatherStats();
+    expect(s.sourcesAllowed).toEqual(['ads_ru1', 'ads_uz1']);
+  });
+
+  it('an empty list is reported as empty (nothing is being labelled)', async () => {
+    h.state.allowed = [];
+    expect((await gatherStats()).sourcesAllowed).toEqual([]);
+  });
+
+  it('sums the last 7 Seoul days of rejections', async () => {
+    h.state.rejectRows = [{ rejects: 12 }];
+    const s = await gatherStats();
+
+    expect(s.sourceRejects7d).toBe(12);
+    const q = h.state.queries.find((x) => x.includes('from acq_rejects'))!;
+    expect(q).toContain("(now() at time zone 'Asia/Seoul')::date");
+    // A COUNT is read — the rejected values are not stored anywhere, so there is nothing else.
+    expect(q).toContain('sum(n)');
+  });
+
+  it('a missing counter table degrades to 0 and breaks nothing else', async () => {
+    h.state.rejectRows = [];
+    const s = await gatherStats();
+
+    expect(s.sourceRejects7d).toBe(0);
+    expect(s.usersTotal).toBe(100);
+    expect(s.sourcesReady).toBe(true);
+  });
+});
+
 /** A report with only the fields the acquisition block cares about; the rest are neutral zeros. */
 function stats(over: Partial<Stats> = {}): Stats {
   return {
@@ -125,6 +177,7 @@ function stats(over: Partial<Stats> = {}): Stats {
     aiCost24h: 0, aiCost30d: 0, aiProcessed24h: 0, aiReached24h: 0,
     unknownCities: [], slang: [],
     sourcesReady: true, sources: [],
+    sourcesAllowed: ['ads_ru1', 'ads_uz1'], sourceRejects7d: 0,
     ...over,
   };
 }
@@ -178,5 +231,34 @@ describe('renderStats — the owner reads this', () => {
     expect(text).toContain('пришли по рефералке: 7');
     expect(text).toContain('Вакансии в ленте: 40');
     expect(text.length).toBeLessThan(4096); // Bot API sendMessage limit
+  });
+
+  // ── Allow-list diagnostics. The owner is not an engineer: he must be able to see, in the same
+  //    report, WHICH labels count and whether something is arriving that does not.
+  it('echoes the labels that are being counted', () => {
+    const text = renderStats(stats({ sourcesAllowed: ['ads_ru1', 'ads_uz1'] }));
+    expect(text).toContain('Считаются метки: ads_ru1, ads_uz1');
+  });
+
+  it('says loudly when the list is empty — nothing is being labelled at all', () => {
+    const text = renderStats(stats({ sourcesAllowed: [] }));
+    expect(text).toContain('список пуст');
+    expect(text).toContain('acq_sources_allowed');
+  });
+
+  it('shows the weekly count of labels that missed the list — and NEVER a value', () => {
+    const text = renderStats(stats({ sourcesAllowed: ['ads_ru1'], sourceRejects7d: 7 }));
+    expect(text).toContain('Мимо списка за неделю: 7');
+    expect(text).toContain('проверь, что вписал в кабинете');
+  });
+
+  it('stays quiet about rejections while there are none', () => {
+    expect(renderStats(stats({ sourceRejects7d: 0 }))).not.toContain('Мимо списка');
+  });
+
+  it('prints no diagnostics at all while the acquisition block itself is off', () => {
+    const text = renderStats(stats({ sourcesReady: false, sourcesAllowed: [], sourceRejects7d: 9 }));
+    expect(text).not.toContain('Считаются метки');
+    expect(text).not.toContain('Мимо списка');
   });
 });

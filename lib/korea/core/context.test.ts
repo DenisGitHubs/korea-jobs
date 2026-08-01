@@ -11,7 +11,11 @@
 //     appear in the referral numbers, and vice versa);
 //   * a plain launch runs the untouched label-less upsert;
 //   * if users.acq_source does not exist yet (deploy before migrate), auth still SUCCEEDS via
-//     the label-less fallback — a paid click must never end in a locked door.
+//     the label-less fallback — a paid click must never end in a locked door;
+//   * since 02.08.2026 the label must ALSO be on the owner's allow-list (config
+//     acq_sources_allowed, gate in core/acq-source.ts): `?startapp=` is public, so anyone could
+//     otherwise write free text into their own row — text that survives account erasure. An
+//     unapproved label degrades to "no label" (never to a locked door) and is only COUNTED.
 //
 // The DB, initData verification, config and the streak bump are faked; the assertions are on
 // the SQL text + bound values the upsert actually produced.
@@ -28,6 +32,8 @@ const h = vi.hoisted(() => {
     values: [] as unknown[][],
     /** When true, any statement naming acq_source throws (column not migrated yet). */
     noAcqColumn: false,
+    /** config.acq_sources_allowed — the labels the owner approved (draft_0032). */
+    allowed: ['ads_ru1', 'ads_ru2', 'ads_uz1', 'ads_uz2'] as string[],
   };
   const fakeSql = (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown[]> => {
     const q = strings.join(' ? ').replace(/\s+/g, ' ').trim();
@@ -73,6 +79,8 @@ vi.mock('../config.js', () => ({
   getConfigNumber: async (_k: string, fb: number) => fb,
   getConfigString: async (_k: string, fb: string) => fb,
   getConfigBool: async (_k: string, fb: boolean) => fb,
+  getConfigStringArray: async (k: string, fb: string[]) =>
+    k === 'acq_sources_allowed' ? h.state.allowed : fb,
 }));
 vi.mock('../streaks/update.js', () => ({ bumpVisitStreakBestEffort: async () => {} }));
 
@@ -107,7 +115,13 @@ beforeEach(() => {
   h.state.queries = [];
   h.state.values = [];
   h.state.noAcqColumn = false;
+  h.state.allowed = ['ads_ru1', 'ads_ru2', 'ads_uz1', 'ads_uz2'];
 });
+
+/** True when this call ticked the "a label missed the allow-list" counter. */
+function rejectCounted(): boolean {
+  return h.state.queries.some((q) => q.includes('insert into acq_rejects'));
+}
 
 describe('authenticate — campaign label (?startapp=ads_ru1)', () => {
   it('stores the label and lets the person in', async () => {
@@ -130,10 +144,14 @@ describe('authenticate — campaign label (?startapp=ads_ru1)', () => {
     expect(conflictBranch()).not.toContain('acq_source');
   });
 
-  it('normalizes the label exactly like the parser (case + dash)', async () => {
+  it('normalizes the label exactly like the parser (case + dash) — on BOTH sides', async () => {
+    // The owner wrote it one way in the list, the ad cabinet sends it another: both fold to the
+    // same canonical form, otherwise adding a label would silently not work.
+    h.state.allowed = ['ADS_RU-1'];
     h.state.startParam = 'ADS_RU-1';
     await authenticate(req());
     expect(h.state.values[0]).toContain('ads_ru_1');
+    expect(rejectCounted()).toBe(false);
   });
 
   it('never touches the referral graph — an ad visitor has no inviter', async () => {
@@ -163,6 +181,56 @@ describe('authenticate — campaign label (?startapp=ads_ru1)', () => {
     expect(inserts).toHaveLength(2);
     expect(inserts[0]).toContain('acq_source');
     expect(inserts[1]).not.toContain('acq_source');
+  });
+});
+
+describe('authenticate — the label ALLOW-LIST (anybody can set ?startapp=…)', () => {
+  it('an UNAPPROVED label is not stored, and the person still gets in', async () => {
+    // A stranger writing free text about himself into his own row — the hole being closed.
+    h.state.startParam = 's_ivan_petrov_seoul';
+    const res = await authenticate(req());
+
+    expect(res.ok).toBe(true);
+    expect(upsert()).not.toContain('acq_source');
+    // Exactly one users statement: it degraded to the plain upsert, not to a second attempt.
+    expect(h.state.queries.filter((q) => q.includes('insert into users'))).toHaveLength(1);
+  });
+
+  it('counts the miss (so a typo in the ad cabinet surfaces) without storing the value', async () => {
+    h.state.startParam = 'ads_ru9';
+    await authenticate(req());
+
+    expect(rejectCounted()).toBe(true);
+    // The counter statement carries no bound values at all — nothing of the label is kept.
+    const i = h.state.queries.findIndex((q) => q.includes('insert into acq_rejects'));
+    expect(h.state.values[i]).toEqual([]);
+    // …and the label is nowhere in anything we sent to the DB.
+    expect(JSON.stringify(h.state.values)).not.toContain('ads_ru9');
+  });
+
+  it('an EMPTY list stores nothing at all (fail-closed: forgotten setup ≠ open door)', async () => {
+    h.state.allowed = [];
+    h.state.startParam = 'ads_ru1';
+    const res = await authenticate(req());
+
+    expect(res.ok).toBe(true);
+    expect(upsert()).not.toContain('acq_source');
+    expect(rejectCounted()).toBe(true);
+  });
+
+  it('an approved label is unaffected by the gate', async () => {
+    h.state.startParam = 'ads_uz2';
+    await authenticate(req());
+    expect(upsert()).toContain('acq_source');
+    expect(h.state.values[0]).toContain('ads_uz2');
+    expect(rejectCounted()).toBe(false);
+  });
+
+  it('a link with no label never consults the list and never counts a rejection', async () => {
+    h.state.allowed = [];
+    h.state.startParam = REF; // a referral link
+    await authenticate(req());
+    expect(rejectCounted()).toBe(false);
   });
 });
 
