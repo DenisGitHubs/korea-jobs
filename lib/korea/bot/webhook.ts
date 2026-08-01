@@ -24,7 +24,7 @@ import { isInboxText, handleInboxMessage } from './inbox.js';
 import { isAdminTelegram } from '../admin/auth.js';
 import { gatherStats, renderStats } from '../admin/stats.js';
 import { moderateAd } from '../ads/rw.js';
-import { normalizeRefCode } from '../core/context.js';
+import { parseStartParam } from '../core/context.js';
 import { getConfigNumber } from '../config.js';
 import {
   type BroadcastRunResult,
@@ -508,8 +508,24 @@ async function dispatch(u: ParsedUpdate): Promise<void> {
   // on the UPDATE branch ONLY while the existing row is still EMPTY (no referrer, inside
   // the bind window, no activation/contact reveal). Without a code the plain upsert runs
   // untouched. Webhook idempotency is already provided by the bot_updates PK dedup above.
-  const refCode = normalizeRefCode(text.slice('/start'.length).trim());
+  //
+  // The same link may instead carry an ACQUISITION LABEL — `/start ads_ru1`, the shape the
+  // owner puts into Telegram Ads. The two are disjoint by construction (a label contains `_`,
+  // which is not a hex digit), so an ad visitor never gets an inviter and never appears in the
+  // referral numbers. The label is stored on INSERT ONLY: a second /start, another campaign
+  // link, or an account that already existed can never (re)write it.
+  const sp = parseStartParam(text.slice('/start'.length).trim());
+  const refCode = sp.refCode ?? null;
+  const acqSource = refCode ? null : (sp.source ?? null);
   const sql = getSql();
+  // The label-less upsert, defined once: used both when no code is present and as the fallback
+  // if the acq_source write fails (deploy-before-migrate window).
+  const plainStartUpsert = (): Promise<unknown[]> =>
+    sql`
+      insert into users (telegram_id, allows_write_to_pm)
+      values (${u.fromId}::bigint, true)
+      on conflict (telegram_id) do update set
+        allows_write_to_pm = true, is_blocked = false, last_seen_at = now()`;
   if (refCode) {
     const bindWindowHours = await getConfigNumber('referral_bind_window_hours', 72);
     await sql`
@@ -547,12 +563,24 @@ async function dispatch(u: ParsedUpdate): Promise<void> {
             and not exists (select 1 from contact_reveals cr where cr.user_id = users.id)
             and not exists (select 1 from ad_contact_reveals ar where ar.user_id = users.id)
           then (select l3 from ref) else users.ref_l3 end`;
+  } else if (acqSource) {
+    // acq_source is in the INSERT list ONLY — the ON CONFLICT branch never mentions it, so a
+    // returning user keeps whatever label (or none) their first touch recorded.
+    try {
+      await sql`
+        insert into users (telegram_id, allows_write_to_pm, acq_source)
+        values (${u.fromId}::bigint, true, ${acqSource})
+        on conflict (telegram_id) do update set
+          allows_write_to_pm = true, is_blocked = false, last_seen_at = now()`;
+    } catch (err) {
+      // Column not there yet (deploy before migrate): losing one campaign count is acceptable,
+      // leaving a person who tapped a PAID ad without a working /start is not.
+      // eslint-disable-next-line no-console
+      console.error('[bot] acq_source upsert failed, falling back (column missing?):', maskToken(String(err)));
+      await plainStartUpsert();
+    }
   } else {
-    await sql`
-      insert into users (telegram_id, allows_write_to_pm)
-      values (${u.fromId}::bigint, true)
-      on conflict (telegram_id) do update set
-        allows_write_to_pm = true, is_blocked = false, last_seen_at = now()`;
+    await plainStartUpsert();
   }
 
   const appUrl = process.env.APP_URL;

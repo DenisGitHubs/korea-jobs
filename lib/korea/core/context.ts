@@ -11,11 +11,16 @@ import { type ReqLike, tmaInitData } from './http.js';
 import { getConfigNumber } from '../config.js';
 import { bumpVisitStreakBestEffort } from '../streaks/update.js';
 import { seoulDate, normalizeDbDate } from './time.js';
-import { normalizeRefCode } from './start-param.js';
+import { normalizeRefCode, normalizeAcqSource } from './start-param.js';
 
 // Re-exported so existing importers (bot webhook `/start`) keep resolving these from
 // core/context.js. The parsing itself lives in the shared, pure start-param module.
-export { normalizeRefCode, parseStartParam, type StartParam } from './start-param.js';
+export {
+  normalizeRefCode,
+  normalizeAcqSource,
+  parseStartParam,
+  type StartParam,
+} from './start-param.js';
 
 export interface AuthedUser {
   id: string;
@@ -61,7 +66,33 @@ export async function authenticate(req: ReqLike): Promise<AuthResult> {
   // Every condition reads the actual target row (users.*), so the outcome is independent
   // of which path inserted first (the Mini App vs the bot /start) — the attribution race
   // is gone without needing to test xmax.
+  //
+  // A third, mutually exclusive shape exists since 2026-08-01: an ACQUISITION LABEL
+  // (`?startapp=ads_ru1`, the link the owner puts into Telegram Ads). It is written to
+  // users.acq_source in the INSERT ONLY — see that branch.
+  //
+  // The label-less upsert — the hot path, and ALSO the fallback used when the acq_source write
+  // below cannot run (see there). Defined once so the two callers can never drift apart.
+  const plainUpsert = (): Promise<Record<string, unknown>[]> =>
+    sql`
+        insert into users (telegram_id, username, first_name, last_name, lang, allows_write_to_pm)
+        values (
+          ${idt.telegramId}::bigint, ${idt.username ?? null}, ${idt.firstName ?? null},
+          ${idt.lastName ?? null}, ${idt.languageCode ?? 'ru'}, ${idt.allowsWriteToPm === true}
+        )
+        on conflict (telegram_id) do update set
+          username = excluded.username,
+          first_name = excluded.first_name,
+          last_name = excluded.last_name,
+          last_seen_at = now(),
+          allows_write_to_pm = users.allows_write_to_pm or excluded.allows_write_to_pm
+        returning id, telegram_id, public_id, lang, allows_write_to_pm, is_blocked, visit_streak_day`;
+
+  // Acquisition label (`?startapp=ads_ru1`, e.g. a Telegram Ads campaign). Disjoint from a
+  // referral link by construction, so the two branches below are mutually exclusive — an ad
+  // visitor never gets an inviter and never disturbs the referral numbers.
   const refCode = normalizeRefCode(idt.startParam ?? null);
+  const acqSource = refCode ? null : normalizeAcqSource(idt.startParam ?? null);
   const rows = refCode
     ? await (async () => {
         const bindWindowHours = await getConfigNumber('referral_bind_window_hours', 72);
@@ -110,19 +141,42 @@ export async function authenticate(req: ReqLike): Promise<AuthResult> {
               then (select l3 from ref) else users.ref_l3 end
           returning id, telegram_id, public_id, lang, allows_write_to_pm, is_blocked, visit_streak_day`;
       })()
-    : await sql`
-        insert into users (telegram_id, username, first_name, last_name, lang, allows_write_to_pm)
-        values (
-          ${idt.telegramId}::bigint, ${idt.username ?? null}, ${idt.firstName ?? null},
-          ${idt.lastName ?? null}, ${idt.languageCode ?? 'ru'}, ${idt.allowsWriteToPm === true}
-        )
-        on conflict (telegram_id) do update set
-          username = excluded.username,
-          first_name = excluded.first_name,
-          last_name = excluded.last_name,
-          last_seen_at = now(),
-          allows_write_to_pm = users.allows_write_to_pm or excluded.allows_write_to_pm
-        returning id, telegram_id, public_id, lang, allows_write_to_pm, is_blocked, visit_streak_day`;
+    : acqSource
+      ? // Same upsert as the plain one PLUS the label — and the label is in the INSERT only.
+        // The ON CONFLICT branch deliberately does NOT mention acq_source: a second visit, a
+        // different campaign link or any later link must never rewrite where a person came
+        // from, and an account that already existed is not an acquisition at all.
+        await (async () => {
+          try {
+            return await sql`
+              insert into users (
+                telegram_id, username, first_name, last_name, lang, allows_write_to_pm, acq_source
+              )
+              values (
+                ${idt.telegramId}::bigint, ${idt.username ?? null}, ${idt.firstName ?? null},
+                ${idt.lastName ?? null}, ${idt.languageCode ?? 'ru'}, ${idt.allowsWriteToPm === true},
+                ${acqSource}
+              )
+              on conflict (telegram_id) do update set
+                username = excluded.username,
+                first_name = excluded.first_name,
+                last_name = excluded.last_name,
+                last_seen_at = now(),
+                allows_write_to_pm = users.allows_write_to_pm or excluded.allows_write_to_pm
+              returning id, telegram_id, public_id, lang, allows_write_to_pm, is_blocked, visit_streak_day`;
+          } catch (err) {
+            // Deploy-before-migrate window: users.acq_source may not exist yet. Losing a
+            // campaign count is annoying; refusing to let a person INTO the app (paid click!)
+            // is not acceptable — fall back to the label-less upsert and log it.
+            // eslint-disable-next-line no-console
+            console.error(
+              '[auth] acq_source upsert failed, falling back (column missing?):',
+              err instanceof Error ? err.message : String(err),
+            );
+            return plainUpsert();
+          }
+        })()
+      : await plainUpsert();
 
   const u = rows[0];
   if (!u) return { ok: false };

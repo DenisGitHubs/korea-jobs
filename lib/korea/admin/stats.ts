@@ -48,6 +48,12 @@ export interface Stats {
   // slang pairs — owner inspection, PII-free. Empty when the table is missing or has no rows.
   unknownCities: { surface: string; n: number }[];
   slang: { surface: string; norm: string; n: number }[];
+  // Acquisition labels (users.acq_source, draft_0031): where NEW people came from, taken from a
+  // labelled deep link `?startapp=ads_ru1` / `?start=ads_ru1` (Telegram Ads «URL to promote»).
+  // `sourcesReady=false` means the column is not there yet (migration not applied) — the whole
+  // block is then omitted, which is DIFFERENT from "the column exists and nobody came yet".
+  sourcesReady: boolean;
+  sources: { source: string; total: number; week: number }[];
 }
 
 /** Coerce a driver count (int4 -> number, but guard string/NULL) to a safe integer. */
@@ -188,6 +194,31 @@ export async function gatherStats(): Promise<Stats> {
     console.error('[stats] geo_suggestions read failed (table missing?):', err instanceof Error ? err.message : String(err));
   }
 
+  // (5) Acquisition labels (users.acq_source, draft_0031). BEST-EFFORT for the same reason as the
+  // blocks above: the column arrives with a later migration, so a deploy-before-apply window must
+  // degrade to "no block" instead of breaking the whole report. PII-free — a campaign label the
+  // owner invented plus two counts. Ordered by size, capped at 20 so a mistyped label storm can
+  // never blow past the 4096-char message limit.
+  let sourcesReady = false;
+  let sources: { source: string; total: number; week: number }[] = [];
+  try {
+    const sRows = (await sql`
+      select
+        acq_source                                                            as source,
+        count(*)::int                                                         as total,
+        count(*) filter (where created_at > now() - interval '7 days')::int    as week
+      from users
+      where acq_source is not null
+      group by acq_source
+      order by count(*) desc, acq_source
+      limit 20`) as unknown as Record<string, unknown>[];
+    sourcesReady = true;
+    sources = sRows.map((r) => ({ source: String(r.source ?? ''), total: n(r.total), week: n(r.week) }));
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[stats] acq_source read failed (column missing?):', err instanceof Error ? err.message : String(err));
+  }
+
   return {
     usersTotal: n(u.total),
     usersNew24h: n(u.new_24h),
@@ -213,7 +244,19 @@ export async function gatherStats(): Promise<Stats> {
     aiReached24h,
     unknownCities,
     slang,
+    sourcesReady,
+    sources,
   };
+}
+
+/** «1 человек / 2 человека / 5 человек» — the owner reads this, so it has to read like Russian. */
+function people(count: number): string {
+  const hundred = Math.abs(count) % 100;
+  const ten = hundred % 10;
+  if (hundred > 10 && hundred < 20) return 'человек';
+  if (ten === 1) return 'человек';
+  if (ten >= 2 && ten <= 4) return 'человека';
+  return 'человек';
 }
 
 /** Plain-text report for the admin. No parse_mode, no personal data — aggregates only. */
@@ -236,6 +279,24 @@ export function renderStats(s: Stats): string {
   if (s.aiProcessed24h > 0) {
     const pct = Math.round((s.aiReached24h / s.aiProcessed24h) * 100);
     lines.push(`За сутки: до ИИ дошло ${s.aiReached24h} из ${s.aiProcessed24h} (${pct}%)`);
+  }
+  // Where new people came from (the label in the link — Telegram Ads and any other labelled link).
+  // Shown even when EMPTY, so «реклама идёт, а людей нет» is distinguishable from «ещё не выкачено»:
+  // the block appears only once the column exists (sourcesReady), i.e. once the migration is applied.
+  if (s.sourcesReady) {
+    if (s.sources.length === 0) {
+      lines.push('Из рекламы: пока никто не пришёл по ссылке с меткой');
+    } else {
+      lines.push('Из рекламы (метка в ссылке):');
+      for (const x of s.sources) {
+        lines.push(`  ${x.source} — ${x.total} ${people(x.total)} (за неделю ${x.week})`);
+      }
+      if (s.sources.length > 1) {
+        const total = s.sources.reduce((acc, x) => acc + x.total, 0);
+        const week = s.sources.reduce((acc, x) => acc + x.week, 0);
+        lines.push(`  Всего по меткам: ${total} ${people(total)} (за неделю ${week})`);
+      }
+    }
   }
   // AI-geo learning (only when there is something to show): unresolved city/region names + decoded slang.
   if (s.unknownCities.length > 0) {

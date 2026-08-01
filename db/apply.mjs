@@ -287,6 +287,17 @@ const files = [
   // simply "not a promo") and nothing is published. Depends on users + user_ads + config + cities
   // (draft_0001 / 0003 / 0010 / 0020 / 0021).
   'draft_0030_scheduled_posts.sql',
+
+  // Acquisition label (0031) — ADDITIVE / idempotent (ADD COLUMN IF NOT EXISTS + CREATE INDEX IF
+  // NOT EXISTS). ONE nullable column users.acq_source: WHERE a NEW user came from, taken from a
+  // labelled deep link `?startapp=ads_ru1` / `?start=ads_ru1` (Telegram Ads «URL to promote»).
+  // Written ONLY on INSERT — a later visit, another campaign link or a referral link can never
+  // overwrite it, and an already-existing user who taps the ad is not counted. Completely separate
+  // from the referral graph: an ad visitor gets NO inviter and earns nobody points. Applying it
+  // changes NO existing behaviour (every current row stays NULL). Apply BEFORE or AFTER the code
+  // deploy — both orders are safe: the auth upsert falls back to the plain (label-less) upsert if
+  // the column is missing, and /stats simply omits the block. Depends on users (draft_0001).
+  'draft_0031_acq_source.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

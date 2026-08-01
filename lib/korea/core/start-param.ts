@@ -5,9 +5,11 @@
 // any malformed/absent input resolves to "nothing" so attribution can never latch
 // onto a partial/injected match.
 //
-// Telegram allows only [A-Za-z0-9_-] in start_param (≤ 512 chars). Two shapes are
-// understood; they are unambiguous because the tag letters `v`/`r` are NOT hex digits,
-// so a bare hex code can never be mistaken for a tagged one and vice-versa:
+// Telegram allows only [A-Za-z0-9_-] in start_param (≤ 512 chars for `startapp`, ≤ 64 for
+// the bot's `?start=` — every shape below stays under 64 so ONE link works for both). Three
+// shapes are understood; they are unambiguous because the tag letters `v`/`r` are NOT hex
+// digits and `_` is not a hex digit either, so a bare hex code can never be mistaken for a
+// tagged one and vice-versa:
 //
 //   1. LEGACY REFERRAL (unchanged):  <refcode>
 //        refcode = 16 lowercase hex  == users.public_id
@@ -21,9 +23,34 @@
 //        e.g.  v0f8c2a1b3d4e4f5a6b7c8d9e0f1a2b3c4    (sharer had no ref / not logged in)
 //                                                        -> { vacancyId }
 //
+//   3. ACQUISITION SOURCE (campaign label, 2026-08-01):  ads_<slug> | s_<slug>
+//        4..32 chars overall, [A-Za-z0-9_-] after the prefix, first char after the prefix is a
+//        letter/digit. Normalized to lowercase with `-` folded to `_`, so one campaign cannot
+//        split into two buckets over a dash.
+//        e.g.  ads_ru1 -> { source: 'ads_ru1' } · s_flyer -> { source: 's_flyer' }
+//        Written to users.acq_source ON INSERT ONLY (see core/context.ts) — it answers
+//        "where did this NEW person come from", never re-attributes an existing account.
+//
+// WHY TWO PREFIXES, AND WHY THE LABEL IS THE WHOLE PARAM:
+//   * `ads_` is what the owner's Telegram Ads brief (_docs/ads/telegram-ads-brief.md) already
+//     tells him to paste into «URL to promote» (`?startapp=ads_ru1`). Not accepting it would
+//     silently drop the counts of a campaign that may already be running — the very bug we fix.
+//   * `s_` covers every OTHER channel the same mechanism will label later (посев в чатах,
+//     блогер, QR на флаере), so nobody has to write "ads_" about something that is not an ad.
+//   * A prefix is REQUIRED (never a bare word): it is the marker that separates a deliberate
+//     label from junk, and it keeps the shape disjoint from any future format.
+//   * The stored/reported label is the ENTIRE param, not the part after the prefix: what the
+//     owner typed into the ad cabinet is exactly what /stats prints back («ads_ru1 — 12 человек»).
+//     No mental translation, nothing to mis-remember.
+//
+// A source tag is deliberately NOT combinable with a referral / vacancy-share link: a person
+// who arrives through somebody's referral link WAS acquired by that referral, and the graph
+// (users.referred_by) already says so. Allowing both would double-count the same user in two
+// acquisition reports at once. One user = one acquisition channel.
+//
 // Degradation: only one part present still resolves that part; anything else -> {}.
-// The backend only ever consumes `refCode` (referral attribution); `vacancyId` is
-// carried for the FRONT-END to open the shared vacancy (front re-inserts the dashes).
+// The backend consumes `refCode` (referral attribution) and `source` (acquisition label);
+// `vacancyId` is carried for the FRONT-END to open the shared vacancy (front re-inserts the dashes).
 
 /** Legacy bare referral code == users.public_id (encode(gen_random_bytes(8),'hex'), 16 hex). */
 const REF_CODE_RE = /^[0-9a-f]{16}$/i;
@@ -37,20 +64,37 @@ const SHARE_RE = /^v([0-9a-f]{32})(?:r([0-9a-f]{16}))?$/i;
 /** Canonical dashed UUID (8-4-4-4-12), the shape the vacancy id arrives in from the DB / client. */
 const UUID_DASHED_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Acquisition-source label: `ads_<slug>` (advertising) or `s_<slug>` (any other channel). The
+ * char right after the prefix must be a letter/digit, so `ads__x` / `s_-x` are rejected — a typo
+ * must resolve to NOTHING rather than create a junk bucket. Anchored, and `_` is not a hex digit,
+ * so it can never overlap the two hex shapes above. Length is checked separately (SOURCE_LABEL_*)
+ * to keep one readable rule instead of per-prefix counts inside the pattern.
+ */
+const SOURCE_RE = /^(?:ads|s)_[a-z0-9][a-z0-9_-]*$/i;
+
 /** Deep-link tags — kept next to SHARE_RE so the builder and parser share one format. */
 const VACANCY_TAG = 'v';
 const REF_TAG = 'r';
+/** Recognised acquisition prefixes, in the order the owner is meant to reach for them. */
+export const SOURCE_PREFIXES = ['ads_', 's_'] as const;
+/** Bounds of a WHOLE label (prefix included). The ceiling is mirrored by the column comment. */
+export const SOURCE_LABEL_MIN = 4;
+export const SOURCE_LABEL_MAX = 32;
 
 export interface StartParam {
   /** Inviter referral code (16 lowercase hex), when the link carried one. */
   refCode?: string;
   /** Shared vacancy id as 32 lowercase hex (UUID without dashes); FRONT-END only. */
   vacancyId?: string;
+  /** Acquisition label from a campaign link (`ads_…`/`s_…`), lowercase, `-` folded to `_`. */
+  source?: string;
 }
 
 /**
  * Parse any start_param into its known parts. Returns `{}` for absent/garbage input.
- * Never throws; case-insensitive; result is normalized to lowercase hex.
+ * Never throws; case-insensitive; every part comes back lowercased (hex codes as hex,
+ * an acquisition label with `-` folded to `_`).
  */
 export function parseStartParam(raw: string | null | undefined): StartParam {
   if (typeof raw !== 'string') return {};
@@ -64,6 +108,12 @@ export function parseStartParam(raw: string | null | undefined): StartParam {
     const out: StartParam = { vacancyId: share[1]!.toLowerCase() };
     if (share[2]) out.refCode = share[2].toLowerCase();
     return out;
+  }
+
+  // Acquisition label (campaign). Disjoint from both hex shapes: `_` is not a hex digit, and
+  // neither prefix starts with `v`. The label kept is the WHOLE param — see the header.
+  if (s.length >= SOURCE_LABEL_MIN && s.length <= SOURCE_LABEL_MAX && SOURCE_RE.test(s)) {
+    return { source: s.toLowerCase().replace(/-/g, '_') };
   }
 
   // Legacy bare referral code.
@@ -96,4 +146,32 @@ export function buildShareStartParam(vacancyId: string, refCode?: string | null)
  */
 export function normalizeRefCode(raw: string | null | undefined): string | null {
   return parseStartParam(raw).refCode ?? null;
+}
+
+/**
+ * Extract ONLY the acquisition label from any start_param, or null when the link carries none.
+ * The twin of `normalizeRefCode`, and the sole input of the `users.acq_source` write in BOTH
+ * entry paths (Mini App auth upsert + bot `/start`) — so the two can never disagree on what
+ * counts as a campaign label.
+ */
+export function normalizeAcqSource(raw: string | null | undefined): string | null {
+  return parseStartParam(raw).source ?? null;
+}
+
+/**
+ * Turn a human-typed campaign name into the exact `startapp`/`start` payload to paste into the ad
+ * cabinet, or null when it cannot be made legal (Cyrillic, too short/long, punctuation-only).
+ * Spaces/dots/dashes fold to `_`, and a name with no recognised prefix gets the generic `s_` —
+ * so «Флаер» fails loudly (report it to the owner) while «flyer» becomes `s_flyer` instead of
+ * silently producing an unlabelled link. Round-trips through `parseStartParam`.
+ */
+export function buildSourceStartParam(label: string): string | null {
+  if (typeof label !== 'string') return null;
+  const base = label.trim().toLowerCase().replace(/[\s.-]+/g, '_');
+  const withPrefix = SOURCE_PREFIXES.some((p) => base.startsWith(p)) ? base : `s_${base}`;
+  return withPrefix.length >= SOURCE_LABEL_MIN &&
+    withPrefix.length <= SOURCE_LABEL_MAX &&
+    SOURCE_RE.test(withPrefix)
+    ? withPrefix
+    : null;
 }

@@ -22,6 +22,8 @@ const h = vi.hoisted(() => {
     isAdmin: false,
     /** rows returned by the inbox claim insert: [] = over a limit. */
     inboxClaim: [{ id: '11111111-2222-3333-4444-555555555555' }] as unknown[],
+    /** true = users.acq_source does not exist yet (deploy landed before the migration). */
+    noAcqColumn: false,
     sent: [] as { chatId: number | string; text: string; argc: number }[],
     toasts: [] as (string | undefined)[],
     edits: [] as { chatId: number | string; messageId: number; text: string }[],
@@ -31,6 +33,9 @@ const h = vi.hoisted(() => {
   const fakeSql = (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown[]> => {
     const q = strings.join(' ? ').replace(/\s+/g, ' ').trim();
     state.queries.push(q);
+    if (state.noAcqColumn && q.includes('acq_source')) {
+      return Promise.reject(new Error('column "acq_source" of relation "users" does not exist'));
+    }
     if (q.includes('insert into bot_updates')) return Promise.resolve(state.fresh ? [{ update_id: 1 }] : []);
     if (q.includes('from bot_updates')) return Promise.resolve([{ c: state.updatesPerMinute }]);
     if (q.includes('insert into bot_inbox') && q.includes('select')) return Promise.resolve(state.inboxClaim);
@@ -149,6 +154,7 @@ beforeEach(() => {
   h.state.admins = ['999'];
   h.state.isAdmin = false;
   h.state.inboxClaim = [{ id: '11111111-2222-3333-4444-555555555555' }];
+  h.state.noAcqColumn = false;
   h.state.sent = [];
   h.state.toasts = [];
   h.state.edits = [];
@@ -246,6 +252,55 @@ describe('webhook — commands are untouched by the inbox', () => {
     expect(upsert).toContain('referred_by');
     expect(h.state.sent[0]!.text).toContain('Привет!');
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Acquisition label: /start ads_ru1 — the SAME campaign link as the Mini App one,
+// arriving through the bot (Telegram Ads may open either). Mirrors core/context.test.ts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('webhook — /start with a campaign label', () => {
+  /** The users upsert this update produced. */
+  const upsert = (): string => h.state.queries.find((q) => q.includes('insert into users'))!;
+
+  it('stores the label and still greets the newcomer', async () => {
+    await post(privateMessage('/start ads_ru1'));
+
+    expect(upsert()).toContain('acq_source');
+    expect(h.state.sent[0]!.text).toContain('Привет!');
+  });
+
+  it('writes it on INSERT ONLY — the ON CONFLICT branch never mentions it', async () => {
+    await post(privateMessage('/start ads_ru1'));
+    const q = upsert();
+    expect(q).toMatch(/insert into users \([^)]*acq_source/);
+    expect(q.slice(q.indexOf('do update set'))).not.toContain('acq_source');
+  });
+
+  it('never binds a referrer — an ad visitor stays out of the referral numbers', async () => {
+    await post(privateMessage('/start ads_uz1'));
+    expect(upsert()).not.toContain('referred_by');
+  });
+
+  it('a malformed label degrades to the plain /start upsert (person still gets in)', async () => {
+    await post(privateMessage('/start ads_'));
+    expect(upsert()).not.toContain('acq_source');
+    expect(h.state.sent[0]!.text).toContain('Привет!');
+  });
+
+  it('survives the deploy-before-migrate window (falls back, still greets)', async () => {
+    h.state.noAcqColumn = true;
+    await post(privateMessage('/start ads_ru1'));
+
+    const inserts = h.state.queries.filter((q) => q.includes('insert into users'));
+    expect(inserts).toHaveLength(2);
+    expect(inserts[0]).toContain('acq_source');
+    expect(inserts[1]).not.toContain('acq_source');
+    expect(h.state.sent[0]!.text).toContain('Привет!');
+  });
+});
+
+describe('webhook — commands are untouched by the inbox (continued)', () => {
 
   it('/stats answers an admin with the report and nothing to anyone else', async () => {
     h.state.isAdmin = true;
