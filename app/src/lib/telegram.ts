@@ -93,6 +93,10 @@ function mockInitData(): URLSearchParams {
   };
   // `hash` + `signature` are required by the Bot API 8.x init-data schema; the
   // mock never validates them (real validation is on the backend).
+  // ⚠ These two literals are also read by lib/launchEnv.ts (MOCK_MARKERS) to tell
+  // a cached MOCK launch-params entry from a real one. Renaming them here without
+  // renaming them there makes a browser that once ran the app look like Telegram
+  // for the rest of the tab session — the app mounts, /me 401s, error strip.
   return new URLSearchParams({
     auth_date: String(Math.floor(Date.now() / 1000)),
     hash: 'mockhash',

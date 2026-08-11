@@ -15,8 +15,19 @@ import './index.css';
 // load, so we render a static page instead of the app (see lib/launchEnv.ts).
 const outside = isOutsideTelegram();
 
-// Side-effect bootstrap BEFORE React mounts.
-const ctx = bootstrapTelegram();
+// Side-effect bootstrap BEFORE React mounts — but ONLY inside Telegram.
+//
+// It must be skipped outside, and not merely because the landing page has no use
+// for it: bootstrapTelegram() installs the browser mock (installMock ->
+// mockTelegramEnv), and the SDK persists those fake launch params under
+// sessionStorage['tapps/launchParams']. That cache is one of the traits
+// isOutsideTelegram() reads. Running it here would therefore poison the NEXT
+// load of the same tab: first visit -> landing (correct), reload -> the cache
+// says "Telegram", the full app mounts, /me answers 401 and the error strip is
+// back — exactly the state that got the ad rejected, reachable by pressing F5.
+const ctx = outside
+  ? { languageCode: undefined, username: undefined, isReal: false }
+  : bootstrapTelegram();
 
 // The public page is always dark (it matches the shell index.html pre-paints);
 // inside Telegram the user's own theme mode still rules.

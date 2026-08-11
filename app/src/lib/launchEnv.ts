@@ -39,13 +39,26 @@ function hasLaunchParams(): boolean {
   return false;
 }
 
+/**
+ * Markers of OUR OWN browser mock (lib/telegram.ts, mockInitData) — kept in sync
+ * by hand; they are string literals there and here. A cached entry carrying them
+ * was written by installMock(), not by Telegram, and must not count as a trait.
+ */
+const MOCK_MARKERS = ['mockhash', 'mocksignature'];
+
 /** `#tgWebAppData=…` in the URL now, in the original navigation URL, or cached. */
 function hasLaunchTrace(): boolean {
   try {
     if (`${window.location.hash}${window.location.search}`.includes('tgWebApp')) return true;
     const nav = performance.getEntriesByType('navigation')[0] as { name?: string } | undefined;
     if (nav?.name?.includes('tgWebApp')) return true;
-    if (sessionStorage.getItem(LP_STORAGE_KEY)) return true;
+    // The SDK caches launch params so a reload inside Telegram survives losing the
+    // hash. But bootstrapTelegram()'s mock goes through the very same cache, so a
+    // browser that once ran the app has a fake entry sitting there for the rest of
+    // the tab session — and reading it as "Telegram" would mount the app, get a 401
+    // and show the error strip on every reload. Only a cache that is NOT ours counts.
+    const cached = sessionStorage.getItem(LP_STORAGE_KEY);
+    if (cached && !MOCK_MARKERS.some((m) => cached.includes(m))) return true;
   } catch {
     return true; // storage/perf blocked — do not guess "outside"
   }
