@@ -302,9 +302,38 @@ async function dispatchCallback(u: ParsedUpdate): Promise<void> {
 }
 
 /**
- * Handle a parsed update: an admin command (/stats, /broadcast), /start (with an optional referral
- * deep link), a plain private message (→ bot/inbox.ts, forwarded to the admins) or a callback_query
- * (ad moderation / report / broadcast confirm).
+ * The /help answer — plain words, the same tone as the /start greeting, no parse_mode (so nothing
+ * in it can be read as markup). It states only what we actually do: aggregate postings, notify by
+ * subscription, answer messages in 3 business days (the Privacy Policy promise, see bot/inbox.ts)
+ * — and it says out loud that employers are NOT vetted (the same honest line the app shows,
+ * app/src/i18n/ru.ts `prepayNote`). No promise about the outcome (owner rule: process, not result).
+ *
+ * `hasAppButton` = APP_URL is configured, i.e. the web_app button below the message really exists;
+ * without it the person still has the bot's menu button, so the wording must not point at a button
+ * that is not there.
+ */
+function helpText(hasAppButton: boolean): string {
+  const open = hasAppButton
+    ? 'Открой приложение кнопкой ниже'
+    : 'Открой приложение кнопкой меню рядом с полем ввода';
+  return (
+    'Бот собирает свежие вакансии по Корее из телеграм-чатов — в одном месте и на русском.\n\n' +
+    'Как пользоваться:\n' +
+    `• ${open} — там лента, поиск и фильтры по городу, визе и виду работы.\n` +
+    '• Уведомления включаются и выключаются в приложении: вкладка «Настройки» → «Уведомления». ' +
+    'Там же можно ограничить, сколько сообщений приходит в сутки.\n' +
+    '• /start — приветствие и кнопка приложения, /help — эта справка.\n\n' +
+    'Вопрос, жалоба или просьба убрать объявление — просто напиши сюда обычным сообщением. ' +
+    'Отвечаем в течение 3 рабочих дней.\n\n' +
+    'Важно: объявления публикуют сторонние люди и каналы. Работодателей мы не проверяем и за ' +
+    'условия не отвечаем — не переводи деньги вперёд и проверяй контакты.'
+  );
+}
+
+/**
+ * Handle a parsed update: an admin command (/stats, /broadcast), /help, /start (with an optional
+ * referral deep link), a plain private message (→ bot/inbox.ts, forwarded to the admins) or a
+ * callback_query (ad moderation / report / broadcast confirm).
  */
 async function dispatch(u: ParsedUpdate): Promise<void> {
   if (u.callback) return dispatchCallback(u);
@@ -473,6 +502,26 @@ async function dispatch(u: ParsedUpdate): Promise<void> {
       console.error('[bot] /posts list error:', maskToken(String(err)));
       await sendMessage(u.chatId, 'Не удалось показать список');
     }
+    return;
+  }
+
+  // /help — the ONLY public command besides /start (Telegram Ads §4.2 «Destination functionality»:
+  // an advertised bot must answer its commands; silence reads as a broken destination). Placed
+  // BEFORE the inbox branch on purpose: a command must never be handled as «написали в бот», or the
+  // support auto-reply («ответим в течение 3 рабочих дней») would answer instead of the help text.
+  // Same first-word normalization as /stats above, so /help@korea_rabota_bot works too.
+  //
+  // Deliberately NOT admin-gated and deliberately WITHOUT any DB write: it only reads a message and
+  // answers. Unlike /start it does not touch users (no allows_write_to_pm, no referral, no acq
+  // label) — reading the help must never look like «я запустил бота» and must never bind anything.
+  // The command is answered here but NOT declared from code: the visible command list is set
+  // manually via the Bot API (owner), so setMyCommands stays untouched.
+  if (command === '/help') {
+    const url = process.env.APP_URL;
+    const helpExtra = url
+      ? { reply_markup: { inline_keyboard: [[{ text: 'Открыть вакансии', web_app: { url } }]] } }
+      : {};
+    await sendMessage(u.chatId, helpText(Boolean(url)), helpExtra);
     return;
   }
 

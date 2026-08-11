@@ -6,7 +6,8 @@
 //   * a plain private message  -> admin DM + acknowledgement (plain text, no parse_mode);
 //   * a message from a GROUP   -> nothing at all;
 //   * /start, /start <ref>, /stats, /broadcast, callback_query, the update_id replay guard and
-//     the secret-token gate -> unchanged behaviour.
+//     the secret-token gate -> unchanged behaviour;
+//   * /help (the second PUBLIC command) -> the help text + the /start web_app button, no DB writes.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -26,7 +27,7 @@ const h = vi.hoisted(() => {
     noAcqColumn: false,
     /** config.acq_sources_allowed — the labels the owner approved (draft_0032). */
     allowed: ['ads_ru1', 'ads_ru2', 'ads_uz1', 'ads_uz2'] as string[],
-    sent: [] as { chatId: number | string; text: string; argc: number }[],
+    sent: [] as { chatId: number | string; text: string; argc: number; extra: unknown }[],
     toasts: [] as (string | undefined)[],
     edits: [] as { chatId: number | string; messageId: number; text: string }[],
     queries: [] as string[],
@@ -72,7 +73,12 @@ vi.mock('../ads/rw.js', () => ({
 }));
 vi.mock('./telegram.js', () => ({
   sendMessage: (...args: unknown[]) => {
-    h.state.sent.push({ chatId: args[0] as string, text: args[1] as string, argc: args.length });
+    h.state.sent.push({
+      chatId: args[0] as string,
+      text: args[1] as string,
+      argc: args.length,
+      extra: args[2],
+    });
     return Promise.resolve({ ok: true, result: { message_id: 1 } });
   },
   answerCallbackQuery: (_id: string, text?: string) => {
@@ -260,6 +266,65 @@ describe('webhook — commands are untouched by the inbox', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// /help — the second PUBLIC command (Telegram Ads §4.2: an advertised bot must answer its
+// commands). It only answers: no users upsert, no inbox row, no admin gate.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('webhook — /help answers everyone', () => {
+  it('replies with the help text and the same web_app button /start uses', async () => {
+    process.env.APP_URL = 'https://example.test/app';
+    const res = await post(privateMessage('/help'));
+
+    expect(res._status).toBe(200);
+    expect(h.state.sent).toHaveLength(1);
+    const msg = h.state.sent[0]!;
+    expect(msg.chatId).toBe(555);
+    expect(msg.text).toContain('вакансии по Корее');
+    expect(msg.text).toContain('«Настройки»');
+    // The honest line: we do NOT vet employers (same promise as the app copy).
+    expect(msg.text).toContain('Работодателей мы не проверяем');
+    expect(msg.extra).toEqual({
+      reply_markup: { inline_keyboard: [[{ text: 'Открыть вакансии', web_app: { url: 'https://example.test/app' } }]] },
+    });
+  });
+
+  it('without APP_URL it still answers — and never points at a button that is not there', async () => {
+    const res = await post(privateMessage('/help'));
+
+    expect(res._status).toBe(200);
+    expect(h.state.sent).toHaveLength(1);
+    expect(h.state.sent[0]!.text).not.toContain('кнопкой ниже');
+    expect(h.state.sent[0]!.extra).toEqual({});
+  });
+
+  it('changes nothing in the DB — no users upsert, no inbox row', async () => {
+    await post(privateMessage('/help'));
+    expect(h.state.queries.some((q) => q.includes('insert into users'))).toBe(false);
+    expect(h.state.queries.some((q) => q.includes('bot_inbox'))).toBe(false);
+  });
+
+  it('understands the /help@BotName form', async () => {
+    await post(privateMessage('/help@korea_rabota_bot'));
+    expect(h.state.sent).toHaveLength(1);
+    expect(h.state.sent[0]!.text).toContain('вакансии по Корее');
+  });
+
+  it('is answered for a non-admin exactly like for an admin (public command)', async () => {
+    await post(privateMessage('/help'));
+    const forUser = h.state.sent[0]!.text;
+    h.state.sent = [];
+    h.state.isAdmin = true;
+    await post(privateMessage('/help'));
+    expect(h.state.sent[0]!.text).toBe(forUser);
+  });
+
+  it('stays out of a GROUP chat — the bot still acts only in private', async () => {
+    await post(groupMessage('/help'));
+    expect(h.state.sent).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Acquisition label: /start ads_ru1 — the SAME campaign link as the Mini App one,
 // arriving through the bot (Telegram Ads may open either). Mirrors core/context.test.ts.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -368,7 +433,7 @@ describe('webhook — commands are untouched by the inbox (continued)', () => {
   });
 
   it('an unknown command stays silent — it is NOT an inbox message', async () => {
-    await post(privateMessage('/help'));
+    await post(privateMessage('/whatever'));
     expect(h.state.sent).toHaveLength(0);
     expect(h.state.queries.some((q) => q.includes('bot_inbox'))).toBe(false);
   });

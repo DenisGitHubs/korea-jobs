@@ -264,6 +264,19 @@ export const en: typeof ru = {
   rules: {
     title: 'Program Rules',
   },
+  // The plain-browser page: the app was opened outside Telegram.
+  outside: {
+    sub: 'A Telegram Mini App',
+    lead:
+      'The app runs inside Telegram: that is where you sign in with your account, keep saved jobs and get alerts about new ones. Open it in Telegram — it takes a couple of seconds.',
+    feat1: 'Jobs from across Korea, gathered from dozens of chats into one feed',
+    feat2: 'Filters by city, type of work and visa',
+    feat3: 'Alerts about new jobs — if you switch them on yourself',
+    cta: 'Open in Telegram',
+    botHint: 'Or message us on Telegram:',
+    docs: 'Documents',
+    note: 'We collect listings from public sources and do not vet employers — the decision is always yours.',
+  },
   post: {
     title: 'Post a job',
     stepOf: 'Step {{n}} of {{total}}',

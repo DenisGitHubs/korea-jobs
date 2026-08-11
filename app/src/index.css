@@ -4422,3 +4422,194 @@ a {
   font-size: 14px;
   line-height: 1.4;
 }
+
+/* ── Outside Telegram: the public browser page ─────────────────────────────
+   Rendered INSTEAD of the whole app when the site is opened in a plain browser
+   (see lib/launchEnv.ts). Deliberately STATIC — no aurora, no backdrop blur, no
+   infinite animation: a stranger or a moderator may land here, and it has to
+   read as a finished page on a phone and on a wide desktop alike. Palette is
+   forced dark at boot, so it always matches the shell painted by index.html. */
+.outside {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 28px 18px calc(28px + env(safe-area-inset-bottom, 0px));
+  background:
+    radial-gradient(125% 58% at 50% -12%, color-mix(in srgb, var(--kj-brand) 15%, transparent), transparent 62%),
+    var(--kj-bg);
+}
+
+/* margin:auto (not justify-content) — centres the card without clipping its top
+   when the content is taller than a short viewport. */
+.outside__card {
+  margin: auto;
+  width: 100%;
+  max-width: 440px;
+  padding: 28px 22px 22px;
+  text-align: center;
+  background: var(--kj-section-bg);
+  border: 1px solid var(--kj-card-border);
+  border-radius: var(--kj-radius-lg);
+  box-shadow: var(--lg-shadow);
+}
+
+.outside__mark {
+  width: 76px;
+  height: 76px;
+  margin: 0 auto 18px;
+  border-radius: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--kj-brand-ink);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--kj-brand) 82%, #ffca9a), var(--kj-brand-strong));
+  box-shadow: 0 16px 34px -14px color-mix(in srgb, var(--kj-brand) 58%, transparent);
+}
+
+.outside__mark svg {
+  width: 40px;
+  height: 40px;
+}
+
+.outside__title {
+  margin: 0 0 4px;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  color: var(--kj-text);
+}
+
+.outside__sub {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--kj-brand-strong);
+}
+
+.outside__lead {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--kj-hint);
+}
+
+.outside__feats {
+  margin: 20px 0 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.outside__feat {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14.5px;
+  line-height: 1.4;
+  color: var(--kj-text);
+}
+
+.outside__feat::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--kj-brand);
+}
+
+/* Same shape as .btn--primary, minus the drifting gradient and the sheen. */
+.outside__cta {
+  margin-top: 22px;
+  color: var(--kj-brand-ink);
+  text-decoration: none;
+  background-image: linear-gradient(135deg, color-mix(in srgb, var(--kj-brand) 86%, #ffca9a), var(--kj-brand-strong));
+  box-shadow: 0 10px 26px -12px color-mix(in srgb, var(--kj-brand) 60%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.outside__cta svg {
+  width: 18px;
+  height: 18px;
+}
+
+.outside__cta:active {
+  transform: scale(0.98);
+}
+
+.outside__hint {
+  margin: 14px 0 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--kj-hint);
+}
+
+.outside__links {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--kj-separator);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 10px;
+  font-size: 13px;
+}
+
+.outside__link {
+  color: var(--kj-link);
+  font-weight: 600;
+}
+
+.outside__sep {
+  color: var(--kj-hint);
+}
+
+.outside__note {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--kj-hint);
+}
+
+/* Legal documents reachable from the page (/privacy, /rules) keep their own
+   URLs and the app bar, so the public site is complete, not a dead end. */
+.outside--doc {
+  display: block;
+  padding: 0;
+  background: var(--kj-bg);
+}
+
+.outside__doc {
+  max-width: var(--kj-maxw);
+  margin: 0 auto;
+  padding: var(--kj-gap) var(--kj-gap) calc(32px + env(safe-area-inset-bottom, 0px));
+}
+
+/* Desktop: the card is the page — give it more air instead of stretching. */
+@media (min-width: 720px) {
+  .outside {
+    padding: 40px 24px;
+  }
+
+  .outside__card {
+    max-width: 520px;
+    padding: 36px 34px 28px;
+  }
+
+  .outside__title {
+    font-size: 30px;
+  }
+
+  .outside__lead {
+    font-size: 15.5px;
+  }
+}

@@ -1,20 +1,31 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { bootstrapTelegram } from './lib/telegram';
+import { isOutsideTelegram } from './lib/launchEnv';
 import { initTheme } from './lib/theme';
 import { normalizeLang, setupI18n } from './i18n';
 import { loadStoredLang, loadStoredThemeMode, useSettingsStore } from './store/settingsStore';
 import { useFilterStore } from './store/filterStore';
+import { OutsideTelegram } from './components/OutsideTelegram';
 import App from './App';
 import './index.css';
+
+// FIRST — before bootstrapTelegram() installs the browser mock, which would make
+// every environment look like Telegram. Outside Telegram there is no session to
+// load, so we render a static page instead of the app (see lib/launchEnv.ts).
+const outside = isOutsideTelegram();
 
 // Side-effect bootstrap BEFORE React mounts.
 const ctx = bootstrapTelegram();
 
+// The public page is always dark (it matches the shell index.html pre-paints);
+// inside Telegram the user's own theme mode still rules.
 const themeMode = loadStoredThemeMode();
-initTheme(themeMode);
+initTheme(outside ? 'dark' : themeMode);
 
-const lang = loadStoredLang() ?? normalizeLang(ctx.languageCode);
+// Outside Telegram there is no Telegram account to take a language from — follow
+// the browser instead, so a non-Russian visitor gets the page in English.
+const lang = loadStoredLang() ?? normalizeLang(outside ? navigator.language : ctx.languageCode);
 setupI18n(lang);
 useSettingsStore.getState().init({ lang, isReal: ctx.isReal, username: ctx.username, themeMode });
 
@@ -27,7 +38,5 @@ const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('Root element #root not found');
 
 createRoot(rootEl).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
+  <StrictMode>{outside ? <OutsideTelegram /> : <App />}</StrictMode>,
 );
