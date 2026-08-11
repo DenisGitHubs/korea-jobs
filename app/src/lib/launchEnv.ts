@@ -23,6 +23,29 @@ import { USE_MOCK } from '../shared/api/client';
 /** sessionStorage key the SDK caches the launch params under (`tapps/` prefix). */
 const LP_STORAGE_KEY = 'tapps/launchParams';
 
+/**
+ * Drop a cached launch-params entry that OUR mock wrote, before anything reads it.
+ *
+ * This must run first, and it is not paranoia: `isTMA()` and
+ * `retrieveLaunchParams()` fall back to the very same sessionStorage entry, so a
+ * browser that once ran the app answers "yes, Telegram" to the SDK itself — the
+ * app mounts, GET /me 401s and the error strip is back. Guarding only our own
+ * read of the key is not enough; the poison has to go.
+ *
+ * Inside a real client the cache holds a real hash, no marker matches and nothing
+ * is removed. A failure here is ignored: the checks below still run.
+ */
+function purgeMockLaunchCache(): void {
+  try {
+    const cached = sessionStorage.getItem(LP_STORAGE_KEY);
+    if (cached && MOCK_MARKERS.some((m) => cached.includes(m))) {
+      sessionStorage.removeItem(LP_STORAGE_KEY);
+    }
+  } catch {
+    /* storage blocked — nothing to clean */
+  }
+}
+
 /** The primary signal: the host handed us launch parameters. */
 function hasLaunchParams(): boolean {
   try {
@@ -122,6 +145,7 @@ export function isOutsideTelegram(): boolean {
   try {
     if (USE_MOCK) return false;
     if (import.meta.env.VITE_TEST_INITDATA) return false;
+    purgeMockLaunchCache(); // FIRST — the SDK reads that cache too (see above).
     return !(hasLaunchParams() || hasLaunchTrace() || hasClientBridge() || isEmbedded());
   } catch {
     return false;
