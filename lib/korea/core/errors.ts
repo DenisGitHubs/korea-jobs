@@ -10,6 +10,9 @@ export const ApiErrorCode = {
   BadRequest: 'bad_request',
   Unauthorized: 'unauthorized',
   NotFound: 'not_found',
+  /** The request BODY is too big — NOT "the data is wrong". The difference matters to a client
+   *  uploading a batch: 413 means "split it and send both halves", 400 means "do not resend". */
+  PayloadTooLarge: 'payload_too_large',
   RateLimited: 'rate_limited',
   Internal: 'internal',
 } as const;
@@ -30,6 +33,8 @@ export function httpStatusFor(code: ApiErrorCode): number {
       return 401;
     case ApiErrorCode.NotFound:
       return 404;
+    case ApiErrorCode.PayloadTooLarge:
+      return 413;
     case ApiErrorCode.RateLimited:
       return 429;
     case ApiErrorCode.Internal:

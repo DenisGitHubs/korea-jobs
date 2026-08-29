@@ -12,6 +12,11 @@ services:
     container_name: korea-collector
     restart: unless-stopped
     env_file: .env
+    # The reader holds up to a window of messages in memory and flushes them on SIGTERM
+    # (src/index.ts). Docker sends SIGKILL 10 seconds after SIGTERM by default, which would cut
+    # that flush off in the middle — and a restart would then eat a window of collection. 30s
+    # covers the in-process 15s flush guard with room for a slow request.
+    stop_grace_period: 30s
     # No published ports: the reader only makes OUTBOUND connections
     # (Telegram MTProto + the backend ingest endpoint). Nothing listens.
     logging:

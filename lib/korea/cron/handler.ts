@@ -11,6 +11,15 @@
 //   POST /api/cron/cleanup -> lib/korea/cleanup/run.ts (TTL retention / takedown)
 //   POST /api/cron/inactive-erase -> lib/korea/cleanup/inactive.ts (erase dormant accounts)
 //   POST /api/cron/scheduled -> lib/korea/scheduled/run.ts (publish the owner's due posts)
+//   POST /api/cron/tick    -> lib/korea/cron/tick.ts (ALL of the above in ONE window)
+//
+// ── ONE CALL IS THE NORMAL WAY NOW (2026-08-29) ──────────────────────────────────────────────
+// A Neon compute sleeps only after 5 minutes of silence, so what costs money is the number of
+// SEPARATE schedules, not the number of queries. The external scheduler should call ONE endpoint,
+// /api/cron/tick, every 15 minutes; everything below keeps working and exists for a manual run, a
+// targeted retry, or debugging. Do not point the scheduler at several of them at once — two
+// schedules a few minutes apart keep the database awake permanently, which is the outage we just
+// paid for.
 
 import {
   type ReqLike,
@@ -28,6 +37,7 @@ import { runCleanup } from '../cleanup/run.js';
 import { runInactiveErase } from '../cleanup/inactive.js';
 import { runReferralConfirm } from '../referral/confirm.js';
 import { runScheduledPosts } from '../scheduled/run.js';
+import { runTick } from './tick.js';
 
 function authorized(req: ReqLike): boolean {
   return constantTimeEquals(bearerToken(req), process.env.CRON_SECRET);
@@ -36,6 +46,22 @@ function authorized(req: ReqLike): boolean {
 function unauthorized(res: ResLike): void {
   res.statusCode = 401;
   res.end('');
+}
+
+/** POST /api/cron/tick — the COMBINED pass: parse, notify, publications, digest, retention and
+ *  referral credits inside ONE database wake-up and ONE 45s budget (lib/korea/cron/tick.ts).
+ *  This is what the external scheduler should call, every 15 minutes. Always 200 with a report of
+ *  what ran, what was skipped for lack of time, and what failed — a step that throws is recorded
+ *  and the pass continues, so one broken step never costs the others. */
+export async function cronTick(req: ReqLike, res: ResLike): Promise<void> {
+  if ((req.method ?? 'GET') !== 'POST') return sendError(res, ApiErrorCode.NotFound);
+  if (!authorized(req)) return unauthorized(res);
+  try {
+    const result = await runTick();
+    send(res, 200, { ok: true, ...result });
+  } catch (err) {
+    sendError(res, ApiErrorCode.Internal, 'cron_tick', err);
+  }
 }
 
 /** POST /api/cron/parse — run one AI extraction batch. */

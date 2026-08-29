@@ -12,6 +12,19 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["api/**/*.ts", "lib/**/*.ts"],
-  "exclude": ["node_modules", "app", "collector"]
+  // The collector is a SEPARATE package with its own tsconfig; only its two PURE modules (no
+  // telegram / dotenv imports) and their tests are pulled in here, because they run in THIS
+  // package's vitest and would otherwise be type-checked by nobody: the collector's own
+  // typecheck skips *.test.ts, since vitest is not a dependency over there.
+  "include": [
+    "api/**/*.ts",
+    "lib/**/*.ts",
+    "collector/src/batcher.ts",
+    "collector/src/batcher.test.ts",
+    "collector/src/schedule.ts",
+    "collector/src/schedule.test.ts",
+    "collector/src/handles.ts",
+    "collector/src/handles.test.ts"
+  ],
+  "exclude": ["node_modules", "app"]
 }

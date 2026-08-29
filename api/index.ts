@@ -17,6 +17,7 @@
 //   /api/vacancies/:id/takedown, /api/ads/:id/moderate-> admin (CRON_SECRET | ADMIN_TELEGRAM_IDS)
 //   /api/admin/erase-user, /api/admin/takedown-contact-> admin (CRON_SECRET | ADMIN_TELEGRAM_IDS)
 //   /api/bot/webhook                                  -> X-Telegram-Bot-Api-Secret-Token
+//   /api/cron/tick                                    -> Bearer CRON_SECRET (the ONE scheduled call)
 //   /api/cron/parse|notify|digest|cleanup|referral-confirm|inactive-erase|scheduled -> Bearer CRON_SECRET
 //   /api/media/:id                                    -> PUBLIC (unguessable id + per-request
 //                                                        visibility re-check; see the route below)
@@ -25,6 +26,7 @@ import { type ReqLike, type ResLike, send, sendError } from '../lib/korea/core/h
 import { ApiErrorCode, httpStatusFor, makeError } from '../lib/korea/core/errors.js';
 import { sourcesGet, ingestPost } from '../lib/korea/ingest/handler.js';
 import {
+  cronTick,
   cronParse,
   cronNotify,
   cronDigest,
@@ -73,7 +75,10 @@ const ROUTES: Route[] = [
   // Collector <-> backend (bearer secrets)
   { segments: ['sources'], handler: sourcesGet },
   { segments: ['ingest'], handler: ingestPost },
-  // Cron (bearer CRON_SECRET)
+  // Cron (bearer CRON_SECRET). The scheduler calls ONE of these — 'tick' — every 15 minutes: a
+  // Neon compute sleeps only after 5 minutes of silence, so several schedules at different
+  // minutes keep it awake permanently (the Aug-2026 outage). The rest stay for a manual run.
+  { segments: ['cron', 'tick'], handler: cronTick },
   { segments: ['cron', 'parse'], handler: cronParse },
   // Mini app (Authorization: tma <initData>)
   { segments: ['cities'], handler: citiesGet },

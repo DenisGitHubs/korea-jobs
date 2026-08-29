@@ -12,5 +12,8 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules"]
+  // Tests are excluded HERE on purpose: vitest is not a dependency of this package (the reader
+  // ships to a 1 GB VM, so its node_modules stay minimal). The pure modules and their tests are
+  // type-checked by the backend tsconfig instead (see the note there) and run in its vitest.
+  "exclude": ["node_modules", "src/**/*.test.ts"]
 }
