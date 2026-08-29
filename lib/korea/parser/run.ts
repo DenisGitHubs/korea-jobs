@@ -32,6 +32,7 @@ import {
   buildSystemPrompt,
   GEO_RESOLVE_INSTRUCTION,
   PARSER_CLASSIFY_INSTRUCTION,
+  isHardReject,
   readAiGeoFields,
   VISA_TYPES,
   PLACEMENT_FEES,
@@ -85,6 +86,21 @@ function cleanGender(v: unknown): Gender {
 // parser_min_confidence, so the low_confidence branch stays self-consistent) — never NULL.
 export function aiJudgedConfidence(confidence: unknown): number {
   return typeof confidence === 'number' && Number.isFinite(confidence) ? confidence : 0;
+}
+
+// THE publish decision for one parsed item (pure, so it is unit-testable without a DB — the apply
+// loop below calls exactly this, there is no second copy of the rule).
+// Until 2026-08-19 the loop asked only `!is_vacancy || confidence < min` and NEVER looked at
+// reject_reason, so a stated hard reason ('spam', 'criminal_hiring') was thrown away whenever the
+// model also set is_vacancy=true — the single most dangerous path, because this branch publishes to
+// the live feed. isHardReject (prompt.ts) now vetoes publication on its own; the confidence/vacancy
+// test is unchanged for every other verdict.
+export function isRejected(
+  it: Pick<ParsedVacancy, 'is_vacancy' | 'confidence' | 'reject_reason'>,
+  minConfidence: number,
+): boolean {
+  if (isHardReject(it.reject_reason)) return true;
+  return !it.is_vacancy || (it.confidence ?? 0) < minConfidence;
 }
 
 // Cheap, high-precision spam pre-filter — obvious non-jobs (crypto exchange, money-mule,
@@ -650,8 +666,10 @@ export async function runParse(): Promise<ParseResult> {
       continue;
     }
 
-    if (!it.is_vacancy || (it.confidence ?? 0) < minConfidence) {
-      // Persist WHY + confidence so the corpus is tunable (which reasons over/under-fire).
+    if (isRejected(it, minConfidence)) {
+      // Persist WHY + confidence so the corpus is tunable (which reasons over/under-fire). A hard
+      // reason ('spam' / 'criminal_hiring') is always non-null here, so it is what gets stored —
+      // the 'low_confidence' fallback stays for the is_vacancy=true-but-unsure case as before.
       const rejectReason = it.reject_reason ?? (it.is_vacancy ? 'low_confidence' : 'not_vacancy');
       await sql`
         update raw_messages
@@ -683,7 +701,10 @@ export async function runParse(): Promise<ParseResult> {
       // vacancy (is_vacancy AND confidence >= min); that can never happen in this branch, so it is pure
       // defense in depth. Best-effort. verdictHashById keyed the row before the AI, so short texts (null
       // hash) are simply not cached.
-      const keptAsVacancy = it.is_vacancy === true && (it.confidence ?? 0) >= minConfidence;
+      // "Kept as a published vacancy" must ask the SAME rule the branch above did — otherwise a
+      // hard-rejected item (is_vacancy=true + criminal_hiring) would look "kept" here and its verdict
+      // would never be cached, paying the model again for every repeat of the same blast.
+      const keptAsVacancy = !isRejected(it, minConfidence);
       if (shouldCacheVerdict(keptAsVacancy, rejectReason)) {
         const vh = verdictHashById.get(rawId) ?? null;
         if (vh) await upsertVerdictCache(sql, vh, rejectReason);

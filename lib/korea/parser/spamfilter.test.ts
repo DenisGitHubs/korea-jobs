@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  SPAM_PATTERNS,
   looksLikeSpam,
   looksLikeEmojiCarpet,
   looksLikePharma,
@@ -561,6 +562,125 @@ describe('looksLikeSpam — owner package 2026-07-22 must be caught', () => {
     'Хороший шанс устроиться на стабильную работу в Сеуле, звоните',            // bare "шанс"
     'Плачу кэш за смену, стройка в Сеуле, оплата в тот же день',                // "кэш за" cash-pay (dropped)
     'Требуется менеджер склада, разгрузка фур, зарплата 2.8 млн вон',           // "менеджер" not "менеджер маркетпл"
+  ];
+  for (const s of ok) {
+    it(`keeps: ${s.slice(0, 42)}`, () => {
+      expect(looksLikeSpam(s)).toBe(false);
+    });
+  }
+});
+
+// --- REVIVED RULES 2026-08-19 (Roma). The FIRST pattern block of spamfilter.ts was written with raw
+// \w / \b, which in JS are ASCII-only — seven alternatives next to Cyrillic matched NOTHING, and the
+// whole money-mule class (обнал / дропы / аренда карт) was silently off. Every phrase below is a LIVING
+// word form ("обналичка", "дропы", "аренда карт"), because the broken rules DID match their bare stems
+// ("обнал карт", "аренд карт") — a stem-shaped test would have been green on the dead code and proved
+// nothing. Asserted through looksLikeSpam (the whole filter), never a single regex.
+describe('looksLikeSpam — revived \\w/\\b rules must catch the living word forms', () => {
+  const spam: Array<[string, string]> = [
+    ['обналичка',       'обналичка карт, оплата сразу'],
+    ['дропы',           'нужны дропы на карты, 300к в неделю'],
+    ['аренда карт',     'аренда карт, плачу за каждую'],
+    ['перестановка',    'перестановка средств между картами'],
+    ['обнал %',         'обнал 15%, работаем по всей корее'],
+    ['доплата за usdt', 'доплата за usdt'],
+    ['рубли на воны',   'меняю рубли на воны'],
+  ];
+  for (const [label, s] of spam) {
+    it(`rejects [${label}]: ${s.slice(0, 34)}`, () => {
+      expect(looksLikeSpam(s)).toBe(true);
+    });
+  }
+
+  // SHADOW CHECK (the trap this batch was warned about): two of the seven phrases are ALSO caught by a
+  // neighbour, so a green looksLikeSpam alone does not prove the revived rule itself works.
+  //   • "меняю рубли на воны" — looksLikeRublePay (a SEPARATE function) fires on any рубл* form, so the
+  //     assertion below asks the PATTERN ARRAY (still the whole set, minus the structural heuristics)
+  //     whether it matches. Before the fix it did not.
+  //   • "доплата за usdt" — the bare-usdt rule catches the usdt half regardless, so the probe below uses
+  //     the crypto half in a form the live re('крипт[оауеы][а-яё]*') rule does NOT cover (no vowel after
+  //     the stem): only the revived доплат* rule can match it.
+  it('рубли→воны is matched by the PATTERN SET itself, not only by looksLikeRublePay', () => {
+    expect(SPAM_PATTERNS.some((rx) => rx.test('меняю рубли на воны'))).toBe(true);
+  });
+  it('the revived доплат* rule fires on its own (crypto half, not the bare-usdt neighbour)', () => {
+    expect(looksLikeSpam('доплата за крипт по курсу')).toBe(true);
+  });
+
+  // NEGATIVES for the newly revived patterns — the 0-FP gate on an irreversible filter. Real ads that
+  // merely START with the same letters ("картон / картофель / гидропоника") and a plain won salary must
+  // all pass; a won amount is never spam (the ruble rule is what watches currency).
+  const ok: string[] = [
+    'Завод в Ансане, зарплата 2 500 000 вон в месяц, жильё и питание, виза E-9',
+    'Стройка в Сеуле, оплата 150 000 вон в день, вахта, жильё предоставляется',
+    'Теплица с гидропоникой в Чхонане, нужны работники, проживание рядом',
+    'Упаковка картона на складе, 12 000 вон в час, автобус от общежития',
+    'Ферма, аренда картофельного поля у хозяина, нужны рабочие на сбор урожая',
+    'Уборка в отеле, аренда формы за счёт работодателя, стабильный график',
+    'Требуется водитель с картой водителя, доставка по Сеулу, 2 800 000 вон',
+    'Оплата наличными в день выхода, завод в Пусане, виза любая',
+  ];
+  for (const s of ok) {
+    it(`keeps: ${s.slice(0, 42)}`, () => {
+      expect(looksLikeSpam(s)).toBe(false);
+    });
+  }
+});
+
+// --- MULTILINE regression (gate 2026-08-19). Not one fixture in this file had a line break, yet the
+// user-ad path ALWAYS feeds a multi-line string (ads/input.ts adModText joins six form fields with
+// "\n", "housing terms" right next to "meals"). A plain \s+ inside a multi-word rule bridges those two
+// lines, so "…в аренду⏎Карточка иностранца…" — two unrelated fields — read as the mule phrase
+// "аренда карт". Every negative below carries a JOB WORD on purpose: without one,
+// looksLikeHousingRental legitimately fires on "сдаётся … комната" and the fixture would be testing
+// the housing rule instead of this one.
+describe('looksLikeSpam — a rule must NOT bridge a line break (multiline form text)', () => {
+  const ok: string[] = [
+    'Требуется рабочий на завод\nЖильё: комната в аренду\nКарточка иностранца обязательна',
+    'Нужны люди на склад\nСпецодежда в аренду\nКарты доступа выдаём на проходной',
+    // The same bridge in the OTHER direction ("счёт" + "в аренду"), which the old g3 rule allowed.
+    'Требуется рабочий на завод в Ансане\nПитание: за свой счёт\nВ аренду сдаётся комната рядом',
+    // A full six-field form text — the exact shape the classifier sees on the ad path.
+    'Завод в Ансане\nСборка автозапчастей, нужны рабочие\n2 500 000 вон в месяц\n5/2, смена 10 часов\nЖильё: комната в аренду\nКарточка иностранца обязательна',
+  ];
+  for (const s of ok) {
+    it(`keeps (multiline): ${s.slice(0, 34).replace(/\n/g, ' | ')}`, () => {
+      expect(looksLikeSpam(s)).toBe(false);
+    });
+  }
+
+  it('still catches the mule phrase when it sits on ONE line of a multiline post', () => {
+    expect(looksLikeSpam('Работа для всех\nОбналичка карт, оплата сразу\nПиши в лс')).toBe(true);
+  });
+});
+
+// --- The criminal_hiring vocabulary the PROMPT names must also be caught by the cheap filter (gate
+// 2026-08-19). "карты в аренду" (reverse order) and "дроповод" were named in the prompt instruction as
+// tells but matched NOTHING here: the rule had "аренда карт" forward-only, and the дроп tail was too
+// short for "дроповода". A word the prompt calls a tell and the filter ignores is the gap the recruiter
+// walks through — and the filter is the half that runs first and costs nothing.
+describe('looksLikeSpam — the criminal-hiring vocabulary named in the prompt', () => {
+  // The zero-width char is written as an ESCAPE, not pasted invisibly, so the fixture stays reviewable.
+  const ZW = '\u2060'; // word-joiner (escape, so the fixture stays visible in review)
+  const spam: Array<[string, string]> = [
+    ['карты в аренду',   'карты в аренду, оплата сразу'],
+    ['карты под аренду', 'карты под аренду, 300к в неделю'],
+    ['счета в аренду',   'счета в аренду, ежедневные выплаты'],
+    ['дроповод',         'ищу дроповода на постоянку'],
+    ['дроповодами',      'работаем с дроповодами, процент высокий'],
+    ['zero-width обнал', `об${ZW}нал 15%, работаем по всей корее`],
+  ];
+  for (const [label, s] of spam) {
+    it(`rejects [${label}]: ${s.slice(0, 30)}`, () => {
+      expect(looksLikeSpam(s)).toBe(true);
+    });
+  }
+
+  // The widened frame must still not eat real words that merely start the same way.
+  const ok: string[] = [
+    'Требуется электрик, установка счётчиков воды, 3 000 000 вон, оформление',
+    'Упаковка картриджей на складе, 12 000 вон в час, автобус',
+    'Стройка, аренда инструмента за счёт работодателя, оплата в тот же день',
   ];
   for (const s of ok) {
     it(`keeps: ${s.slice(0, 42)}`, () => {

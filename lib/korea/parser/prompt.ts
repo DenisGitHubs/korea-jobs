@@ -55,9 +55,34 @@ export const REJECT_REASONS = [
   'course_ad',      // language / visa / driving course advertising
   'housing',
   'currency_exchange',
+  // criminal_hiring (2026-08-19) — recruiting INTO crime: cash-out schemes (обнал/обналичка), money
+  // mules / drops (дропы), renting out bank cards or accounts (аренда карт, счета в аренду), drug-drop
+  // courier work (закладки). This is the one reject class the model could not express before: such a
+  // post really IS "an employer looking for workers", so it satisfies the is_vacancy=true rule on its
+  // face and lands in the feed whenever the pre-AI filter does not catch the exact wording. The
+  // deterministic filters (parser/spamfilter.ts, ads/adspam.ts) stay the cheap first line — this is
+  // the second one, for wordings no pattern anticipated. Storage is free TEXT (draft_0003), so a new
+  // code needs no migration; its human phrase lives in notify/author.ts (rejectReasonText).
+  'criminal_hiring',
   'spam',
   'unclear',
 ] as const;
+
+// Reasons that VETO publication on their own — even when the model ALSO said is_vacancy=true with a
+// high confidence. Everything else is judged by is_vacancy + confidence as before.
+// WHY this exists (gate 2026-08-19): the parser's publish decision (parser/run.ts) read ONLY
+// is_vacancy and confidence and ignored reject_reason entirely, so an item {is_vacancy:true,
+// confidence:0.9, reject_reason:'criminal_hiring'} went straight into the live feed. That combination
+// is not hypothetical for THIS class: a mule recruiter genuinely IS an employer looking for workers,
+// so the model can be right about "hiring" and right about "criminal" in the same item — the prompt
+// itself warns that these posts look like hiring. A reason the model states must not be silently
+// dropped on the one path that publishes to live users.
+export const HARD_REJECT_REASONS: ReadonlySet<string> = new Set(['spam', 'criminal_hiring']);
+
+/** True when a stated reject_reason forbids publication regardless of is_vacancy/confidence. */
+export function isHardReject(reason: string | null | undefined): boolean {
+  return typeof reason === 'string' && HARD_REJECT_REASONS.has(reason);
+}
 
 export interface CityRef {
   slug: string;
@@ -177,6 +202,7 @@ For EACH input message (an object {id, text, source_hint?}) return one item with
 CLASSIFICATION:
 - is_vacancy=true only for a real JOB OFFER (an employer looking for workers).
 - is_vacancy=false for: someone SEEKING work / posting a resume (resume_seeking_job), housing rent (housing), currency exchange (currency_exchange), chit-chat (chitchat), non-job ads/services (ad_non_job), recruiter/agency SELF-PROMOTION with no concrete vacancy — "звоните, поможем с работой", "агентство трудоустройства" (agency_promo), advertising of language/visa/driving COURSES or schools (course_ad), spam (spam), or unclear (unclear). For a non-vacancy, output ONLY the four keys {id, is_vacancy, reject_reason, confidence} — see OUTPUT FORMAT.
+- CRIMINAL HIRING is NOT a vacancy (criminal_hiring). A post recruiting people INTO a crime is never a job offer here, even though it hires: cash-out / money-laundering schemes ("обнал", "обналичка", "обнал 15%", "работа за %"), money mules and drops ("нужны дропы", "дроп на карту", "дроповод"), renting out bank cards or accounts ("аренда карт", "карты в аренду", "счета в аренду", "перестановка средств"), drug-drop courier work ("закладки", "курьер-закладчик", "клад"), and hiring paid in crypto for such work ("доплата за USDT"). Beware: these posts LOOK like hiring — they name a wage or a percent, promise daily pay and ask for workers — so do NOT classify them as a vacancy. Set is_vacancy=false with reject_reason=criminal_hiring. A legal job that merely pays cash in hand ("оплата наличными в день"), a legal bank/courier/delivery job, or a legal card-issuing service is NOT this — only work that is itself illegal. LOOK-ALIKE WORDS ARE NOT CRIME — these are ordinary, common jobs on this board and must be classified as normal vacancies: warehouse work ("кладовщик", "работа на складе", "склад", "склады"), masonry and construction ("кладка", "кладка кирпича", "каменщик", "закладка фундамента"), and pay set as a share of takings ("процент от выручки", "процент с продаж", "оплата процентом") for a hairdresser, a salesperson or a taxi driver. The stem "клад-" on its own means nothing, and a percentage on its own means nothing: call it criminal_hiring only when the drug-drop or cash-out context is explicit in the message itself.
 - Generally CUT advertising and noise that is not a concrete job opening.
 - confidence: 0..1 that this is a genuine vacancy.
 

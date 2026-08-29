@@ -46,6 +46,12 @@ export function rejectReasonText(reason: string | null): string {
       return 'Объявление про жильё, а не про работу.';
     case 'currency_exchange':
       return 'Объявление про обмен валюты, а не про работу.';
+    // criminal_hiring (2026-08-19, added together with the parser enum): WITHOUT this case the code
+    // itself would reach the author — the free-text branch below returns any unknown non-blank reason
+    // VERBATIM, so the DM would read "criminal_hiring". Wording stays neutral (the verdict can be a
+    // model error) and does not accuse the author of a crime.
+    case 'criminal_hiring':
+      return 'Похоже на незаконную схему заработка — такие объявления мы не размещаем.';
     case 'resume_seeking_job':
       return 'Похоже на резюме (поиск работы), а не на предложение вакансии.';
     case 'too_short':

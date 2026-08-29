@@ -19,6 +19,21 @@
 const B = '(^|[^а-яёa-z0-9])';
 // Right boundary (cyrillic-safe): end-of-string OR a non-letter/digit char (lookahead, zero-width).
 const E = '(?![а-яёa-z0-9])';
+// HORIZONTAL whitespace only — space/tab/NBSP, NEVER a line break (gate 2026-08-19). A plain \s+
+// inside a multi-word rule silently bridges two DIFFERENT lines, and on the user-ad path the
+// classified text is six form fields joined by "\n" (ads/input.ts adModText), with "housing terms"
+// and "meals" standing next to each other. That is how "Жильё: комната в аренду⏎Карточка иностранца
+// обязательна" — an ordinary ad naming the most common requirement on this board (외국인등록증) —
+// matched the "аренда карт" money-mule rule and would have been dropped. Same lesson as the
+// [^\n.!?] proximity window in the g4 block below, added for exactly this reason a month earlier.
+// A mule writes his phrase on ONE line, so the recall lost here is ~zero; what it prevents is the
+// irreversible loss of a real job.
+const H = '[^\\S\\r\\n]+';
+// The two nouns a money mule rents out: a bank CARD or an ACCOUNT. Each carries an explicit ending
+// list closed by a Cyrillic-safe right boundary, so only these senses match — "картон / картридж /
+// картофель / картина / счётчик" (real words a job ad may use) cannot. Shared by both directions of
+// the rented-account frame below, so the two directions can never drift apart.
+const ACCOUNT_N = '(?:карт(?:очк[а-яё]*|ами|ах|ам|ой|а|ы|у|е)?|сч[её]т(?:ами|ах|ам|ов|а|у|е)?)(?![а-яё])';
 
 // Zero-width chars (ZWSP/ZWNJ/ZWJ/word-joiner/BOM) that adult & spam bots splice INSIDE words
 // (p‌r‌o‌f‌i‌l‌i‌m -> profilim) to dodge the matcher. Stripped in looksLikeSpam BEFORE lowercasing
@@ -35,14 +50,50 @@ function tok(core: string): RegExp {
 }
 
 export const SPAM_PATTERNS: RegExp[] = [
+  // --- REVIVED 2026-08-19 (Roma). The rules in THIS first block predate the re()/tok() helpers and
+  // were written with raw \w / \b — which in JS are ASCII-ONLY, so next to Cyrillic they match
+  // NOTHING (durable lesson at the top of this file, Skills\Фродо\regex-cyrillic-word-class.md).
+  // Seven alternatives were therefore silently dead: every money-mule rule (обнал / дропы / аренда
+  // карт), "перестановка средств", "рубли на воны" and "доплатА за usdt" — the filter reported a
+  // clean pass on the exact recruiting spam it was written to cut. Each is rebuilt below through the
+  // SAME helpers the 2026-07-18+ blocks use (explicit [а-яё] tails, shared left boundary), so the
+  // living word forms match: "обналичка", "дропы", "аренда карт", "перестановка средств".
   /\busdt\b|\busdc\b|bitcoin|биткоин/i,
+  // NB: the "крипт[оаыу]?\b" branch below is dead for the same reason (an ASCII \b after Cyrillic
+  // "о/а/ы/у" never matches) but is deliberately LEFT AS IS — re('крипт[оауеы][а-яё]*') further down
+  // already covers крипта/крипты/крипту/криптой, so reviving it here would only duplicate a live rule.
   /крипт[оаыу]?\b|криптовалют|криптоактив|криптообмен/i,
   /обмен\s+(валют|usdt|usd|крипт|наличк|денег)/i,
-  /перестановк\w*\s+средств/i,
+  // was /перестановк\w*\s+средств/ — \w* could only match EMPTY, so the living form "перестановкА
+  // средств" never fired (only the bare stem "перестановк средств", which nobody writes).
+  re(`перестановк[а-яё]*${H}средств`),
   /inside\s*exchange|exchange\s*express|otc[- ]?сервис/i,
-  /доплат\w*\s+за\s+(usdt|крипт)/i,
-  /вон[ыа]?\s*(на|→|->)\s*рубл|рубл\w*\s*(на|→|->)\s*вон/i,
-  /обнал\w+|\bдроп(ы|ов|ами)?\b|аренд\w*\s+карт/i,
+  // was /доплат\w*\s+за\s+(usdt|крипт)/ — same \w* bug: matched "доплат за usdt", never "доплатА /
+  // доплатУ за usdt". NB the bare-usdt rule above independently catches the usdt half of the phrase;
+  // this rule is what still covers the crypto-word half ("доплата за крипт…").
+  re(`доплат[а-яё]*${H}за${H}(?:usdt|крипт)`),
+  // was /вон[ыа]?…рубл|рубл\w*…вон/ — the FIRST direction always worked (explicit Cyrillic class),
+  // the SECOND was dead on \w*: "рублИ на воны" never matched. Both directions now share one left
+  // boundary (the file convention: a shared boundary must wrap ALL alternatives, not just the first).
+  re('вон[ыа]?\\s*(?:на|→|->)\\s*рубл|рубл[а-яё]*\\s*(?:на|→|->)\\s*вон'),
+  // was /обнал\w+|\bдроп(ы|ов|ами)?\b|аренд\w*\s+карт/ — ALL THREE alternatives dead: \w+ never spans
+  // "ичка", an ASCII \b next to "д"/"п" never matches at all, and \w* could only match empty. This is
+  // the money-mule recruiting line, so it was the most expensive silence in the file.
+  //   • обнал[а-яё]* — обнал / обнала / обналичка / обналичить (no legitimate Russian word starts
+  //     with this stem; the shared left boundary keeps it from firing mid-word).
+  //   • дроп… bounded on BOTH sides (tok) — дроп / дропы / дропов / дропами / дропах and the trade's
+  //     own word for the recruiter, "дроповод / дроповода / дроповодами" (a bare {0,3} tail did not
+  //     reach it — gate 2026-08-19). The bounded tail is what keeps "дропшиппинг" and the mid-word
+  //     "гиДРОПоника" out.
+  //   • RENTED ACCOUNTS — ONE lexical frame for both nouns in BOTH directions (gate 2026-08-19: the
+  //     old pair covered "аренда карт" forward and "счета в аренду" backward, so "карты в аренду" —
+  //     a phrasing named in the prompt itself — was caught by neither). Forward: аренд* [банковских]
+  //     карт*/счет*; backward: карт*/счет* в|под аренду. Both nouns carry an explicit ending list
+  //     closed by (?![а-яё]), so real words with the same start ("картон / картридж / картофель /
+  //     счётчик") can never fire, and the separators are H (never a line break) — see the H note.
+  re('обнал[а-яё]*'),
+  tok('дроп(?:овод[а-яё]*|[а-яё]{0,3})'),
+  re(`аренд[а-яё]*${H}(?:банковск[а-яё]*${H})?${ACCOUNT_N}|${ACCOUNT_N}${H}(?:в|под)${H}аренду`),
   /листовк/i,
   /\bbybit\b|трейдинг/i,
   // --- extended 2026-07-18, data-driven from the reject corpus (Roma). Each pattern was
@@ -121,7 +172,11 @@ export const SPAM_PATTERNS: RegExp[] = [
 
   // g3 — drops / money-mule / percent schemes.
   /доставк[уаи]?\s+котиков/iu,
-  /сч[её]т(?:а|ов)?\s+в\s+аренду/iu,
+  // "счета в аренду" MOVED into the rented-account frame at the top of this array (gate 2026-08-19).
+  // It is not deleted, it is one rule now: the frame covers both nouns in both directions with H
+  // separators. The old copy here used \s+, which bridged a line break — "Питание: за свой счёт⏎В
+  // аренду сдаётся комната рядом с заводом" (a real ad with a housing perk) matched it and was
+  // dropped. Verified live on this file before the move.
   /работа\s+производится\s+за\s*%/iu,
 
   // g4 — visa / migration / document services. "под ключ" ALONE is dropped (construction ads say

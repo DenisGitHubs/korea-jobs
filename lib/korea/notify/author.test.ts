@@ -77,6 +77,15 @@ describe('notifyAuthorAdDecision — rejected', () => {
     expect(dm.extra.reply_markup).toBeUndefined();
   });
 
+  // criminal_hiring (2026-08-19): a NEW enum value with no case here would not fall back to the
+  // generic line — the free-text branch returns any unknown non-blank reason VERBATIM, so the author
+  // would get the raw code "criminal_hiring" in a DM. This pins the human phrase.
+  it('has a human phrase for criminal_hiring (never leaks the raw code)', () => {
+    const phrase = rejectReasonText('criminal_hiring');
+    expect(phrase).not.toContain('criminal_hiring');
+    expect(phrase).toContain('незаконную схему');
+  });
+
   it('uses the generic phrase for an unknown/absent reject_reason', async () => {
     await notifyAuthorAdDecision(h.fakeSql as never, AD_ID, 'rejected', 'admin_button');
     expect(h.state.sent[0]!.text).toContain(rejectReasonText('admin_button'));

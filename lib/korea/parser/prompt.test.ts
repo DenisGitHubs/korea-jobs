@@ -7,7 +7,7 @@
 // (detectCitySlugs / detectRegionSlugs); here we pin only the extraction/normalization contract.
 
 import { describe, it, expect } from 'vitest';
-import { readAiGeoFields } from './prompt.js';
+import { readAiGeoFields, buildSystemPrompt, REJECT_REASONS, type CityRef } from './prompt.js';
 
 describe('readAiGeoFields — happy path', () => {
   it('extracts city_norm, region_norm and city_slang pairs, trimmed', () => {
@@ -70,5 +70,66 @@ describe('readAiGeoFields — tolerant of missing / wrong-typed keys', () => {
     expect(() => readAiGeoFields(undefined)).not.toThrow();
     expect(() => readAiGeoFields('a string')).not.toThrow();
     expect(readAiGeoFields(null)).toEqual({ cityNorm: null, regionNorm: null, slang: [] });
+  });
+});
+
+// --- criminal_hiring (2026-08-19). The deterministic filters cut the KNOWN wordings before the model;
+// this reason is what lets the model reject a wording no pattern anticipated. A mule recruiter is
+// literally "an employer looking for workers", so without an explicit rule the contract's own
+// is_vacancy=true definition invites the model to publish him.
+describe('criminal_hiring reject reason', () => {
+  const CITIES: CityRef[] = [
+    { slug: 'ansan', name: { ru: 'Ансан', ko: '안산', en: 'Ansan' }, region_slug: 'gyeonggi' },
+  ];
+  const REGIONS = ['gyeonggi'];
+
+  it('is part of the model-facing enum', () => {
+    expect(REJECT_REASONS).toContain('criminal_hiring');
+  });
+
+  it('the prompt names the reason AND the vocabulary that triggers it', () => {
+    const p = buildSystemPrompt(CITIES, REGIONS);
+    expect(p).toContain('criminal_hiring');
+    expect(p).toContain('обнал');
+    expect(p).toContain('дропы');
+    expect(p).toContain('аренда карт');
+    // The enum line of OUTPUT FORMAT is generated from REJECT_REASONS, so the model sees the value
+    // as an allowed output, not only as prose.
+    expect(p).toContain('reject_reason is one of:');
+  });
+
+  // COUNTERWEIGHT (2026-08-29). The trigger list contains "клад" and "работа за %", and the three
+  // most common HOMONYMS of those on this board are ordinary mass-market jobs: a warehouse worker,
+  // a bricklayer, and anyone paid a share of takings. No deterministic filter knows these words
+  // (spamfilter.ts / adspam.ts contain neither "клад" nor "процент"), so the prompt is the only
+  // place that can hold them apart.
+  //
+  // WHY THIS IS A SENTINEL AND NOT A NICETY: verdict-cache.ts caches EVERY reject, keyed on a
+  // letters-only skeleton of the text (digits, emoji and punctuation stripped). One wrong reject on
+  // "Требуется кладовщик, 2 500 000 вон" therefore blocks the WHOLE family of that posting — any
+  // wage, any date, for ever, without asking the model again. The vacancy then disappears in a way
+  // that looks exactly like the filter working correctly.
+  it('holds the innocent homonyms of the trigger words apart from crime', () => {
+    const p = buildSystemPrompt(CITIES, REGIONS);
+    for (const word of ['кладовщик', 'работа на складе', 'кладка', 'каменщик', 'закладка фундамента']) {
+      expect(p, word).toContain(word);
+    }
+    for (const word of ['процент от выручки', 'процент с продаж']) {
+      expect(p, word).toContain(word);
+    }
+    // The counterweight has to say WHICH way to classify them, not merely mention the words.
+    expect(p).toContain('LOOK-ALIKE WORDS ARE NOT CRIME');
+    // ...and it must stand AFTER the trigger list, so the model reads the exception last.
+    expect(p.indexOf('LOOK-ALIKE WORDS ARE NOT CRIME')).toBeGreaterThan(p.indexOf('"клад"'));
+  });
+
+  // PROMPT-CACHE ORDER (Skills\Рома\ai-cost-haiku-korea-jobs.md): the cacheable text must sit BEFORE
+  // the volatile part of the prompt. The city list is the volatile part (it changes when cities are
+  // added), so a static instruction added AFTER it would move on every city change and cost cache
+  // hits. This pins the instruction ahead of the city list.
+  it('sits BEFORE the volatile city list (cache prefix stays stable)', () => {
+    const p = buildSystemPrompt(CITIES, REGIONS);
+    expect(p.indexOf('criminal_hiring')).toBeGreaterThan(-1);
+    expect(p.indexOf('criminal_hiring')).toBeLessThan(p.indexOf('ansan = Ансан'));
   });
 });

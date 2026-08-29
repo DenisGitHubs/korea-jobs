@@ -27,6 +27,26 @@ describe('looksLikeAdSpam — advertising/spam must be caught', () => {
   }
 });
 
+// --- CRIMINAL HIRING / money mules (ported from the parser filter 2026-08-19). A recruiter can type
+// this straight into the "Разместить" form, where until now NO deterministic rule met it. One positive
+// per ported pattern, each in a LIVING word form ("обналичка", not the bare stem "обнал") — a stem-only
+// example would have passed the broken parser rules too and proved nothing.
+describe('looksLikeAdSpam — criminal hiring (обнал / дропы / аренда карт) must be caught', () => {
+  const spam: Array<[string, string]> = [
+    ['обнал',         'Обналичка карт, оплата сразу, работаем по всей Корее'],
+    ['дропы',         'Нужны дропы на карты, 300к в неделю, пиши в лс'],
+    ['аренда карт',   'Аренда карт, плачу за каждую, деньги в тот же день'],
+    ['счета аренда',  'Счета в аренду, ежедневная оплата, помощь с оформлением'],
+    ['перестановка',  'Перестановка средств между картами, процент высокий'],
+    ['доплата крипт', 'Доплата за usdt каждому исполнителю'],
+  ];
+  for (const [name, s] of spam) {
+    it(`rejects (${name}): ${s.slice(0, 34)}`, () => {
+      expect(looksLikeAdSpam(s)).toBe(true);
+    });
+  }
+});
+
 describe('looksLikeAdSpam — real vacancies must pass', () => {
   const ok: string[] = [
     'Требуется рабочий на завод в Ансане, зарплата 2 500 000 вон, жильё есть',
@@ -37,6 +57,13 @@ describe('looksLikeAdSpam — real vacancies must pass', () => {
     'Оплата за трудоустройство с первой зарплаты',
     'Рыбзавод, работа в смену, достойная зарплата, подработка по выходным',
     'Склад, погрузка-разгрузка, отработка стабильная, оформление по визе',
+    // Collisions engineered around by the criminal-hiring block above (2026-08-19): the CARD tail is
+    // an explicit ending list, so real words that merely start with "карт" are spared, and "дроп" is
+    // bounded on both sides so it cannot fire inside a longer word.
+    'Упаковка картона на складе, аренда спецтехники за счёт работодателя, 12000 вон в час',
+    'Ферма, аренда картофельного поля у хозяина, нужны рабочие на сбор урожая',
+    'Теплица с гидропоникой в Ансане, нужны работники, проживание рядом',
+    'Оплата наличными в день выхода, завод в Пусане, виза любая',
   ];
   for (const s of ok) {
     it(`keeps: ${s.slice(0, 40)}`, () => {
