@@ -4,15 +4,28 @@
 // (HMAC over the raw string), lazily upserts the user, and returns the trusted user
 // row. The user id used for scoping ALWAYS comes from here — never from the request
 // body/query (007: this is the only barrier against cross-user leakage on Neon).
+//
+// TWO DOORS, ONE ROOM (since 23.09.2026):
+//   `Authorization: tma <initData>`  — Telegram Mini App, the original door;
+//   `Authorization: kjs <pass>`      — our own session pass, issued at POST /api/auth/hub
+//                                      in exchange for an AppHub Studio ticket.
+// One header carries one scheme, so a request belongs to exactly one door and the two
+// branches never meet. They share the RETURNED shape and nothing else — in particular
+// they do NOT share an upsert: see authenticateHubSession below for why.
 
 import { getSql } from './db.js';
 import { verifyInitData } from './auth.js';
-import { type ReqLike, tmaInitData } from './http.js';
+import { verifyHubSession } from './hub-session.js';
+import { type ReqLike, hubSessionToken, tmaInitData } from './http.js';
 import { getConfigNumber } from '../config.js';
 import { bumpVisitStreakBestEffort } from '../streaks/update.js';
 import { seoulDate, normalizeDbDate } from './time.js';
 import { normalizeRefCode } from './start-param.js';
-import { resolveAcqSource, noteAcqRejectBestEffort } from './acq-source.js';
+import {
+  ACQ_SOURCE_APPHUB_SHELL,
+  resolveAcqSource,
+  noteAcqRejectBestEffort,
+} from './acq-source.js';
 
 // Re-exported so existing importers (bot webhook `/start`) keep resolving these from
 // core/context.js. The parsing itself lives in the shared, pure start-param module.
@@ -30,6 +43,18 @@ export interface AuthedUser {
   lang: string;
   allowsWriteToPm: boolean;
   isBlocked: boolean;
+  /**
+   * DOOR 2 ONLY: the id of the AppHub Studio ticket this session was minted from
+   * (core/hub-session.ts, invariant 7); null for a Telegram launch, which has no ticket.
+   *
+   * It is here so that an incident can be READ. Replaying a ticket inside its 60 s is a
+   * risk the owner accepted — but "accepted" is not "un-investigable": without this field
+   * the line `[auth/hub] ok jti=X` joins to nothing, and two sessions born of ONE ticket
+   * look exactly like two honest ones. It carries no new personal data (it is the number
+   * of the holder's own ticket) and it is deliberately NOT printed on the hot path — it is
+   * available to be printed when something is being investigated, not before.
+   */
+  hubJti: string | null;
 }
 
 export type AuthResult = { ok: true; user: AuthedUser } | { ok: false };
@@ -39,8 +64,17 @@ export type AuthResult = { ok: true; user: AuthedUser } | { ok: false };
 // null — so the attribution branch below is byte-for-byte unchanged — but additionally
 // pulls the inviter code out of a "Поделиться вакансией" combined link (v<vacancy>r<ref>).
 
-/** Verify `Authorization: tma <initData>` and upsert the user. Fail-closed. */
+/**
+ * Verify `Authorization: tma <initData>` (or `kjs <pass>`) and upsert the user.
+ * Fail-closed.
+ */
 export async function authenticate(req: ReqLike): Promise<AuthResult> {
+  // Door 2 first, and only because it is the cheaper test: a request either carries a
+  // `kjs` pass or it does not, and if it does, the Telegram path below has nothing to
+  // work with anyway. Everything past this line is the ORIGINAL Telegram door, untouched.
+  const pass = hubSessionToken(req);
+  if (pass) return authenticateHubSession(pass);
+
   const raw = tmaInitData(req);
   if (!raw) return { ok: false };
 
@@ -178,15 +212,20 @@ export async function authenticate(req: ReqLike): Promise<AuthResult> {
                 last_seen_at = now(),
                 allows_write_to_pm = users.allows_write_to_pm or excluded.allows_write_to_pm
               returning id, telegram_id, public_id, lang, allows_write_to_pm, is_blocked, visit_streak_day`;
-          } catch (err) {
+          } catch {
             // Deploy-before-migrate window: users.acq_source may not exist yet. Losing a
             // campaign count is annoying; refusing to let a person INTO the app (paid click!)
-            // is not acceptable — fall back to the label-less upsert and log it.
+            // is not acceptable — fall back to the label-less upsert and log the FACT.
+            //
+            // 🔴 THE MESSAGE IS THE LEAK, AND IT IS THE SAME LEAK ON THIS DOOR (fix №5 of
+            // the third review, 23.09.2026). This line used to print err.message, and a
+            // Postgres message QUOTES what it refused — the telegram_id bound a few lines
+            // above — straight into the Vercel log, once per launch. The kjs branch below
+            // was cleaned of exactly this in the previous round; door 1 kept it. The fact
+            // and the place are the whole line; the cause is found by the migration state,
+            // not by a quoted value.
             // eslint-disable-next-line no-console
-            console.error(
-              '[auth] acq_source upsert failed, falling back (column missing?):',
-              err instanceof Error ? err.message : String(err),
-            );
+            console.error('[auth] acq_source upsert failed, falling back (column missing?)');
             return plainUpsert();
           }
         })()
@@ -215,6 +254,136 @@ export async function authenticate(req: ReqLike): Promise<AuthResult> {
       lang: u.lang as string,
       allowsWriteToPm: u.allows_write_to_pm === true,
       isBlocked: u.is_blocked === true,
+      // The Telegram door has no hub ticket — and "not said" stays "not known".
+      hubJti: null,
+    },
+  };
+}
+
+/**
+ * DOOR 2: `Authorization: kjs <pass>` — a visitor from the AppHub Studio shell, holding the
+ * pass minted at POST /api/auth/hub (core/hub-session.ts) out of a hub ticket.
+ *
+ * 🔴 ITS OWN UPSERT, AND THAT IS THE WHOLE POINT OF THE BRANCH.
+ *    A ticket brings ONE identity and NOT ONE profile field — so a login by ticket has no
+ *    right to OVERWRITE anything in the profile.
+ * The Telegram upsert above refreshes username/first_name/last_name from every launch,
+ * because initData really does carry them fresh from Telegram. Reusing it here would write
+ * NULLs "on the ticket's authority" over a name the person already has — a silent data loss
+ * on the SECOND door that nobody would connect to it. Hence:
+ *   * INSERT names telegram_id, lang and acq_source (our own constant, see below);
+ *     username/first_name/last_name are not listed at all, so those columns take their own
+ *     defaults instead of a NULL signed by nobody;
+ *   * allows_write_to_pm is not listed either — the column's default (false) is the honest
+ *     "we have not asked yet", not "not allowed" (a ticket cannot carry this flag: it lives
+ *     only inside Telegram's signature issued to a BOT — core/hub-ticket.ts, invariant 6).
+ *     🔴 That honest default is INVISIBLE to a person unless the screen says so: this
+ *     visitor's bot cannot write to them, so notifications and the digest will never
+ *     arrive. GET /api/me therefore reports the flag (users/me.ts), and the screen draws
+ *     the honest line next to the toggles instead of a switch that does nothing;
+ *   * ON CONFLICT touches last_seen_at AND NOTHING ELSE.
+ * The RETURNING list is the same as the Telegram door's — both doors hand the caller the
+ * same trusted row. That sentence is a GUARD, not a hope: context.test.ts cuts the
+ * `returning …` tail out of every users-upsert in this file and compares them letter by
+ * letter, so dropping a column from any ONE of them reddens (fix №4, 23.09.2026 — before
+ * it, the test helpers cut that tail off before asserting and nothing noticed).
+ *
+ * ONE THING IS WRITTEN THAT THE TELEGRAM DOOR DOES NOT WRITE: users.acq_source =
+ * 'apphub_shell', in the INSERT only. See ACQ_SOURCE_APPHUB_SHELL for why that is not a
+ * contradiction of "a ticket proves nothing about the profile" — the ticket proves exactly
+ * this one thing, cryptographically, and nothing else.
+ */
+async function authenticateHubSession(pass: string): Promise<AuthResult> {
+  const botToken = process.env.BOT_TOKEN;
+  if (!botToken) throw new Error('auth: BOT_TOKEN is not set');
+
+  const v = verifyHubSession(pass, botToken);
+  if (!v.ok) return { ok: false };
+
+  // The language hint is used ONLY when the row is created (same rule as the Telegram door:
+  // after the first insert the app owns the display language).
+  const lang = v.claims.lang ?? 'ru';
+
+  const sql = getSql();
+  // The label-less twin, used when the acq_source write cannot run (deploy-before-migrate).
+  // Defined once so the two can never drift — same rule as the Telegram door's plainUpsert.
+  const plainKjsUpsert = (): Promise<Record<string, unknown>[]> =>
+    sql`
+      insert into users (telegram_id, lang)
+      values (${v.claims.sub}::bigint, ${lang})
+      on conflict (telegram_id) do update set
+        last_seen_at = now()
+      returning id, telegram_id, public_id, lang, allows_write_to_pm, is_blocked, visit_streak_day`;
+
+  let rows: Record<string, unknown>[];
+  try {
+    // acq_source in the INSERT list ONLY — never in ON CONFLICT. A returning visitor keeps
+    // whatever brought them here the FIRST time; an account that already existed was not
+    // acquired by the shell, and must not start claiming it was.
+    rows = await sql`
+      insert into users (telegram_id, lang, acq_source)
+      values (${v.claims.sub}::bigint, ${lang}, ${ACQ_SOURCE_APPHUB_SHELL})
+      on conflict (telegram_id) do update set
+        last_seen_at = now()
+      returning id, telegram_id, public_id, lang, allows_write_to_pm, is_blocked, visit_streak_day`;
+  } catch {
+    // 🔴 THE DRIVER'S OWN ERROR MUST NOT TRAVEL ANYWHERE (fix №5, 23.09.2026). This
+    // statement used to be un-guarded, so anything Postgres refused travelled up as the
+    // CAUSE of a 500 — and api/index.ts prints cause.message + stack, while a Postgres
+    // message QUOTES the value it refused. The telegram_id would land in the Vercel log,
+    // once per request, exactly where it was never supposed to be.
+    //
+    // NOTHING OF THE ERROR IS PRINTED OR RE-THROWN HERE, for that reason: the message is
+    // the leak. The name of the door and the fact of the fault are the whole line. (What
+    // DOES escape when both statements fail is an error of our own writing — see the inner
+    // catch: a 500 is the honest answer, it just must not be the driver's 500.)
+    try {
+      // Most likely cause by far: users.acq_source not migrated yet. Losing one acquisition
+      // count is annoying; locking the second door over it is not acceptable.
+      rows = await plainKjsUpsert();
+      // eslint-disable-next-line no-console
+      console.error('[auth] kjs upsert with acq_source failed, fell back (column missing?)');
+    } catch {
+      // eslint-disable-next-line no-console
+      console.error('[auth] kjs upsert failed');
+      // 🔴 A BROKEN DATABASE IS NOT A BROKEN PASS (fix №2 of the third review, 23.09.2026).
+      // This used to `return { ok: false }`, which the caller answers with 401 — and the
+      // shell shows "this entrance no longer works, go back to AppHub Studio and open it
+      // again". The person goes back, the shell mints a brand-new ticket, the exchange
+      // SUCCEEDS (POST /api/auth/hub never touches the database) — and the very next
+      // request is 401 again. A loop in which the fault is assigned to the person, over a
+      // blink of the database, which in this project is not a hypothesis but an outage we
+      // have had. Door 1 in the same situation falls honestly into 500.
+      //
+      // The thrown text is OURS, word for word: there is no PII in it and nothing of the
+      // driver's message travels with it. api/index.ts turns it into a 500 under its own
+      // errorId (and logs that message + our stack, which is the diagnostic), the shell
+      // reads 5xx as "the service is temporarily down", and the person sees the ordinary
+      // error strip instead of a door blaming them.
+      throw new Error('kjs upsert failed');
+    }
+  }
+
+  const u = rows[0];
+  if (!u) return { ok: false };
+
+  // Same daily VISIT streak as the Telegram door — opening the app through the shell is
+  // still opening the app. Best-effort there, best-effort here.
+  if (normalizeDbDate(u.visit_streak_day) !== seoulDate()) {
+    await bumpVisitStreakBestEffort(sql, u.id as string);
+  }
+
+  return {
+    ok: true,
+    user: {
+      id: u.id as string,
+      telegramId: String(u.telegram_id),
+      publicId: u.public_id as string,
+      lang: u.lang as string,
+      allowsWriteToPm: u.allows_write_to_pm === true,
+      isBlocked: u.is_blocked === true,
+      // Carried out to the boundary so an investigation can name the ticket (invariant 7).
+      hubJti: v.claims.jti,
     },
   };
 }

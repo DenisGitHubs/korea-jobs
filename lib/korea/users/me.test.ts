@@ -269,3 +269,76 @@ describe('meGet — notify_daily_cap', () => {
     expect(subQuery).toContain("(to_jsonb(s) ->> 'notify_daily_cap')");
   });
 });
+
+// =======================================================================================
+// FIX №3 (007, major): THE SILENT REFUSAL ON SCREEN.
+//
+// Every letter we send is gated on users.allows_write_to_pm — notify/run.ts, digest/run.ts
+// and notify/author.ts all filter on it — but the flag never left the server, so the
+// settings screen drew the notify/digest toggles unconditionally. Somebody whose flag is
+// false switched notifications ON, the subscription saved cleanly, and then not one letter
+// ever arrived. No error, anywhere, ever.
+//
+// While Telegram was the only door that was a rare anomaly. It is the DEFAULT for every
+// guest of the AppHub Studio shell: a ticket cannot carry this permission, so the column
+// keeps its honest "we have not asked yet" (false) for all of them.
+//
+// Contract with the front end, byte for byte: GET /api/me returns a TOP-LEVEL
+// "allows_write_to_pm": boolean. It is a fact about the caller themselves — not one word
+// about anybody else.
+// =======================================================================================
+describe('meGet — allows_write_to_pm is reported to the screen (fix №3)', () => {
+  /** /me for an authenticated caller whose write-permission flag is `flag`. */
+  async function meWithFlag(flag: boolean) {
+    vi.mocked(authenticate).mockResolvedValue({
+      ok: true,
+      user: {
+        id: USER_ID,
+        telegramId: '555',
+        publicId: 'pub1',
+        lang: 'ru',
+        allowsWriteToPm: flag,
+        isBlocked: false,
+        hubJti: null,
+      },
+    } as never);
+    vi.mocked(getSql).mockReturnValue(makeSql(null));
+    const res = makeRes();
+    await meGet(makeReq(), res as unknown as ResLike);
+    return res;
+  }
+
+  it('🔴 a person our bot CANNOT write to gets false — the screen can finally say so', async () => {
+    const res = await meWithFlag(false);
+    expect(res.statusCode).toBe(200);
+    expect(bodyOf(res).allows_write_to_pm).toBe(false);
+  });
+
+  it('🔴 a person our bot CAN write to gets true', async () => {
+    const res = await meWithFlag(true);
+    expect(res.statusCode).toBe(200);
+    expect(bodyOf(res).allows_write_to_pm).toBe(true);
+  });
+
+  it('it is a TOP-LEVEL field and a real boolean (the contract the front end builds on)', async () => {
+    const body = bodyOf(await meWithFlag(false));
+    expect(Object.prototype.hasOwnProperty.call(body, 'allows_write_to_pm')).toBe(true);
+    expect(typeof body.allows_write_to_pm).toBe('boolean');
+    // …and it is about the caller, so it sits beside their own fields — not inside
+    // `subscription` (what they CHOSE) and not inside `flags` (server-side switches).
+    expect(body.subscription).not.toHaveProperty('allows_write_to_pm');
+    expect(body.flags).not.toHaveProperty('allows_write_to_pm');
+  });
+
+  it('a missing flag on the authenticated row reads as false, never as "probably yes"', async () => {
+    // Fail-closed: an unknown permission must not draw a toggle that promises mail.
+    vi.mocked(authenticate).mockResolvedValue({
+      ok: true,
+      user: { id: USER_ID, publicId: 'pub1', lang: 'ru' },
+    } as never);
+    vi.mocked(getSql).mockReturnValue(makeSql(null));
+    const res = makeRes();
+    await meGet(makeReq(), res as unknown as ResLike);
+    expect(bodyOf(res).allows_write_to_pm).toBe(false);
+  });
+});

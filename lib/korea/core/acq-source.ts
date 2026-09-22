@@ -48,6 +48,31 @@ export const ACQ_ALLOWLIST_KEY = 'acq_sources_allowed';
 /** How many labels /stats will echo back — a guard against an over-long list, not a policy. */
 export const ACQ_ALLOWLIST_ECHO_MAX = 20;
 
+/**
+ * Acquisition label for the SECOND DOOR — a visitor who arrived through the AppHub Studio
+ * shell (core/context.ts, the kjs branch). Written on INSERT only, like every label.
+ *
+ * 🔴 THE ALLOW-LIST DOES NOT APPLY TO IT, AND MUST NOT. The list exists because
+ * `?startapp=` is a PUBLIC url tail: it answers the question "did the owner approve this
+ * STRANGER'S string?". This value is not a stranger's string — it is our own constant,
+ * written by our own code, and only after the hub's Ed25519 signature on `aud='korea_jobs'`
+ * has proved where the visitor came from. Sending it through the gate would mean the owner
+ * has to approve a label he cannot even type (it carries no `ads_`/`s_` prefix, so
+ * `normalizeAcqSource` would drop it from the list as junk) and the second door would
+ * silently count nobody — the exact question the label was added to answer.
+ *
+ * Worth knowing before changing it:
+ *   * /stats reads the COLUMN (`group by acq_source`), not the list, so this label appears
+ *     in the report by itself with NO config change (admin/stats.ts, block 5);
+ *   * the «Считаются метки» line under that block echoes the ALLOW-LIST, so this label is
+ *     absent from it. Correct (it is not gated by the list) but it reads oddly next to its
+ *     own number — a TEXT decision for the owner, not a code one;
+ *   * it cannot be forged through a link: `?startapp=apphub_shell` does not match the
+ *     parser's SOURCE_RE, so from a public link it resolves to "no label".
+ * Shape-wise it is exactly what the column documents: 4..32 chars of [a-z0-9_], lowercase.
+ */
+export const ACQ_SOURCE_APPHUB_SHELL = 'apphub_shell';
+
 export interface AcqDecision {
   /** The label to store, or null when nothing may be stored. */
   source: string | null;
@@ -79,12 +104,13 @@ export async function getAllowedAcqSources(): Promise<string[]> {
   let raw: string[];
   try {
     raw = await getConfigStringArray(ACQ_ALLOWLIST_KEY, []);
-  } catch (err) {
+  } catch {
+    // The FACT and the PLACE, never the driver's message (fix №5 of the third review,
+    // 23.09.2026 — the same leak that was cleaned out of the kjs branch): a Postgres error
+    // quotes what it refused, and this read happens on the auth path where the values in
+    // flight belong to a person.
     // eslint-disable-next-line no-console
-    console.error(
-      '[acq] allow-list read failed, treating as empty:',
-      err instanceof Error ? err.message : String(err),
-    );
+    console.error('[acq] allow-list read failed, treating as empty');
     return [];
   }
   const out: string[] = [];
@@ -131,12 +157,13 @@ export async function noteAcqRejectBestEffort(sql: Sql): Promise<void> {
       insert into acq_rejects (day, n)
       values ((now() at time zone 'Asia/Seoul')::date, 1)
       on conflict (day) do update set n = acq_rejects.n + 1`;
-  } catch (err) {
-    // The message may quote the statement, never the label (it is not interpolated into it).
+  } catch {
+    // The FACT and the PLACE only (fix №5 of the third review, 23.09.2026). The old line
+    // printed err.message with the note "it may quote the statement, never the label" —
+    // that is a bet on what a driver chooses to quote, made once per fault, in a log that
+    // is read by more people than the database. The bet is not needed: nothing about this
+    // counter is diagnosed from the driver's wording.
     // eslint-disable-next-line no-console
-    console.error(
-      '[acq] reject counter failed (table missing?):',
-      err instanceof Error ? err.message : String(err),
-    );
+    console.error('[acq] reject counter failed (table missing?)');
   }
 }

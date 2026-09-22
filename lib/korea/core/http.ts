@@ -69,8 +69,12 @@ export function sendBytes(
  *
  * `cause` is the original thrown value and is honoured ONLY for an unexpected `internal`
  * (500): its message + stack are logged at error level so a live 500 is diagnosable.
- * Expected/known errors (400/401/404/429), and any call without a `cause`, log just the
- * lightweight `code + errorId` line — no stack, so they never flood the log.
+ * Expected/known errors (400/401/404/413/429/503), and any call without a `cause`, log just
+ * the lightweight `code + errorId` line — no stack, so they never flood the log.
+ * 🔴 That list is the WHOLE of ApiErrorCode minus `internal`. A code added to
+ * core/errors.ts belongs here AND in the table in http.test.ts, or the three drift apart
+ * and the newest code is the one nobody ever checked (503 arrived with the second door on
+ * 23.09.2026 and was in neither — Censor, fix №11).
  *
  * Never logs the request body, headers, query or auth: only the code, the id, and the
  * technical error text/stack. `detail` is a fixed short tag chosen by the call site
@@ -143,6 +147,20 @@ export function tmaInitData(req: ReqLike): string | undefined {
   const auth = header(req, 'authorization');
   if (!auth) return undefined;
   const m = /^tma\s+(.+)$/i.exec(auth);
+  return m ? m[1] : undefined;
+}
+
+/**
+ * Parse our own session pass from the Authorization header ("kjs <token>") — the SECOND
+ * door in, used by the AppHub Studio shell after it traded its hub ticket at
+ * POST /api/auth/hub. Twin of tmaInitData above, and deliberately a SEPARATE scheme name:
+ * one header can only carry one of the two, so the door a request came through is never
+ * ambiguous (core/context.ts branches on exactly that).
+ */
+export function hubSessionToken(req: ReqLike): string | undefined {
+  const auth = header(req, 'authorization');
+  if (!auth) return undefined;
+  const m = /^kjs\s+(.+)$/i.exec(auth);
   return m ? m[1] : undefined;
 }
 

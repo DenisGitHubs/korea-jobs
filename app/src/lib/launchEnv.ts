@@ -1,5 +1,12 @@
 /**
- * "Are we OUTSIDE Telegram?" — one conservative check, evaluated once at boot.
+ * "How was this page launched?" — one conservative check, evaluated once at boot.
+ *
+ * THREE ways in, not two:
+ *   'telegram' — a real Telegram client (or the dev mock / initData harness):
+ *                today's app, unchanged;
+ *   'hub'      — the AppHub Studio shell: it hands a signed ticket in the launch
+ *                URL, which we trade for our own pass (see lib/hubTicket.ts);
+ *   'outside'  — a plain browser with neither ticket nor pass: the static page.
  *
  * Why it exists: opened in a plain browser the mini app has no initData, so
  * GET /me answers 401, the consent gate stays up (fail-closed) and an error
@@ -8,17 +15,19 @@
  * static landing page instead of the app (components/OutsideTelegram.tsx).
  *
  * The check is deliberately ASYMMETRIC. A wrong "outside" would hide the whole
- * app from a real user; a wrong "inside" only keeps today's behaviour. So it
- * returns true ONLY when EVERY Telegram trait is absent, and any unexpected
- * throw resolves to "inside".
+ * app from a real user; a wrong "inside" only keeps today's behaviour. So
+ * 'outside' comes back ONLY when EVERY Telegram trait is absent AND there is no
+ * hub ticket/pass either, and any unexpected throw resolves to 'telegram'.
  *
  * ORDER MATTERS: call this BEFORE bootstrapTelegram(). Outside a real client
  * that helper installs a mock Telegram env (mockTelegramEnv), after which
  * isTMA() and retrieveLaunchParams() answer "yes" for everyone. Calling it
- * later can only ever return false — the safe direction, never a false landing.
+ * later can only ever answer 'telegram' — the safe direction, never a false
+ * landing page.
  */
 import { isTMA, retrieveLaunchParams } from '@telegram-apps/sdk-react';
 import { USE_MOCK } from '../shared/api/client';
+import { hubTicketFromLaunch, isHubTab, readLiveHubPass } from './hubTicket';
 
 /** sessionStorage key the SDK caches the launch params under (`tapps/` prefix). */
 const LP_STORAGE_KEY = 'tapps/launchParams';
@@ -136,18 +145,47 @@ function isEmbedded(): boolean {
  * runtime itself and cannot be faked into hiding the app from a real user.
  */
 
+/** The three ways this page can be launched. */
+export type LaunchMode = 'telegram' | 'hub' | 'outside';
+
 /**
- * True only for a plain browser with no trace of Telegram whatsoever.
- * Mock mode and the dev initData harness are never "outside": browser preview
- * must keep running the full app exactly as before.
+ * Which way in are we on? Evaluate ONCE at boot, before bootstrapTelegram().
+ *
+ * The order is the order of evidence strength:
+ *  1. mock / initData harness — browser preview keeps running the full app;
+ *  2. strong Telegram traits (launch params, injected client bridge, tgWebApp
+ *     trace) — only a real client produces those, and they win over everything;
+ *  3. the shell: a ticket in the launch URL, the pass it was already traded for,
+ *     or the mark left on the tab by either of them (after a reload the ticket
+ *     is long gone — it is single use — and an expired pass is deleted on the
+ *     spot, so without the mark a shell tab whose day ran out would read as a
+ *     stranger's browser and get the "open in Telegram" page, a dead end inside
+ *     the shell's own window; see lib/hubTicket.ts, TAB_KEY);
+ *  4. being framed — the WEAKEST trait (any embed at all, and our CSP only lets
+ *     Telegram frame us). It stays AFTER the hub check on purpose: should the
+ *     shell ever embed us in a frame, a ticket must still mean 'hub' and not
+ *     drag in the Telegram mock. With no other evidence it still resolves to
+ *     'telegram' — the old asymmetry, never a false landing page.
+ */
+export function detectLaunchMode(): LaunchMode {
+  try {
+    if (USE_MOCK) return 'telegram';
+    if (import.meta.env.VITE_TEST_INITDATA) return 'telegram';
+    purgeMockLaunchCache(); // FIRST — the SDK reads that cache too (see above).
+    if (hasLaunchParams() || hasClientBridge() || hasLaunchTrace()) return 'telegram';
+    if (hubTicketFromLaunch() || readLiveHubPass() || isHubTab()) return 'hub';
+    if (isEmbedded()) return 'telegram';
+    return 'outside';
+  } catch {
+    return 'telegram'; // unexpected — assume we are inside, never hide the app
+  }
+}
+
+/**
+ * True only for a plain browser with no trace of Telegram AND no hub ticket,
+ * pass or tab mark. Mock mode and the dev initData harness are never "outside": browser
+ * preview must keep running the full app exactly as before.
  */
 export function isOutsideTelegram(): boolean {
-  try {
-    if (USE_MOCK) return false;
-    if (import.meta.env.VITE_TEST_INITDATA) return false;
-    purgeMockLaunchCache(); // FIRST — the SDK reads that cache too (see above).
-    return !(hasLaunchParams() || hasLaunchTrace() || hasClientBridge() || isEmbedded());
-  } catch {
-    return false;
-  }
+  return detectLaunchMode() === 'outside';
 }

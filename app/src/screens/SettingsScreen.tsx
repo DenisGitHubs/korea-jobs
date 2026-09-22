@@ -80,6 +80,9 @@ export default function SettingsScreen() {
   const sHousing = useSubscriptionStore((s) => s.requireHousing);
   const sMeals = useSubscriptionStore((s) => s.requireMeals);
   const sNotify = useSubscriptionStore((s) => s.notify);
+  // From /me: may our bot DM this person? null = the server did not say — then the
+  // screen says nothing either (see the note under the toggles below).
+  const allowsWriteToPm = useSubscriptionStore((s) => s.allowsWriteToPm);
   const sDigest = useSubscriptionStore((s) => s.digestEnabled);
   const sCap = useSubscriptionStore((s) => s.notifyDailyCap);
 
@@ -274,6 +277,24 @@ export default function SettingsScreen() {
                   allows_write_to_pm, not by the notify subscription flag. */}
               <Switch checked={digest} onChange={setDigest} label={t('settings.digest')} />
             </div>
+            {/* The honest line under BOTH toggles, shown only when the server said
+                plainly that our bot may not write to this person (someone who came
+                through the AppHub Studio door has never met the bot). Without it the
+                toggles say "on" and nothing ever arrives — no message, no error and
+                no end to it.
+                🔴 The toggles above stay ENABLED and visible: subscribing before
+                opening the bot is allowed and the subscription is kept. The note only
+                stops the screen from promising delivery it cannot make, and the link
+                is the single action that changes the answer — writing to the bot.
+                An UNKNOWN flag (backend has not shipped it) shows nothing at all. */}
+            {allowsWriteToPm === false ? (
+              <div className="row row--stack pmnote">
+                <div className="row__sub row__sub--block">{t('settings.notifyBotHint')}</div>
+                <button type="button" className="pmnote__cta" onClick={() => openSupportChat(isReal)}>
+                  {t('settings.notifyBotCta')}
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
 

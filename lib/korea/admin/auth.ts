@@ -10,8 +10,16 @@
 //
 // No proof => not admin. The telegram_id is taken ONLY from verified initData
 // (never from the body), same barrier as every user endpoint.
+//
+// 🔴 THERE IS NO ADMIN DOOR BY HUB TICKET (23.09.2026). Since authenticate() also accepts
+// `Authorization: kjs <pass>` (the AppHub Studio shell), proof (b) would silently have
+// started granting admin to a shell visitor too. It does not, and the reason is the risk
+// the owner ACCEPTED on that door: a ticket is a bearer token with no jti store, so a copy
+// taken inside its 60 seconds buys a day-long pass — and a day of ORDINARY access is a very
+// different thing from a day of ADMIN access. Admin from the shell is therefore refused
+// here rather than anywhere deeper: one line to lift the day the owner asks for it.
 
-import { type ReqLike, bearerToken, constantTimeEquals } from '../core/http.js';
+import { type ReqLike, bearerToken, constantTimeEquals, hubSessionToken } from '../core/http.js';
 import { authenticate, type AuthedUser } from '../core/context.js';
 import { getSql } from '../core/db.js';
 
@@ -91,6 +99,8 @@ export function isAdminBearer(req: ReqLike): boolean {
 /** Resolve admin status for a request (bearer OR admin initData user). */
 export async function requireAdmin(req: ReqLike): Promise<AdminResult> {
   if (isAdminBearer(req)) return { ok: true, via: 'bearer' };
+  // A shell pass proves WHO you are, not that you may moderate from there (see the header).
+  if (hubSessionToken(req)) return { ok: false };
   const auth = await authenticate(req);
   // Recognise admins by the SAME gate the bot trusts: env ADMIN_TELEGRAM_IDS ∪ users.role='admin'.
   // isAdminTelegram is FAIL-CLOSED — a role-lookup DB error resolves to false (→ caller 401),

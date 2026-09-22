@@ -78,12 +78,27 @@ describe('sendError — envelope + trace id', () => {
 });
 
 describe('sendError — expected errors stay quiet (no stack)', () => {
+  // 🔴 THE TABLE IS THE WHOLE VOCABULARY MINUS `internal`, and the test right below holds
+  // it to that. ServiceUnavailable (503) shipped with the second door on 23.09.2026 and
+  // was in neither this table nor sendError's own doc comment — so the newest code in the
+  // project was the one code nobody had ever run through here (Censor, fix №11).
   const cases: Array<[ApiErrorCode, number]> = [
     [ApiErrorCode.Unauthorized, 401],
     [ApiErrorCode.NotFound, 404],
+    [ApiErrorCode.PayloadTooLarge, 413],
     [ApiErrorCode.RateLimited, 429],
     [ApiErrorCode.BadRequest, 400],
+    [ApiErrorCode.ServiceUnavailable, 503],
   ];
+
+  it('🔴 the table covers every ApiErrorCode except `internal` — a new code cannot slip past', () => {
+    const covered = [...new Set(cases.map(([code]) => String(code)))].sort();
+    const expected = Object.values(ApiErrorCode)
+      .filter((c) => c !== ApiErrorCode.Internal)
+      .map(String)
+      .sort();
+    expect(covered).toEqual(expected);
+  });
 
   for (const [code, status] of cases) {
     it(`${code} -> ${status}: envelope has errorId, log carries no stack`, () => {

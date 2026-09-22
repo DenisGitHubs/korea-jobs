@@ -415,6 +415,11 @@ export const DEFAULT_ME: Me = {
   // before (the "⚠ Не разобрано" segment stays visible with its RAW_ITEMS fixtures);
   // flip it to true here to exercise the "tab is gone" path locally.
   flags: { hide_unverified: false },
+  // The demo user opened the app from the bot, so the bot may write back — the
+  // same answer the real backend gives that person. Flip it to false here to see
+  // the honest note under the mailing toggles (the state a visitor who arrived
+  // through the AppHub Studio door, and never wrote to the bot, really gets).
+  allows_write_to_pm: true,
   subscription: {
     city_slugs: [],
     region_slugs: [],

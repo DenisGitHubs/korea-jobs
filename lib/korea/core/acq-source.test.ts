@@ -25,12 +25,25 @@ const h = vi.hoisted(() => {
     queries: [] as string[],
     /** When true, every statement rejects (DB blip / table not migrated yet). */
     dbBroken: false,
+    /**
+     * The text of that rejection. A real Postgres message QUOTES what it refused, so this
+     * is how a value that must never be logged is put into the driver's mouth (guard №9,
+     * extended to this file by fix №5 of the third round).
+     */
+    dbError: 'db is down',
+    /**
+     * When true, the CONFIG READER throws instead of falling back. config.ts swallows a DB
+     * blip by design (it reuses the last good cache), so the guard in getAllowedAcqSources
+     * — the one that used to print err.message — cannot be reached through a broken sql
+     * mock alone. Everything else in this file still runs against the REAL reader.
+     */
+    configThrows: false,
   };
   const fakeSql = (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown[]> => {
     const q = strings.join(' ? ').replace(/\s+/g, ' ').trim();
     state.queries.push(q);
     void values;
-    if (state.dbBroken) return Promise.reject(new Error('db is down'));
+    if (state.dbBroken) return Promise.reject(new Error(state.dbError));
     if (q.includes('from config')) {
       return Promise.resolve(
         state.allowed === undefined ? [] : [{ key: 'acq_sources_allowed', value: state.allowed }],
@@ -42,6 +55,20 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock('./db.js', () => ({ getSql: () => h.fakeSql }));
+
+// The REAL config reader, with ONE seam: `configThrows` makes the allow-list read throw.
+// Without it the catch inside getAllowedAcqSources is unreachable from here (config.ts
+// swallows a DB fault on purpose), and the log line it prints would have no guard at all.
+vi.mock('../config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config.js')>();
+  return {
+    ...actual,
+    getConfigStringArray: async (key: string, fallback: string[]): Promise<string[]> => {
+      if (h.state.configThrows) throw new Error(h.state.dbError);
+      return actual.getConfigStringArray(key, fallback);
+    },
+  };
+});
 
 import {
   getAllowedAcqSources,
@@ -55,6 +82,8 @@ beforeEach(() => {
   h.state.allowed = undefined;
   h.state.queries = [];
   h.state.dbBroken = false;
+  h.state.dbError = 'db is down';
+  h.state.configThrows = false;
   __resetConfigForTests();
 });
 
@@ -214,5 +243,49 @@ describe('noteAcqRejectBestEffort — count, never store', () => {
   it('swallows a DB fault — bookkeeping must never block a login', async () => {
     h.state.dbBroken = true;
     await expect(noteAcqRejectBestEffort(h.fakeSql as never)).resolves.toBeUndefined();
+  });
+});
+
+// =======================================================================================
+// FIX №5 OF THE THIRD ROUND (007, minor): GUARD №9 ("the log carries no secrets") REACHES
+// THIS FILE TOO. Both catch blocks here used to print err.message — one of them with the
+// note "the message may quote the statement, never the label". That is a BET on what a
+// driver chooses to quote, taken once per fault, in a log more people read than the
+// database; and these two run on the AUTH path, where the values in flight belong to a
+// person. The fact and the place are all a log needs; the migration state, not a quoted
+// value, is what identifies the cause.
+// =======================================================================================
+describe('the acq log prints the fact, never the driver message (fix №5, guard №9)', () => {
+  /** Exists nowhere else in this file, so a hit in the log is a real hit. */
+  const QUOTED = 'ads_ru1-for-telegram-761543098761';
+
+  it('🔴 a broken allow-list read says so WITHOUT the error text', async () => {
+    h.state.configThrows = true;
+    h.state.dbError = `invalid input value for enum: "${QUOTED}"`;
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(await getAllowedAcqSources()).toEqual([]);
+      const printed = err.mock.calls.flat().map(String).join('\n');
+      expect(printed).toContain('[acq] allow-list read failed');
+      expect(printed).not.toContain(QUOTED);
+      expect(printed).not.toContain('invalid input value');
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it('🔴 a broken reject counter says so WITHOUT the error text', async () => {
+    h.state.dbBroken = true;
+    h.state.dbError = `relation "acq_rejects" does not exist: "${QUOTED}"`;
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await noteAcqRejectBestEffort(h.fakeSql as never);
+      const printed = err.mock.calls.flat().map(String).join('\n');
+      expect(printed).toContain('[acq] reject counter failed');
+      expect(printed).not.toContain(QUOTED);
+      expect(printed).not.toContain('does not exist');
+    } finally {
+      err.mockRestore();
+    }
   });
 });

@@ -211,6 +211,9 @@ export const en: typeof ru = {
     notifyCapHint: 'You can always see the rest in the feed.',
     digest: 'Daily digest',
     digestHint: 'One message a day with new jobs matching your filters.',
+    notifyBotHint:
+      'Important: the bot can only message you after you message it first. Your setting is saved — messages will start once you open the bot.',
+    notifyBotCta: 'Message the bot',
     citiesTitle: 'Cities',
     citiesLead: 'Pick your cities — the feed and alerts come from them. “City not specified” shows listings with no city.',
     saveCities: 'Save',
@@ -276,6 +279,17 @@ export const en: typeof ru = {
     botHint: 'Or message us on Telegram:',
     docs: 'Documents',
     note: 'We collect listings from public sources and do not vet employers — the decision is always yours.',
+  },
+  hub: {
+    down: {
+      title: "The service isn't working right now",
+      lead: "This isn't on you — our service is down. Try again in a minute.",
+      retry: 'Try again',
+    },
+    expired: {
+      title: 'Sign-in expired',
+      lead: 'This sign-in doesn’t work anymore. Go back to AppHub Studio and open “{{app}}” again.',
+    },
   },
   post: {
     title: 'Post a job',

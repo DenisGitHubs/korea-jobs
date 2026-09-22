@@ -466,6 +466,23 @@ a {
   width: 100%;
 }
 
+/* Settings: the note under the mailing toggles, shown only when the server says
+   the bot may not DM this user (allows_write_to_pm = false). No new look — the
+   text is a plain .row__sub and the action reuses the link colour/weight the
+   landing page already uses (.outside__link); only the button reset is local,
+   because a <button> would otherwise arrive with the browser's own chrome. */
+.pmnote__cta {
+  align-self: flex-start;
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--kj-link);
+  cursor: pointer;
+}
+
 /* Settings: "how many messages a day" chips, folded under the mailing toggle.
    Same 0fr↔1fr grid fold as the province list. Kept in the DOM so the fold can
    animate; `visibility: hidden` while folded also drops the chips out of the tab

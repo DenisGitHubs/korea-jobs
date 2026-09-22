@@ -45,6 +45,13 @@ interface SubscriptionState extends SubscriptionValue {
    * segment is off. Additive/optional field — absent === false (segment shown).
    */
   hideUnverified: boolean;
+  /**
+   * `allows_write_to_pm` from /me: may our bot DM this person at all?
+   * THREE states, and the third one matters — `null` = the backend did not say.
+   * Only an explicit `false` puts the honest note under the mailing toggles; an
+   * unknown must never make the app tell someone his subscription is mute.
+   */
+  allowsWriteToPm: boolean | null;
   hydrate: (m: Me) => void;
   apply: (s: Subscription) => void;
   setNotify: (b: boolean) => void;
@@ -152,6 +159,8 @@ export const useSubscriptionStore = create<SubscriptionState>((set) => ({
   revealsLeft: null,
   // Safe default: the segment stays visible unless the server explicitly hides it.
   hideUnverified: false,
+  // Unknown until /me answers — and an unknown shows no note (see the field above).
+  allowsWriteToPm: null,
   hydrate: (m) =>
     set({
       ...fromSubscription(m.subscription),
@@ -167,6 +176,10 @@ export const useSubscriptionStore = create<SubscriptionState>((set) => ({
       revealsLeft: typeof m.reveals_left === 'number' ? m.reveals_left : null,
       // Additive flag: absent object / absent key === off.
       hideUnverified: m.flags?.hide_unverified === true,
+      // A boolean is taken as it comes; anything else (absent, wrong shape) stays
+      // UNKNOWN — `=== false` would turn "the server said nothing" into "the bot
+      // cannot write to you", which is a different statement entirely.
+      allowsWriteToPm: typeof m.allows_write_to_pm === 'boolean' ? m.allows_write_to_pm : null,
       loaded: true,
     }),
   apply: (s) =>

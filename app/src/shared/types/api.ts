@@ -285,6 +285,19 @@ export interface MeFlags {
   hide_unverified?: boolean;
 }
 
+/**
+ * POST /api/auth/hub — the second way in. The AppHub Studio shell hands a
+ * short-lived signed ticket in the launch URL; it is traded ONCE for our own
+ * session pass, which every later request carries as `Authorization: kjs
+ * <token>`. The Telegram way in (`Authorization: tma <initData>`) is untouched.
+ */
+export interface HubSession {
+  /** Opaque pass string. Never logged, never shown, never put in a URL. */
+  token: string;
+  /** Unix seconds — when the pass stops being accepted. */
+  expires_at: number;
+}
+
 export interface Me {
   public_id: string;
   lang: string;
@@ -309,6 +322,20 @@ export interface Me {
    * gracefully — the client hides the "reveals left" hint when it is absent.
    */
   reveals_left?: number;
+  /**
+   * May our bot send this person a direct message? A fact about HIMSELF, not
+   * about anyone else: Telegram only lets a bot write to someone who wrote to
+   * it first, and a visitor arriving through the AppHub Studio door has never
+   * met our bot at all. Delivery already filters on this server-side — without
+   * it on the screen, the mailing toggles would keep saying "on" while nothing
+   * whatsoever arrives, forever and with no error to show for it.
+   *
+   * OPTIONAL on purpose, with three meanings, not two: `true` may write,
+   * `false` may not (the honest note appears under the toggles), and ABSENT =
+   * unknown — a backend that has not shipped the field yet must not make the
+   * app accuse itself of being broken. Never silently read as `false`.
+   */
+  allows_write_to_pm?: boolean;
 }
 
 /** One referral tier's counters (invited people + points earned from them). */

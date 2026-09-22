@@ -10,6 +10,11 @@
 //
 // Also carries `flags` — server-side switches the client needs to render correctly (currently only
 // hide_unverified, the «Не проверено» kill-switch; enforcement itself lives in raw/read.ts).
+//
+// …and, since 23.09.2026, `allows_write_to_pm`: whether our bot is ALLOWED to write to this person
+// at all. Mail delivery has always been gated on it server-side; the screen could not see it, so
+// somebody whose answer is "no" (every guest of the AppHub Studio shell, by construction) could
+// turn notifications on and never learn that nothing would ever be sent. See the field below.
 
 import { getSql } from '../core/db.js';
 import { type ReqLike, type ResLike, send, sendError } from '../core/http.js';
@@ -161,6 +166,20 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
       points_total: pointsTotal,
       reveals_left: revealsLeft,
       onboarded,
+      // 🔴 CAN OUR BOT WRITE TO THIS PERSON AT ALL (users.allows_write_to_pm). Every piece
+      // of mail we send is gated on it — notify/run.ts, digest/run.ts and notify/author.ts
+      // all filter on `u.allows_write_to_pm` — but until 23.09.2026 the flag never left the
+      // server, so the settings screen drew the notify/digest toggles unconditionally. A
+      // person for whom it is false switched notifications ON, the subscription saved
+      // cleanly, and then NOT ONE letter ever arrived, with no error anywhere.
+      // That was a rare anomaly while the only way in was Telegram. It is the DEFAULT for
+      // every guest of the AppHub Studio shell: a ticket cannot carry this permission (it
+      // exists only inside Telegram's signature issued to a BOT), so the column keeps its
+      // honest default — false, "we have not asked yet" — for everyone who came through
+      // door 2 and never met the bot. It is a fact about the CALLER THEMSELVES and nobody
+      // else, and the screen needs it to say so out loud instead of showing a switch that
+      // cannot work.
+      allows_write_to_pm: user.allowsWriteToPm === true,
       flags: { hide_unverified: hideUnverified },
       subscription: {
         city_slugs: citySlugs,

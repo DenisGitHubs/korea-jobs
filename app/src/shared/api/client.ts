@@ -4,6 +4,7 @@
  * server so the whole UI runs in a plain browser with no backend.
  */
 import { authHeader } from '../auth/telegram';
+import { hubSessionLost } from '../../lib/hubGate';
 import type {
   AdBumpResult,
   AdCreateResult,
@@ -11,6 +12,7 @@ import type {
   AdModerateResult,
   City,
   CooperationInput,
+  HubSession,
   Me,
   Page,
   RawRevealView,
@@ -86,6 +88,14 @@ async function request<T>(method: Method, path: string, opts?: { body?: unknown 
     } catch {
       /* non-JSON error body */
     }
+    // "Who are you?" is answered in exactly ONE place — here, the only fetch in
+    // the app — and not in twenty screens. Inside the AppHub Studio shell a 401
+    // is terminal: the day-long pass is dead, the ticket was single use and the
+    // fragment is wiped, so there is nothing left to retry with and every next
+    // request would 401 too. The boot code subscribes in 'hub' mode ONLY (see
+    // lib/hubGate.ts) and swaps the app for the honest "sign-in expired" screen;
+    // in Telegram nobody is subscribed and this line does nothing at all.
+    if (res.status === 401) hubSessionLost();
     throw new ApiError(res.status, code);
   }
   return (await res.json()) as T;
@@ -116,6 +126,17 @@ function vacancyQuery(q: VacancyQuery): string {
 }
 
 export const api = {
+  /**
+   * POST /auth/hub — trade the AppHub Studio launch ticket for our own session
+   * pass. The only call made before the app mounts and the only one that
+   * carries no identity of its own; the ticket goes in the body and nowhere
+   * else. A refusal is a plain ApiError and the STATUS matters: the caller
+   * tells "our service is down, try again" (503/5xx/no network) apart from
+   * "this sign-in is spent, get a new one from the shell" (4xx) — see
+   * lib/hubGate.ts. Neither of them is the "open in Telegram" landing page.
+   */
+  authHub: (ticket: string) => request<HubSession>('POST', '/auth/hub', { body: { hub_ticket: ticket } }),
+
   /** GET /cities — 30 seed cities, grouped by region on the client. */
   cities: () => request<City[]>('GET', '/cities'),
 

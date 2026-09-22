@@ -14,6 +14,12 @@
 // Auth per route group (see architecture.md):
 //   /api/ingest, /api/sources                         -> Bearer INGEST_SECRET
 //   /api/cities|vacancies|me|subscription|terms|ads|cooperation|referral -> tma <initData>
+//                                                        …or kjs <pass> (the AppHub Studio
+//                                                        shell; both doors resolve in
+//                                                        core/context.ts authenticate())
+//   /api/auth/hub                                     -> PUBLIC: trades a hub ticket for
+//                                                        a kjs pass (the ticket's Ed25519
+//                                                        signature is the guard)
 //   /api/vacancies/:id/takedown, /api/ads/:id/moderate-> admin (CRON_SECRET | ADMIN_TELEGRAM_IDS)
 //   /api/admin/erase-user, /api/admin/takedown-contact-> admin (CRON_SECRET | ADMIN_TELEGRAM_IDS)
 //   /api/bot/webhook                                  -> X-Telegram-Bot-Api-Secret-Token
@@ -62,6 +68,7 @@ import { contactTakedown } from '../lib/korea/admin/takedown.js';
 import { referralGet } from '../lib/korea/referral/read.js';
 import { sharePrepare } from '../lib/korea/share/prepare.js';
 import { mediaGet } from '../lib/korea/media/read.js';
+import { authHubPost } from '../lib/korea/auth/hub.js';
 
 type Handler = (req: ReqLike, res: ResLike) => Promise<void> | void;
 
@@ -80,6 +87,12 @@ const ROUTES: Route[] = [
   // minutes keep it awake permanently (the Aug-2026 outage). The rest stay for a manual run.
   { segments: ['cron', 'tick'], handler: cronTick },
   { segments: ['cron', 'parse'], handler: cronParse },
+  // The SECOND DOOR IN — PUBLIC BY NECESSITY, like any door: the caller has no credential
+  // of ours yet, that is what it came for. It trades an AppHub Studio ticket (60 s, signed
+  // by the hub's Ed25519 key) for our own session pass, which every later request carries
+  // as `Authorization: kjs <token>`. The hub's signature IS the guard; a refusal is one and
+  // the same 401 whatever tripped it, and a missing hub key answers 503, not 401.
+  { segments: ['auth', 'hub'], handler: authHubPost },
   // Mini app (Authorization: tma <initData>)
   { segments: ['cities'], handler: citiesGet },
   // Public aggregate scale for the "N вакансий из M чатов" strip (tma auth, no scope).

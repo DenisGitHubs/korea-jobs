@@ -172,4 +172,30 @@ describe('requireAdmin — unified admin gate (env ∪ DB role), fail-closed', (
     expect(res.ok).toBe(false);
     expect(calls.length).toBe(1); // the failing role lookup was attempted
   });
+
+  it('🔴 a HUB SHELL pass is never an admin proof, even for a recognised admin id', async () => {
+    // authenticate() accepts `kjs <pass>` since 23.09.2026, so without the guard inside
+    // requireAdmin this would quietly grant admin from inside the AppHub Studio shell —
+    // where a ticket copied inside its 60 s window buys a DAY of it (the accepted replay
+    // risk, core/hub-ticket.ts invariant 10). Delete the guard and this reddens.
+    process.env.ADMIN_TELEGRAM_IDS = '111'; // as admin as an id gets
+    vi.mocked(authenticate).mockResolvedValue(authedAs('111'));
+    const { fn, calls } = makeSql(true);
+    vi.mocked(getSql).mockReturnValue(fn);
+
+    const res = await requireAdmin(makeReq('kjs 1.eyJzdWIiOiIxMTEifQ.signature'));
+
+    expect(res.ok).toBe(false);
+    // Refused before identity is even resolved: no initData check, no DB touch.
+    expect(vi.mocked(authenticate)).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('the Bearer proof still works — it is owner tooling, not a person in a shell', async () => {
+    process.env.CRON_SECRET = 'owner-tool-secret';
+    const { fn } = makeSql(false);
+    vi.mocked(getSql).mockReturnValue(fn);
+
+    expect((await requireAdmin(makeReq('Bearer owner-tool-secret'))).ok).toBe(true);
+  });
 });

@@ -14,6 +14,11 @@ export const ApiErrorCode = {
    *  uploading a batch: 413 means "split it and send both halves", 400 means "do not resend". */
   PayloadTooLarge: 'payload_too_large',
   RateLimited: 'rate_limited',
+  /** The SERVER is not set up for this call — NOT "your request is wrong" and NOT "your
+   *  credential is bad". Where a missing/unusable setting would otherwise masquerade as a
+   *  rejected credential, a 401 sends a person to reinstall the app over OUR typo; 503 says
+   *  "not us to fix, come back later" (first user: POST /api/auth/hub with no hub key). */
+  ServiceUnavailable: 'service_unavailable',
   Internal: 'internal',
 } as const;
 
@@ -37,6 +42,8 @@ export function httpStatusFor(code: ApiErrorCode): number {
       return 413;
     case ApiErrorCode.RateLimited:
       return 429;
+    case ApiErrorCode.ServiceUnavailable:
+      return 503;
     case ApiErrorCode.Internal:
     default:
       return 500;

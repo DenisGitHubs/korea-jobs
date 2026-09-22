@@ -210,6 +210,14 @@ export const ru = {
     notifyCapHint: 'Остальное всегда можно посмотреть в ленте.',
     digest: 'Дайджест раз в день',
     digestHint: 'Одно сообщение в день с новыми вакансиями по твоим фильтрам.',
+    // Shown UNDER both toggles above, and only when the server says the bot may
+    // not write to this person (allows_write_to_pm = false — a gift from the
+    // AppHub Studio door: a visitor from the shell has never met our bot). The
+    // toggles stay on and stay enabled: subscribing ahead of time is allowed,
+    // being misled about it is not.
+    notifyBotHint:
+      'Важно: бот сможет писать тебе, только когда ты сам напишешь ему первым. Подписка сохранится — сообщения пойдут, как только откроешь бота.',
+    notifyBotCta: 'Написать боту',
     citiesTitle: 'Города',
     citiesLead: 'Выбери города — лента и уведомления будут из них. «Город не указан» показывает объявления без города.',
     saveCities: 'Сохранить',
@@ -275,6 +283,23 @@ export const ru = {
     botHint: 'Или напиши нам в Telegram:',
     docs: 'Документы',
     note: 'Мы собираем объявления из открытых источников и не проверяем работодателей — решение всегда остаётся за тобой.',
+  },
+  // The two AppHub Studio doors that did NOT open. Both replace the app itself,
+  // and neither is the `outside` page above: "Открыть в Telegram" is no advice
+  // at all for someone sitting inside the shell's own window.
+  hub: {
+    // Our side is broken (503 / 5xx / no network) — trying again can work.
+    down: {
+      title: 'Сервис временно не работает',
+      lead: 'Это не твоя вина — у нас не работает сервис. Попробуй ещё раз через минуту.',
+      retry: 'Попробовать снова',
+    },
+    // Terminal: the pass or the ticket is spent. ONE cure is named, and the
+    // button under it is `common.close` — no second key for the same word.
+    expired: {
+      title: 'Вход устарел',
+      lead: 'Этот вход больше не работает. Вернись в AppHub Studio и открой «{{app}}» заново.',
+    },
   },
   post: {
     title: 'Разместить вакансию',
