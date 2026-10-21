@@ -176,7 +176,12 @@ export const en: typeof ru = {
     meals: 'Meals',
     notStated: 'Not stated',
     mayBeTaken: 'This posting may be outdated — the spot could already be taken.',
-    fromUser: 'From a user',
+    // Origin mark: this ad was left through OUR form, by its own author. Worn by
+    // EVERY such ad, for as long as it lives — so it can never be read as a perk.
+    // A different thing from `adBadge` below: that one is PAID advertising.
+    directBadge: 'From the author',
+    directNote:
+      'The author left this ad and their contact with us themselves. We do not check who they are or whether the ad is true.',
     repost: 'Repost',
     // Paid placement label (mirrors ru «Реклама»); same wording as partners.ads.badge.
     adBadge: 'Ad',
@@ -267,6 +272,10 @@ export const en: typeof ru = {
   rules: {
     title: 'Program Rules',
   },
+  // The third published document, next to Privacy and the Program Rules.
+  placementRules: {
+    title: 'Posting Rules',
+  },
   // The plain-browser page: the app was opened outside Telegram.
   outside: {
     sub: 'A Telegram Mini App',
@@ -353,7 +362,14 @@ export const en: typeof ru = {
       other: 'Other',
     },
     summaryTitle: 'Review your listing',
-    consent: 'I confirm the information is correct and accept the posting terms. I am responsible for the content of this listing.',
+    consent:
+      'I confirm that the information is correct and accept the <rules>Posting Rules</rules>. I am responsible for what the listing says.',
+    noFeeCheck: 'I do not charge workers any fees upfront — for a place, a visa or paperwork',
+    noFeeHint: 'If this is not true, we will remove the listing.',
+    // Shown on the ONE refusal the server makes for a missing tick (400,
+    // no_worker_fee_confirmation_required). A generic "check your connection" would
+    // send the author to fix his internet instead of ticking the box in front of him.
+    noFeeRequired: 'Tick the box about charging workers — we cannot publish the listing without it.',
     approvedTitle: 'Published',
     approvedText: 'Your vacancy is already in the feed.',
     pendingTitle: 'Sent for review',
@@ -427,12 +443,17 @@ export const en: typeof ru = {
     jobs: {
       title: 'Job listings',
       audience: 'For employers and staffing agencies',
-      body: "Your listing goes into the shared feed among other job posts — seen by workers looking for jobs in Korea. We'll agree on the format and timing individually.",
-      payNote:
-        "You pay for visibility, not results: a fixed spot in the feed for a chosen period. We don't guarantee responses or hires.",
-      verifyNote:
-        "Paying for a placement doesn't mean we've checked the employer or the job conditions. We only verify who places the ad.",
-      agencyNote: "For agencies: please provide your registration and confirm you don't charge workers any fees.",
+      body: 'Your listing goes into the shared feed among other job posts — seen by workers looking for jobs in Korea.',
+      // The limit of the promise lives INSIDE this string, as its second sentence:
+      // a separate key could be split off and demoted to the fine print.
+      featuredNote:
+        'Your listing stays at the top of the feed for a week, with a “From the author” badge. We don\'t promise responses or hires.',
+      featuredTerms:
+        'We count the week in days the listing is shown. If the service was down, write to us and we will extend it by the same time. If a listing breaks the posting rules, we may remove it or its badge, and the week is not extended.',
+      // Narrow on purpose, word for word with `post.noFeeCheck` and section 5 of the
+      // placement rules: the promise may not be wider than the confirmation given.
+      agencyNote:
+        'When you post, you confirm that you do not charge workers any fees upfront — for a place, a visa or paperwork. If this is not true, we remove the listing.',
     },
     promo: {
       title: 'Promo codes for points',
@@ -447,8 +468,7 @@ export const en: typeof ru = {
       audience: 'Transfers, insurance and other services for migrant workers',
       badge: 'Ad',
       body: "Money transfers, insurance, and other useful services for people already in Korea — we'll list them for you.",
-      disclaimer:
-        "Advertisement. Terms and delivery are the partner's responsibility — we are not a party to the deal.",
+      disclaimer: "Terms and delivery are the partner's responsibility — we are not a party to the deal.",
     },
     form: {
       title: 'Tell us about your offer',
@@ -464,7 +484,7 @@ export const en: typeof ru = {
       status:
         "We are an information platform. We are not an employer, staffing agency, or employment intermediary: we don't match candidates and don't take part in negotiations or hiring paperwork.",
       free: 'The service is free for job seekers — we never take money from workers.',
-      adsMark: 'All paid placements on the platform are labeled as an ad.',
+      adsMark: 'All advertising on the platform is labeled as an ad.',
     },
   },
   work: {

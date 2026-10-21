@@ -38,6 +38,13 @@
 // plus a tight budget equals "maintenance never runs", and maintenance here includes retention —
 // deleting what we promised to delete. So once an hour (the tick that lands in the first quarter)
 // the order flips and maintenance goes first. Stateless, deterministic, no extra storage.
+//
+// ── THE TAIL STEP ────────────────────────────────────────────────────────────────────────────
+// The silence watchdog (watchdog/run.ts) runs LAST in both rotations and is pure observation: it
+// notices that the parser or the collector has been silent for hours and DMs the admin. It is here
+// and nowhere else because this is the only thing the scheduler calls — the owner's rule is "no new
+// Vercel entry points, no second schedule". Its own header states plainly what it cannot see (a
+// database outage, or the cron not being called at all — in both cases this file never runs).
 
 import { runParse } from '../parser/run.js';
 import { runNotify } from '../notify/run.js';
@@ -45,6 +52,7 @@ import { runDigest } from '../digest/run.js';
 import { runCleanup } from '../cleanup/run.js';
 import { runReferralConfirm } from '../referral/confirm.js';
 import { runScheduledPosts } from '../scheduled/run.js';
+import { runWatchdog } from '../watchdog/run.js';
 
 /** Wall-clock ceiling for ONE combined pass, well under Vercel's 60s maxDuration. */
 export const TICK_TIME_BUDGET_MS = 45_000;
@@ -58,7 +66,14 @@ export const TICK_TIME_BUDGET_MS = 45_000;
  */
 export const PARSE_MAX_PASSES = 3;
 
-export type TickStepName = 'parse' | 'notify' | 'scheduled' | 'digest' | 'cleanup' | 'referral-confirm';
+export type TickStepName =
+  | 'parse'
+  | 'notify'
+  | 'scheduled'
+  | 'digest'
+  | 'cleanup'
+  | 'referral-confirm'
+  | 'watchdog';
 
 /**
  * Time a step is allowed to need before it may be STARTED. Realistic, not worst-case (see the
@@ -71,6 +86,7 @@ export const STEP_RESERVE_MS: Record<TickStepName, number> = {
   digest: 5_000, // self-throttled: outside the Seoul morning it is two config reads
   cleanup: 20_000, // a dozen retention statements + the inactive-erase tail
   'referral-confirm': 10_000,
+  watchdog: 5_000, // three aggregate reads + at most two DMs
 };
 
 /** What users feel — the pipeline that turns a Telegram message into a card and a DM. */
@@ -82,6 +98,13 @@ export const MAINTENANCE_STEPS: readonly TickStepName[] = [
   'cleanup',
   'referral-confirm',
 ];
+/**
+ * Steps that always run LAST, in BOTH rotations — observation, not work. The silence watchdog
+ * belongs here: it only reads timestamps, it must never take a slot from the real work, and it is
+ * the one step whose whole job is to notice that an earlier step has not run for a day. Putting it
+ * in the rotation would once an hour have it look at the pipeline BEFORE this tick's parse ran.
+ */
+export const TAIL_STEPS: readonly TickStepName[] = ['watchdog'];
 
 /**
  * True on the tick that lands in the first quarter of an hour. With a 15-minute schedule that is
@@ -94,9 +117,11 @@ export function maintenanceFirst(now: Date): boolean {
 
 /** The order this tick will attempt. Deterministic from the clock, no stored state. */
 export function stepOrder(now: Date): TickStepName[] {
-  return maintenanceFirst(now)
+  const core = maintenanceFirst(now)
     ? [...MAINTENANCE_STEPS, ...DATA_STEPS]
     : [...DATA_STEPS, ...MAINTENANCE_STEPS];
+  // Tail steps are appended in BOTH rotations — see TAIL_STEPS.
+  return [...core, ...TAIL_STEPS];
 }
 
 /** Injectable side-effects so the pass is unit-testable without a clock or a database. */
@@ -114,6 +139,7 @@ export const REAL_DEPS: TickDeps = {
     digest: runDigest,
     cleanup: runCleanup,
     'referral-confirm': runReferralConfirm,
+    watchdog: runWatchdog,
   },
 };
 

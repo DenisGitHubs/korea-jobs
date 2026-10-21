@@ -21,6 +21,7 @@ import { getConfigNumber } from '../config.js';
 import { sendMessage } from '../bot/telegram.js';
 import { adminRecipients } from '../admin/auth.js';
 import { recordModerationExample, decideAdModeration } from './moderation.js';
+import { grantFeaturedOnApproval } from './featured.js';
 import { notifyAuthorAdDecision } from '../notify/author.js';
 import { parseAdInput, adModText, UUID_RE, type AdBody } from './input.js';
 import { buildCityMatcher, detectCitySlugs, detectRegionSlugs } from '../cities/detect.js';
@@ -122,6 +123,16 @@ export async function adsCreate(req: ReqLike, res: ResLike): Promise<void> {
   if (!parsed.ok) return sendError(res, ApiErrorCode.BadRequest, parsed.error);
   const f = parsed.fields;
 
+  // 🔴 «Я не беру плату с работников» (owner 2026-10-21, draft_0035). A client-side checkbox is not
+  // a confirmation: it can be bypassed by posting straight to the API, and in a dispute there would
+  // be nothing to show — and the point of asking is to HAVE a ground for removing the ad of an
+  // agency that charges workers. So an ad WITHOUT the confirmation is REFUSED here, never stored as
+  // "false", and the refusal carries its OWN detail so the app can tell it apart from an ordinary
+  // form error. Checked BEFORE the classifier runs: a missing confirmation spends no model tokens.
+  if (!f.noWorkerFee) {
+    return sendError(res, ApiErrorCode.BadRequest, 'no_worker_fee_confirmation_required');
+  }
+
   // Moderation text (title + description + extras). This is DATA, never an instruction.
   const modText = adModText(f.title, f.description, f.salaryText, f.schedule, f.housingTerms, f.mealsInfo);
   // Deterministic ad-spam backstop + AI classifier + config thresholds — the SINGLE decision,
@@ -148,7 +159,7 @@ export async function adsCreate(req: ReqLike, res: ResLike): Promise<void> {
         author_user_id, city_id, city_ids, city_text, region_slug, region_slugs, work_type, visa_types, placement_fee,
         has_housing, has_meals, salary_text, title, description, contact_raw, contact_kind,
         housing_terms, meals_info, schedule, status, moderated_at, reject_reason, ai_confidence,
-        expires_at, notify_pending
+        expires_at, notify_pending, no_worker_fee_confirmed_at
       ) values (
         ${auth.user.id}::uuid, ${cityId}::uuid, ${cityIds}::uuid[], ${cityText}, ${regionSlug}, ${regionSlugs}::text[], ${f.workType}::work_type,
         ${f.visaTypes}::visa_type[], ${f.placementFee}::placement_fee,
@@ -158,10 +169,26 @@ export async function adsCreate(req: ReqLike, res: ResLike): Promise<void> {
         case when ${status} = 'pending' then null else now() end,
         ${rejectReason}, ${aiConfidence},
         case when ${status} = 'approved' then now() + make_interval(days => ${ttl}) else null end,
-        case when ${status} = 'approved' then true else false end
+        case when ${status} = 'approved' then true else false end,
+        -- «Я не беру плату с работников» (draft_0035): the SERVER's record of the confirmation, at
+        -- the moment it accepted the ad. The guard above already refused a create without it; the
+        -- flag is bound here anyway so this INSERT states the invariant itself and cannot start
+        -- writing a bare now() for an unconfirmed ad if that guard is ever moved.
+        case when ${f.noWorkerFee} then now() else null end
       )
       returning id`) as unknown as { id: string }[];
     const id = rows[0]?.id;
+
+    // FEATURED (owner 2026-10-21): an ad placed THROUGH OUR FORM rides the top of the feed for a
+    // free week once it is approved. The WHOLE rule — the deadline, "once per ad", "one live per
+    // author" — lives in ads/featured.ts, so this route cannot drift from the admin-approve /
+    // edit / unarchive routes that call the SAME function. Best-effort by contract: it never
+    // throws, so the perk can never cost us the ad.
+    // modText is the ad's OWN text (title + description + extras) — the same string the moderation
+    // verdict was made on, and what the gender screening inside the grant reads.
+    if (id && status === 'approved') {
+      await grantFeaturedOnApproval(sql, id, modText);
+    }
 
     // Record the automatic decision for learning (only the clear-cut auto outcomes).
     if (id && status !== 'pending') {
@@ -304,10 +331,21 @@ export async function moderateAd(
   const r = rows[0];
   if (!r) return { found: false };
 
-  // Same example context as adsCreate (manual decisions are the most valuable few-shot).
+  // The ad's own text, assembled from the row the UPDATE returned. Used BOTH as the learning
+  // example below AND as what the featured grant screens for a gender restriction — one string, so
+  // the two cannot disagree about what this ad says.
   const text = [r.title, r.description, r.salary_text, r.schedule, r.housing_terms, r.meals_info]
     .filter(Boolean)
     .join('\n');
+
+  // FEATURED (owner 2026-10-21): a manual approve publishes a FORM ad just like an auto-approve,
+  // so it earns the same free week — through the SAME shared grant (ads/featured.ts), which also
+  // holds the one-live-per-author cap and the gender gate. A reject grants nothing.
+  if (status === 'approved') {
+    await grantFeaturedOnApproval(sql, adId, text);
+  }
+
+  // Same example context as adsCreate (manual decisions are the most valuable few-shot).
   await recordModerationExample(text, status === 'approved' ? 'approved' : 'rejected', action === 'reject' ? reason : null);
   // The ad was 'pending' (guarded in the UPDATE) and just became approved/rejected by an admin →
   // a REAL transition, so tell its author (best-effort). We pass the SAME reject_reason we stored

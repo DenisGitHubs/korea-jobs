@@ -8,10 +8,11 @@ import { Field } from '../components/Field';
 import { Sheet } from '../components/Sheet';
 import { EmptyState } from '../components/EmptyState';
 import { IconBriefcase, IconMegaphone, IconSent, IconTicketPercent } from '../components/icons/StateIcons';
+import { PLACEMENT_RULES_PATH } from '../content/legal/paths';
 
 /**
  * Non-tappable partnership card: icon disc + title/audience, a body paragraph,
- * optional small notes, and a neutral "let's discuss" chip. A plain `<div>` on
+ * optional small notes, and an OPTIONAL neutral "let's discuss" chip. A plain `<div>` on
  * purpose — the whole card is not a control; the only interactive element is the
  * optional inline link (promo → referral).
  */
@@ -28,7 +29,7 @@ function PartnerCard({
   audience: string;
   headBadge?: string;
   children: ReactNode;
-  footLabel: string;
+  footLabel?: string;
 }) {
   return (
     <div className="partner-card">
@@ -43,12 +44,45 @@ function PartnerCard({
         {headBadge ? <span className="badge badge--source">{headBadge}</span> : null}
       </div>
       {children}
-      <div className="partner-card__foot">
-        <span className="badge badge--source">{footLabel}</span>
-      </div>
+      {/* The chip is optional: on the vacancies card there is no format left to
+          discuss — the week at the top is the same for everyone. */}
+      {footLabel ? (
+        <div className="partner-card__foot">
+          <span className="badge badge--source">{footLabel}</span>
+        </div>
+      ) : null}
     </div>
   );
 }
+
+/**
+ * One phrase of a note turned into a link to the Placement Rules. The phrase is the
+ * document's OWN title, lowercased — i.e. the exact words already standing in the
+ * sentence, never a label invented here. If the sentence stops containing the phrase
+ * (the text gets rewritten) the note falls back to PLAIN TEXT — it still reads
+ * correctly, and the guard goes red instead of the screen showing broken markup.
+ */
+function NoteWithRules({ text, phrase, onOpen }: { text: string; phrase: string; onOpen: () => void }) {
+  const at = text.toLowerCase().indexOf(phrase.toLowerCase());
+  if (at < 0) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, at)}
+      <button type="button" className="inline-link" onClick={onOpen}>
+        {text.slice(at, at + phrase.length)}
+      </button>
+      {text.slice(at + phrase.length)}
+    </>
+  );
+}
+
+/**
+ * The "Промокоды за баллы" card is PARKED (owner, 21.10.2026): points and the
+ * referral programme stay exactly as they are — only this partnership offer leaves
+ * the screen. Flip to `true` to bring the card back: one line, and the dictionary
+ * keys (`partners.promo.*`) are left in place, untouched.
+ */
+const SHOW_PROMO_CARD: boolean = false;
 
 export default function PartnersScreen() {
   const { t } = useTranslation();
@@ -119,30 +153,38 @@ export default function PartnersScreen() {
             icon={<IconBriefcase />}
             title={t('partners.jobs.title')}
             audience={t('partners.jobs.audience')}
-            footLabel={t('partners.discussFormat')}
           >
             <p className="partner-card__body">{t('partners.jobs.body')}</p>
-            <p className="partner-card__note">{t('partners.jobs.payNote')}</p>
+            <p className="partner-card__note">{t('partners.jobs.featuredNote')}</p>
+            <p className="partner-card__note">
+              <NoteWithRules
+                text={t('partners.jobs.featuredTerms')}
+                phrase={t('placementRules.title')}
+                onOpen={() => navigate(PLACEMENT_RULES_PATH)}
+              />
+            </p>
             <p className="partner-card__note">{t('partners.jobs.agencyNote')}</p>
           </PartnerCard>
 
-          <PartnerCard
-            icon={<IconTicketPercent />}
-            title={t('partners.promo.title')}
-            audience={t('partners.promo.audience')}
-            footLabel={t('partners.discussFormat')}
-          >
-            <p className="partner-card__body">{t('partners.promo.body')}</p>
-            <p className="partner-card__body">{t('partners.promo.benefit')}</p>
-            <p className="partner-card__note">{t('partners.promo.pointsNote')}</p>
-            {/* Compact nav row (Settings recipe) — where the points come from. */}
-            <button className="partner-card__link" onClick={() => navigate('/referral')}>
-              <span className="partner-card__link-label">{t('partners.promo.link')}</span>
-              <span className="row__chevron" aria-hidden>
-                ›
-              </span>
-            </button>
-          </PartnerCard>
+          {SHOW_PROMO_CARD ? (
+            <PartnerCard
+              icon={<IconTicketPercent />}
+              title={t('partners.promo.title')}
+              audience={t('partners.promo.audience')}
+              footLabel={t('partners.discussFormat')}
+            >
+              <p className="partner-card__body">{t('partners.promo.body')}</p>
+              <p className="partner-card__body">{t('partners.promo.benefit')}</p>
+              <p className="partner-card__note">{t('partners.promo.pointsNote')}</p>
+              {/* Compact nav row (Settings recipe) — where the points come from. */}
+              <button className="partner-card__link" onClick={() => navigate('/referral')}>
+                <span className="partner-card__link-label">{t('partners.promo.link')}</span>
+                <span className="row__chevron" aria-hidden>
+                  ›
+                </span>
+              </button>
+            </PartnerCard>
+          ) : null}
 
           <PartnerCard
             icon={<IconMegaphone />}
@@ -159,7 +201,6 @@ export default function PartnersScreen() {
         {/* Fine print for all three options — kept in one place, not repeated per card. */}
         <div className="partners-fine">
           <p>{t('partners.disclaimer.adsMark')}</p>
-          <p>{t('partners.jobs.verifyNote')}</p>
         </div>
 
         <button className="btn btn--primary btn--block" onClick={() => setFormOpen(true)}>

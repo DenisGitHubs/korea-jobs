@@ -32,6 +32,18 @@ function ShieldIcon() {
   );
 }
 
+// The author plate's icon: a plain person outline. NOT a megaphone (that is
+// advertising), NOT a tick (in this app it means "contact opened") and NOT a shield
+// (that is the safety card) — and no colour of its own, the plate paints it grey.
+function AuthorIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="8" r="3.6" />
+      <path d="M5 20c0-3.4 3.1-5.6 7-5.6s7 2.2 7 5.6" />
+    </svg>
+  );
+}
+
 function ShareIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -364,6 +376,10 @@ export default function VacancyScreen() {
   // Paid placement → the «Реклама» label rides on the badge row (same as in the
   // feed preview) AND the disclaimer plate below it.
   const promo = isPromo(vacancy);
+  // ORIGIN, not privilege — see the badge row and VacancyCard: the mark says the
+  // author left the ad with us himself, and says it for as long as the ad lives.
+  // Never read off the free week at the top of the feed, never off `promo`.
+  const fromAuthor = vacancy?.source_kind === 'user';
   // Resolved city list (multi-city first, `city` fallback) computed once — the hero
   // and the source-link condition both read it. Empty === city not specified.
   const cityList = vacancy
@@ -445,20 +461,40 @@ export default function VacancyScreen() {
               ) : null}
             </div>
 
-            <div className="card__badges" style={{ marginBottom: promo ? 12 : 16 }}>
+            <div className="card__badges" style={{ marginBottom: promo || fromAuthor ? 12 : 16 }}>
               {/* Mandatory paid-placement label — first, so it is read before the offer. */}
               {promo ? <span className="badge badge--ad">{t('vacancy.adBadge')}</span> : null}
+              {/* Origin mark. Neutral grey (badge--source family): no tick, no shield,
+                  no green — the tick here means "contact opened", and nothing about
+                  this listing has been checked by us. */}
+              {fromAuthor ? <span className="badge badge--source">{t('vacancy.directBadge')}</span> : null}
               <WorkTypeBadge type={vacancy.work_type} />
               <span className="badge badge--gender">{t(genderKey(vacancy.gender))}</span>
-              {vacancy.source_kind === 'user' ? (
-                <span className="badge badge--source">{t('vacancy.fromUser')}</span>
-              ) : null}
               {isRepost ? <span className="badge badge--repost">{t('vacancy.repost')}</span> : null}
             </div>
 
-            {/* Disclaimer plate for a paid placement: what the payment did and did
-                NOT buy. Both sentences are the ALREADY PUBLISHED wording from the
-                "Партнёрам" screen, reused verbatim — no new legal text here. */}
+            {/* What that mark means — a PLATE, the same weight on screen as the paid
+                one, right under the badge it explains. A grey line down the page would
+                be read by nobody, and the mark alone would then be free to mean "trust
+                this one more". This is also the only place on this screen that says we
+                do not check the author or his words. */}
+            {fromAuthor ? (
+              <div className="adnote" role="note">
+                <span className="adnote__ico">
+                  <AuthorIcon />
+                </span>
+                <div>
+                  <div className="adnote__t">{t('vacancy.directBadge')}</div>
+                  <div className="adnote__s">{t('vacancy.directNote')}</div>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Disclaimer plate for a PAID placement (`promo`) — a service ad: money
+                transfers, insurance. The sentence is the ALREADY PUBLISHED wording from
+                the "Партнёрам" screen, reused verbatim — no new legal text here.
+                Posting a VACANCY is free, so the sentence about what the payment did
+                not buy is gone; the «Реклама» title is not (law). */}
             {promo ? (
               <div className="adnote" role="note">
                 <span className="adnote__ico">
@@ -466,8 +502,7 @@ export default function VacancyScreen() {
                 </span>
                 <div>
                   <div className="adnote__t">{t('vacancy.adBadge')}</div>
-                  <div className="adnote__s">{t('partners.jobs.verifyNote')}</div>
-                  <div className="adnote__s adnote__s--gap">{t('partners.ads.disclaimer')}</div>
+                  <div className="adnote__s">{t('partners.ads.disclaimer')}</div>
                 </div>
               </div>
             ) : null}
@@ -654,14 +689,20 @@ export default function VacancyScreen() {
               </div>
             ) : null}
 
-            {/* Trust card + link to the full safety guide (replaces the old prepay note). */}
+            {/* Trust card + link to the full safety guide. The prepayment warning is the
+                FIRST line of it: it is the one sentence that says in plain words that we
+                do not vet employers, and it is shown for EVERY vacancy without any
+                condition (it quietly stopped being rendered when this card arrived). */}
             <div className="trust" style={{ marginTop: 16 }}>
               <span className="trust__ico">
                 <ShieldIcon />
               </span>
               <div>
                 <div className="trust__t">{t('safety.trustCard.title')}</div>
-                <div className="trust__s">{t('safety.trustCard.body')}</div>
+                <div className="trust__s">{t('vacancy.prepayNote')}</div>
+                <div className="trust__s" style={{ marginTop: 6 }}>
+                  {t('safety.trustCard.body')}
+                </div>
               </div>
             </div>
             <button className="safe-cta" onClick={() => navigate('/safety')}>

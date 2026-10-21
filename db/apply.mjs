@@ -313,6 +313,58 @@ const files = [
   // Mini App auth path and the bot /start). Depends on config (draft_0001) and, in meaning,
   // users.acq_source (draft_0031).
   'draft_0032_acq_allowlist.sql',
+
+  // FEATURED ads (0033) — ADDITIVE / idempotent (ADD COLUMN IF NOT EXISTS + CREATE INDEX IF NOT
+  // EXISTS + INSERT ... ON CONFLICT DO NOTHING). ONE nullable column user_ads.featured_until behind
+  // the owner's decision of 2026-10-21: an ad placed THROUGH OUR FORM, once it passes the filters
+  // and moderation, rides at the TOP of the feed for one FREE week with a badge. The column carries
+  // both facts at once (NULL = never featured; > now() = featured right now; < now() = its week is
+  // over), so the expiry IS the comparison in the query — no sweep, no second flag, cleanup
+  // untouched. At most one grant per ad and at most ONE LIVE featured ad per author (both enforced
+  // atomically in lib/korea/ads/featured.ts). 🔴 It is NOT user_ads.promo (0030): promo is a PAID
+  // placement labelled «Реклама» with deliberately NO ranking privilege; this is a FREE placement
+  // that IS lifted and must never be called advertising. Applying it changes NO existing behaviour
+  // (every current row stays NULL = ordinary card). Apply BEFORE or AFTER the code deploy — both
+  // orders are safe: the feed/detail/saved read the column through to_jsonb (a missing column reads
+  // as "not featured") and the grant is best-effort. Depends on user_ads (draft_0003_user_ads) and
+  // config (draft_0001_init).
+  'draft_0033_featured_ads.sql',
+
+  // Reports on USER ADS (0034) — ADDITIVE / idempotent (CREATE TABLE/INDEX IF NOT EXISTS). One new
+  // table ad_reports: the ad-side twin of vacancy_reports, whose vacancy_id is a NOT NULL FK into
+  // vacancies — so a complaint about a user ad could not be stored even in theory and the endpoint
+  // answered 404, although the app shows the action on every open card. Same split the project
+  // already uses for contact_reveals / ad_contact_reveals. The per-user 24h cap stays SEPARATE for
+  // the two tables on purpose (20 + 20, i.e. 40): making the older vacancy branch count a table that
+  // may not exist yet would turn an unapplied migration into a 500 on every complaint. The FIRST complaint also expires that ad's FREE featured lift (draft_0033)
+  // while leaving the ad live for a human to judge (Законник 2026-10-21); the owner rule "reports
+  // only NOTIFY, nothing is hidden automatically" is unchanged. Apply BEFORE the matching code
+  // deploy. 🔴 THE COST OF LANDING LATE IS BIGGER THAN "one POST" (007, 2026-10-21): eraseUsers
+  // names ad_reports WITHOUT a try/catch (lib/korea/cleanup/inactive.ts:255-257), unlike the
+  // best-effort bot_inbox next to it — so until this table exists, POST /api/admin/erase-user
+  // («удалите мои данные», a Privacy Policy promise) also answers 500, and the account is left
+  // PARTIALLY erased: dependents are already gone, the users row is not stamped. A re-run after the
+  // migration finishes the job (the design is idempotent, dependents first, stamp last), but the
+  // window is dishonest. Tail: wrap that one delete the way bot_inbox is wrapped. Depends on users + user_ads (draft_0001 / 0003_user_ads).
+  'draft_0034_ad_reports.sql',
+
+  // «Я не беру плату с работников» (0035) — ADDITIVE / idempotent (ADD COLUMN IF NOT EXISTS +
+  // CREATE INDEX IF NOT EXISTS). ONE nullable column user_ads.no_worker_fee_confirmed_at: the
+  // SERVER-side record of the mandatory checkbox in the placement form (owner 2026-10-21). A
+  // checkbox that only lives in the client is not a confirmation — it can be bypassed by posting to
+  // the API directly and proves nothing in a dispute, and the point of asking is to HAVE a ground
+  // for removing an ad whose author took money UPFRONT — for a place, a visa or paperwork. 🔴 The
+  // scope is NARROW and matches what the person was shown (post.noFeeCheck + Правила размещения §5);
+  // commissions between a worker, an intermediary and an employer are explicitly NOT our business
+  // (owner 2026-10-21). A timestamp answers both "did they
+  // confirm" and "when". Written by exactly one place (POST /api/ads at creation); a create without
+  // the confirmation is refused with 400 detail 'no_worker_fee_confirmation_required' instead of
+  // being stored as false; the edit/unarchive never touch the column, so a confirmation cannot be
+  // lost or withdrawn by editing the text. Existing rows stay NULL (no backfill: we cannot invent a
+  // confirmation nobody gave). Apply BEFORE the matching code deploy — the INSERT names the column
+  // directly, so until it exists POST /api/ads would answer 500 (and the feed is untouched).
+  // Depends on user_ads (draft_0003_user_ads).
+  'draft_0035_ad_no_worker_fee.sql',
 ];
 
 const pool = new Pool({ connectionString: url });

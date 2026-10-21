@@ -11,8 +11,23 @@
 // has_contact / the /contact endpoint); only the scope changes to auth.user.id.
 //
 // The feed is the UNION of scraped vacancies and APPROVED, unexpired user_ads, paged
-// by a single cursor over (posted_at, id). Each row carries source_kind so the client
+// by a single cursor over (featured, posted_at, id). Each row carries source_kind so the client
 // can tell them apart; a user ad's posted_at is greatest(created_at, bumped_at).
+//
+// FEATURED (owner 2026-10-21, draft_0033) — ORDER, AND NOTHING BUT ORDER. A FREE ad placed through
+// our form rides at the top of the feed for one week after it is approved: ORDER BY featured desc
+// first, then the former (posted_at desc, id desc) untouched, so inside the featured block and
+// inside the ordinary stream nothing about today's order changes. The flag is `featured_until >
+// now()` (one expression, ads/featured.ts), so the week ends by itself with no sweep. ONLY the feed
+// is re-ordered: the counter has no order at all, the saved list stays sorted by when YOU saved a
+// card, and detail is one row.
+// 🔴 THE BADGE IS NOT THIS FLAG (the decision changed mid-flight — Законник, 2026-10-21). The app's
+// «От автора» badge is drawn from `source_kind === 'user'`: EVERY self-placed ad carries it, for
+// good, whether or not its week is running. A badge that arrives and leaves together with a
+// privilege inevitably reads as "trust this one more"; a badge on every self-placed ad is a fact
+// about ORIGIN, not a rating. The client does not read `featured` at all — see the CONTRACT note
+// in toView before wiring anything on the screen to it.
+// 🔴 featured is also NOT `promo` (paid «Реклама», which gets no ranking privilege by design).
 //
 // SECURITY (007): explicit column projection — NEVER expose source_id /
 // raw_message_id / content_hash / internal ids. The feed and detail carry
@@ -46,6 +61,7 @@ import { WORK_TYPES, VISA_TYPES } from '../parser/prompt.js';
 import { scrubContacts } from '../core/scrub.js';
 import { recordReferralActivation } from '../referral/accrue.js';
 import { bumpOpenStreakBestEffort } from '../streaks/update.js';
+import { featuredLiveSql } from '../ads/featured.js';
 
 const PAGE_SIZE = 20;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -101,6 +117,15 @@ interface Row {
   // Read through to_jsonb in SQL, so a database without draft_0030 answers "not a promo" instead of
   // failing the whole feed in a deploy-before-migrate window.
   promo?: boolean;
+  // FEATURED (draft_0033, owner 2026-10-21): true = this FREE, form-placed ad is inside its week at
+  // the TOP of the feed. It is a SORT KEY — featuredLiveSql (`featured_until > now()`) is the ONE
+  // expression behind the feed's ordering, and the deadline itself never leaves the server. Always
+  // false on a scraped vacancy. Read through to_jsonb, so a database without draft_0033 answers "not
+  // featured" instead of failing the feed in a deploy-before-migrate window.
+  // 🔴 NO BADGE HANGS ON THIS (Законник, 2026-10-21): the «От автора» badge comes from
+  // `source_kind === 'user'` and belongs to every self-placed ad for good — origin, not a rating.
+  // 🔴 NOT `promo` (paid «Реклама», deliberately WITHOUT any ranking privilege) — opposite meanings.
+  featured?: boolean;
 }
 
 /** DB row -> VacancyView (feed/detail projection; never includes `contact`). */
@@ -145,20 +170,36 @@ function toView(r: Row) {
     // every surface that shows this card. It is deliberately NOT a ranking/визуальная privilege:
     // a promo sits in the ordinary chronological stream like everything else.
     promo: r.promo === true,
+    // CONTRACT (frontend): 🔴 THE CLIENT DOES NOT READ `featured`, AND MUST NOT START. It is the
+    // server's SORT KEY — true means "this free, form-placed ad is inside its week, so the server
+    // already put it at the top of the feed" — and nothing on the screen is wired to it (the app has
+    // a guard of its own against that). The «От автора» badge comes from `source_kind === 'user'`:
+    // every self-placed ad carries it for good, because a badge that arrives and leaves with a
+    // privilege reads as "trust this one more", while a badge on every self-placed ad is a fact about
+    // ORIGIN (Законник, 2026-10-21 — this replaced the first version, where the badge rode along with
+    // the week). The field stays in the payload on purpose: it is the ordering key the cursor carries,
+    // it costs nothing, and the deadline behind it is never exposed.
+    // 🔴 It is NOT advertising either: a featured card must never be labelled «Реклама» (that is `promo`).
+    featured: r.featured === true,
   };
 }
 
-export function encodeCursor(postedAt: string, id: string): string {
-  return Buffer.from(JSON.stringify({ p: postedAt, i: id }), 'utf8').toString('base64url');
+/** Cursor = the ordering key of the LAST row of a page. `featured` joins it because the feed now
+ *  orders by (featured desc, posted_at desc, id desc) — leaving it out would make page 2 of a feed
+ *  with featured cards re-serve or skip rows. An old (pre-featured) cursor decodes to f=false,
+ *  which means "we are already past the featured block" — the safe side (no duplicates). */
+export function encodeCursor(postedAt: string, id: string, featured = false): string {
+  return Buffer.from(JSON.stringify({ p: postedAt, i: id, f: featured }), 'utf8').toString('base64url');
 }
-export function decodeCursor(c: string | undefined): { p: string; i: string } | null {
+export function decodeCursor(c: string | undefined): { p: string; i: string; f: boolean } | null {
   if (!c) return null;
   try {
-    const o = JSON.parse(Buffer.from(c, 'base64url').toString('utf8')) as { p?: unknown; i?: unknown };
+    const o = JSON.parse(Buffer.from(c, 'base64url').toString('utf8')) as { p?: unknown; i?: unknown; f?: unknown };
     // Validate `p` as a real timestamp: a non-timestamptz string would blow up the `::timestamptz`
     // cast in SQL and surface as a 500. A bad/forged cursor must degrade to the first page, not error.
+    // `f` needs no validation: anything that is not literally true means "not in the featured block".
     if (typeof o.p === 'string' && typeof o.i === 'string' && UUID_RE.test(o.i) && !Number.isNaN(Date.parse(o.p)))
-      return { p: o.p, i: o.i };
+      return { p: o.p, i: o.i, f: o.f === true };
   } catch {
     /* bad cursor -> first page */
   }
@@ -267,9 +308,11 @@ function feedUnionSql(savedUserPh: string | null): string {
          -- context / to ask the author); otherwise NULL. Reads the STORED column — no raw_messages join.
          case when (v.contact_normalized is null or cardinality(v.city_ids) = 0)
               then v.source_post_url else null end as source_post_url,
-         -- A scraped card never has an image and is never a paid placement (literals keep the two
-         -- union branches type-compatible without touching the vacancies table).
-         null::text as media_id, false as promo,
+         -- A scraped card never has an image, is never a paid placement, and is NEVER featured:
+         -- the free featured week is earned by placing an ad THROUGH OUR FORM, and a channel offer
+         -- was not placed by anybody here. Literals keep the two union branches type-compatible
+         -- without touching the vacancies table.
+         null::text as media_id, false as promo, false as featured,
          v.search_tsv
   from vacancies v
   left join cities c on c.id = v.city_id
@@ -297,6 +340,10 @@ function feedUnionSql(savedUserPh: string | null): string {
          -- a total feed outage. A missing key yields NULL -> no image / not a promo.
          (to_jsonb(a) ->> 'media_id') as media_id,
          coalesce((to_jsonb(a) ->> 'promo')::boolean, false) as promo,
+         -- FEATURED (draft_0033): the ONE expression behind both the badge and the ordering below.
+         -- Same to_jsonb reasoning as promo. Its comparison with now() IS the expiry of the week: a
+         -- grant older than ads_featured_days reads false here and the card sinks back into the stream.
+         ${featuredLiveSql('a')} as featured,
          a.search_tsv
   from user_ads a
   left join cities c on c.id = a.city_id
@@ -328,7 +375,7 @@ function savedUnionSql(userPh: string): string {
          -- intentionally does NOT hide unreachable offers: a bookmark the user made stays visible.
          case when (v.contact_normalized is null or cardinality(v.city_ids) = 0)
               then v.source_post_url else null end as source_post_url,
-         null::text as media_id, false as promo,
+         null::text as media_id, false as promo, false as featured,
          s.created_at as saved_at
   from saved_vacancies s
   join vacancies v on v.id = s.vacancy_id and v.is_active and v.duplicate_of is null
@@ -350,6 +397,10 @@ function savedUnionSql(userPh: string): string {
          -- Same to_jsonb read as the main feed (a bookmarked promo must still say «Реклама»).
          (to_jsonb(a) ->> 'media_id') as media_id,
          coalesce((to_jsonb(a) ->> 'promo')::boolean, false) as promo,
+         -- Same featured expression as the main feed (a bookmarked featured ad still shows its
+         -- badge). The saved list's ORDER is deliberately untouched: it is sorted by when YOU saved
+         -- the card, and a featured ad must not jump the queue of your own bookmarks.
+         ${featuredLiveSql('a')} as featured,
          s.created_at as saved_at
   from saved_ads s
   join user_ads a on a.id = s.ad_id and a.status = 'approved' and (a.expires_at is null or a.expires_at > now())
@@ -426,8 +477,12 @@ export async function vacanciesFeed(req: ReqLike, res: ResLike): Promise<void> {
     // Bind the caller id for the is_saved LEFT JOINs (scope is ALWAYS auth.user.id).
     const savedUserPh = ph(auth.user.id);
     const noCursor = cur === null;
+    // The cursor tuple MIRRORS the ORDER BY below, element for element — that is what makes
+    // row-wise `<` a correct "everything after this row" in the feed's own order. `featured` is a
+    // boolean and Postgres orders false < true, so `desc` puts the live featured block first and
+    // the same tuple comparison walks out of that block into the ordinary stream by itself.
     const cursorClause =
-      `and (${ph(noCursor)} or (f.posted_at, f.id) < (${ph(cur?.p ?? null)}::timestamptz, ${ph(cur?.i ?? null)}::uuid))`;
+      `and (${ph(noCursor)} or (f.featured, f.posted_at, f.id) < (${ph(cur?.f ?? false)}::boolean, ${ph(cur?.p ?? null)}::timestamptz, ${ph(cur?.i ?? null)}::uuid))`;
     // visa_types is cast to text[] HERE (the JS projection), NOT inside feedUnionSql: the
     // enum-array column f.visa_types is consumed by buildFilterWhere's `&&`/`= any` against
     // visa_type[] (${where}), so it must stay visa_type[] in the union. Casting to text[]
@@ -439,11 +494,16 @@ export async function vacanciesFeed(req: ReqLike, res: ResLike): Promise<void> {
              f.salary_text, f.salary_min, f.salary_max, f.salary_period, f.employer,
              f.description, f.posted_at, f.has_contact, f.visa_types::text[] as visa_types, f.placement_fee,
              f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.is_revealed, f.source_post_url,
-             f.media_id, f.promo
+             f.media_id, f.promo, f.featured
       from (${feedUnionSql(savedUserPh)}) f
       ${where}
       ${cursorClause}
-      order by f.posted_at desc, f.id desc
+      -- FEATURED FIRST (owner 2026-10-21): the LIVE featured block rides on top, and INSIDE it the
+      -- ordinary freshness order applies; everything else follows in exactly the former order
+      -- (posted_at desc, id desc) — the two trailing keys are untouched, so two cards that are both
+      -- featured (or both not) keep the order they have today. An expired week evaluates to false
+      -- in f.featured and the card is back in the stream with no sweep involved.
+      order by f.featured desc, f.posted_at desc, f.id desc
       limit ${PAGE_SIZE + 1}`;
     const rows = (await sql(text, p)) as unknown as Row[];
 
@@ -452,7 +512,9 @@ export async function vacanciesFeed(req: ReqLike, res: ResLike): Promise<void> {
     const items = kept.map(toView);
     const last = kept[kept.length - 1];
     const next_cursor =
-      hasMore && last ? encodeCursor(new Date(last.posted_at).toISOString(), last.id) : null;
+      hasMore && last
+        ? encodeCursor(new Date(last.posted_at).toISOString(), last.id, last.featured === true)
+        : null;
 
     send(res, 200, { items, next_cursor });
   } catch {
@@ -530,8 +592,8 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
                then v.source_post_url
                else null
              end as source_post_url,
-             -- A scraped card carries no image and is never a paid placement.
-             null::text as media_id, false as promo
+             -- A scraped card carries no image, is never a paid placement and is never featured.
+             null::text as media_id, false as promo, false as featured
       from vacancies v
       left join cities c on c.id = v.city_id
       where v.id = ${id}::uuid and v.is_active and v.duplicate_of is null
@@ -561,7 +623,12 @@ export async function vacancyDetail(req: ReqLike, res: ResLike): Promise<void> {
                       where r.user_id = ${auth.user.id}::uuid and r.user_ad_id = a.id)) as is_revealed,
              -- draft_0030 through to_jsonb (see feedUnionSql): a missing column must not 500 the card.
              (to_jsonb(a) ->> 'media_id') as media_id,
-             coalesce((to_jsonb(a) ->> 'promo')::boolean, false) as promo
+             coalesce((to_jsonb(a) ->> 'promo')::boolean, false) as promo,
+             -- FEATURED (draft_0033): the open card shows the SAME badge as the feed, so it is the
+             -- SAME expression — spelled out literally here because in a TAGGED template an
+             -- interpolation becomes a bound PARAM, not SQL text (and a placeholder smuggled into a
+             -- comment breaks the bind). Parity with featuredLiveSql('a') is pinned by a test.
+             coalesce(((to_jsonb(a) ->> 'featured_until')::timestamptz) > now(), false) as featured
       from user_ads a
       left join cities c on c.id = a.city_id
       where a.id = ${id}::uuid and a.status = 'approved' and (a.expires_at is null or a.expires_at > now())
@@ -739,7 +806,7 @@ export async function savedFeed(req: ReqLike, res: ResLike): Promise<void> {
              f.salary_text, f.salary_min, f.salary_max, f.salary_period, f.employer,
              f.description, f.posted_at, f.has_contact, f.visa_types::text[] as visa_types, f.placement_fee,
              f.has_housing, f.has_meals, f.source_kind, f.repost, f.is_saved, f.is_revealed, f.source_post_url,
-             f.media_id, f.promo, f.saved_at
+             f.media_id, f.promo, f.featured, f.saved_at
       from (${savedUnionSql(userPh)}) f
       where true
       ${cursorClause}

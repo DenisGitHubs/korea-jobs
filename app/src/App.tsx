@@ -19,6 +19,8 @@ import ReferralScreen from './screens/ReferralScreen';
 import SafetyScreen from './screens/SafetyScreen';
 import PrivacyScreen from './screens/PrivacyScreen';
 import RulesScreen from './screens/RulesScreen';
+import PlacementRulesScreen from './screens/PlacementRulesScreen';
+import { PLACEMENT_RULES_PATH } from './content/legal/paths';
 
 /**
  * Reset scroll to the top on every route change. The shell scrolls the document
@@ -143,6 +145,10 @@ export default function App() {
           <Route path="safety" element={<SafetyScreen />} />
           <Route path="privacy" element={<PrivacyScreen />} />
           <Route path="rules" element={<RulesScreen />} />
+          {/* The third published document. One spelling of the path, shared with the
+              links that point at it (content/legal/paths.ts) — four copies of a string is
+              how a link quietly starts leading nowhere. */}
+          <Route path={PLACEMENT_RULES_PATH.slice(1)} element={<PlacementRulesScreen />} />
           <Route path="*" element={<Navigate to="/feed" replace />} />
         </Route>
       </Routes>

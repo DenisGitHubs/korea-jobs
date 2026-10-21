@@ -70,6 +70,10 @@ export interface PostPlan {
 
 export type PostParseResult = { ok: true; plan: PostPlan } | { ok: false; error: string };
 
+// The gender/age phrase detector (moved to core/ 2026-10-21 so the featured lift screens by the
+// SAME vocabulary — see the re-export further down).
+import { findDiscriminationHints } from '../core/discrimination.js';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Limits
 // ─────────────────────────────────────────────────────────────────────────────
@@ -389,44 +393,18 @@ export function guessContactKind(contact: string): string {
 // Gender / age screening (warn only)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// UNICODE-AWARE BOUNDARIES ON PURPOSE. `\b` and `\w` in JavaScript are ASCII-only: `/\bженщины\b/`
-// matches NOTHING in a Russian sentence, so the whole screening silently found zero phrases (the
-// tests caught exactly that). `(?<![\p{L}])` / `(?![\p{L}])` under /u are the real "not inside
-// another word" guards, in any alphabet.
-const GENDER_RE: RegExp[] = [
-  /(?<![\p{L}])только\s+(?:мужчин\p{L}*|женщин\p{L}*|парн\p{L}*|девуш\p{L}*)/giu,
-  /(?<![\p{L}])(?:мужчины|мужчин|женщины|женщин|девушки|девушек|парни|парней)(?![\p{L}])/giu,
-  /(?<![\p{L}])(?:men|women|male|female)\s+only(?![\p{L}])/giu,
-];
-
-const AGE_RE: RegExp[] = [
-  /(?<![\p{L}])до\s+\d{1,2}\s*лет(?![\p{L}])/giu,
-  /(?<![\p{L}])от\s+\d{1,2}\s*(?:до\s+\d{1,2}\s*)?лет(?![\p{L}])/giu,
-  /\d{1,2}\s*[-–—]\s*\d{1,2}\s*лет(?![\p{L}])/giu,
-  /(?<![\p{L}])возраст\p{L}*\s*[:\-–]?\s*(?:до|от)?\s*\d{1,2}/giu,
-  /(?<![\p{L}])age\s*[:\-]?\s*\d{1,2}(?![\p{L}])/giu,
-];
-
 /**
  * Phrases in the owner's own text that limit the audience by GENDER or AGE. In Korea that is
  * forbidden in a hiring ad, so the preview warns about it — but publishing is NOT blocked: the
  * owner may be posting something that is not a job offer at all, and he is the one who decides.
  * Returns the matched fragments, de-duplicated, at most a handful.
+ *
+ * The detector itself MOVED to core/discrimination.ts (2026-10-21) — unchanged in behaviour — so
+ * that the FREE featured lift (ads/featured.ts), which REFUSES a gender-restricted ad, screens by
+ * the very same vocabulary as this preview. Re-exported here so every existing caller/test keeps
+ * importing it from where it has always been.
  */
-export function findDiscriminationHints(text: string): string[] {
-  const found = new Set<string>();
-  for (const re of [...GENDER_RE, ...AGE_RE]) {
-    // Fresh lastIndex per call: the module-level regexes carry /g.
-    re.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
-      const hit = m[0].trim().replace(/\s+/g, ' ');
-      if (hit) found.add(hit.toLowerCase());
-      if (found.size >= 6) return [...found];
-    }
-  }
-  return [...found];
-}
+export { findDiscriminationHints };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The command itself

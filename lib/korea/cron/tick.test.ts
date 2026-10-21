@@ -23,6 +23,7 @@ import {
   PARSE_MAX_PASSES,
   DATA_STEPS,
   MAINTENANCE_STEPS,
+  TAIL_STEPS,
   type TickDeps,
   type TickStepName,
 } from './tick.js';
@@ -41,7 +42,8 @@ function makeDeps(opts: {
   let now = new Date(opts.startIso ?? '2026-08-29T10:15:00Z').getTime();
   const order: string[] = [];
   const runners = {} as TickDeps['runners'];
-  const names: TickStepName[] = [...DATA_STEPS, ...MAINTENANCE_STEPS];
+  // TAIL_STEPS included: the watchdog is a real step of every pass (always last).
+  const names: TickStepName[] = [...DATA_STEPS, ...MAINTENANCE_STEPS, ...TAIL_STEPS];
   for (const name of names) {
     runners[name] = vi.fn(async () => {
       order.push(name);
@@ -58,7 +60,7 @@ function makeDeps(opts: {
 describe('stepOrder — users first, maintenance first once an hour', () => {
   it('puts the data steps first for most of the hour', () => {
     for (const iso of ['2026-08-29T10:15:00Z', '2026-08-29T10:30:00Z', '2026-08-29T10:45:00Z']) {
-      expect(stepOrder(new Date(iso))).toEqual([...DATA_STEPS, ...MAINTENANCE_STEPS]);
+      expect(stepOrder(new Date(iso))).toEqual([...DATA_STEPS, ...MAINTENANCE_STEPS, ...TAIL_STEPS]);
     }
   });
 
@@ -67,11 +69,14 @@ describe('stepOrder — users first, maintenance first once an hour', () => {
     expect(stepOrder(new Date('2026-08-29T10:00:00Z'))).toEqual([
       ...MAINTENANCE_STEPS,
       ...DATA_STEPS,
+      // The tail is appended in BOTH rotations — the watchdog must never look at the pipeline
+      // before this tick's parse has had its turn.
+      ...TAIL_STEPS,
     ]);
   });
 
   it('covers every step exactly once, whichever way round it goes', () => {
-    const all = [...DATA_STEPS, ...MAINTENANCE_STEPS];
+    const all = [...DATA_STEPS, ...MAINTENANCE_STEPS, ...TAIL_STEPS];
     for (const iso of ['2026-08-29T10:00:00Z', '2026-08-29T10:20:00Z']) {
       const order = stepOrder(new Date(iso));
       expect([...order].sort()).toEqual([...all].sort());
@@ -85,8 +90,8 @@ describe('runTick — the whole pass on a quiet system', () => {
     const { deps, order } = makeDeps({});
     const out = await runTick(deps);
 
-    expect(order).toEqual([...DATA_STEPS, ...MAINTENANCE_STEPS]);
-    expect(out.ran).toEqual([...DATA_STEPS, ...MAINTENANCE_STEPS]);
+    expect(order).toEqual([...DATA_STEPS, ...MAINTENANCE_STEPS, ...TAIL_STEPS]);
+    expect(out.ran).toEqual([...DATA_STEPS, ...MAINTENANCE_STEPS, ...TAIL_STEPS]);
     expect(out.skipped).toEqual([]);
     expect(out.failed).toEqual([]);
     expect(out.budgetMs).toBe(TICK_TIME_BUDGET_MS);
@@ -102,7 +107,7 @@ describe('runTick — the budget stops it cleanly instead of the platform killin
     const out = await runTick(deps);
 
     expect(out.ran).toEqual(['parse']);
-    expect(out.skipped).toEqual(['notify', ...MAINTENANCE_STEPS]);
+    expect(out.skipped).toEqual(['notify', ...MAINTENANCE_STEPS, ...TAIL_STEPS]);
     expect(order).toEqual(['parse']);
     expect(runners.notify).not.toHaveBeenCalled(); // not started at all — nothing is half-done
   });
@@ -118,12 +123,12 @@ describe('runTick — the budget stops it cleanly instead of the platform killin
     expect(out.skipped).toContain('cleanup');
     // Every step is accounted for exactly once, either ran or skipped or failed.
     expect([...out.ran, ...out.skipped, ...out.failed].sort()).toEqual(
-      [...DATA_STEPS, ...MAINTENANCE_STEPS].sort(),
+      [...DATA_STEPS, ...MAINTENANCE_STEPS, ...TAIL_STEPS].sort(),
     );
   });
 
   it('keeps the reserves inside the budget, so at least the first step can always start', () => {
-    for (const name of [...DATA_STEPS, ...MAINTENANCE_STEPS]) {
+    for (const name of [...DATA_STEPS, ...MAINTENANCE_STEPS, ...TAIL_STEPS]) {
       expect(STEP_RESERVE_MS[name]).toBeGreaterThan(0);
       expect(STEP_RESERVE_MS[name]).toBeLessThan(TICK_TIME_BUDGET_MS);
     }
@@ -136,8 +141,8 @@ describe('runTick — one broken step never costs the others', () => {
     const out = await runTick(deps);
 
     expect(out.failed).toEqual(['notify']);
-    expect(out.ran).toEqual(['parse', ...MAINTENANCE_STEPS]);
-    expect(order).toEqual([...DATA_STEPS, ...MAINTENANCE_STEPS]); // it was attempted, then skipped over
+    expect(out.ran).toEqual(['parse', ...MAINTENANCE_STEPS, ...TAIL_STEPS]);
+    expect(order).toEqual([...DATA_STEPS, ...MAINTENANCE_STEPS, ...TAIL_STEPS]); // it was attempted, then skipped over
     expect((out.steps.notify as { error: string }).error).toContain('exploded');
   });
 
@@ -147,7 +152,7 @@ describe('runTick — one broken step never costs the others', () => {
 
     expect(out.maintenanceFirst).toBe(true);
     expect(out.failed).toEqual(['scheduled']);
-    expect(out.ran).toEqual(['digest', 'cleanup', 'referral-confirm', ...DATA_STEPS]);
+    expect(out.ran).toEqual(['digest', 'cleanup', 'referral-confirm', ...DATA_STEPS, ...TAIL_STEPS]);
   });
 });
 

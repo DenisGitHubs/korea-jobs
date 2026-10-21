@@ -27,7 +27,7 @@
 //   Therefore the sweep:
 //     1. DELETES everything that is the person's own data — subscriptions, saved_vacancies,
 //        saved_ads, contact_reveals, ad_contact_reveals, raw_contact_reveals,
-//        notifications_sent, vacancy_reports, streak_awards, cooperation_requests, their own
+//        notifications_sent, vacancy_reports, ad_reports, streak_awards, cooperation_requests, their own
 //        referral_points_ledger credits (their balance dies with them), their user_ads (so the
 //        ad leaves the feed — the delete cascades its reveals/bookmarks), and the two ledgers
 //        keyed on their RAW telegram id: bot_updates and bot_inbox (007 minor — the inbox ledger
@@ -248,6 +248,12 @@ export async function eraseUsers(sql: Sql, targets: EraseTarget[]): Promise<Eras
 
   counts.reportsDeleted += countOf(await sql`
     with d as (delete from vacancy_reports where user_id = any(${ids}::uuid[]) returning 1)
+    select count(*)::int as n from d`);
+  // ad_reports (draft_0034) is the ad-side twin of vacancy_reports and is keyed on a PERSON the
+  // same way, so it leaves with them. Counted into the SAME reportsDeleted total: to a reader of
+  // the sweep's result "reports erased" is one fact about one person, not two.
+  counts.reportsDeleted += countOf(await sql`
+    with d as (delete from ad_reports where user_id = any(${ids}::uuid[]) returning 1)
     select count(*)::int as n from d`);
 
   counts.streakAwardsDeleted += countOf(await sql`

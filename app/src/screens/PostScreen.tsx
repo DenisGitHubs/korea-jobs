@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
+import { Link, useNavigate } from 'react-router-dom';
+import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, ApiError } from '../shared/api/client';
 import type { AdInput, AdMine, ContactKind, PlacementFee, VisaType, WorkType } from '../shared/types/api';
@@ -25,6 +25,7 @@ import { CityPicker } from '../components/CityPicker';
 import { EmptyState } from '../components/EmptyState';
 import { IconCheckCircle, IconClock, IconWarn } from '../components/icons/StateIcons';
 import { MyAdsTab } from './post/MyAdsTab';
+import { PLACEMENT_RULES_PATH } from '../content/legal/paths';
 
 const CONSENT_KEY = 'kj:ads-consent';
 /** Versioned key for the auto-saved compose draft (Draft + step). Bump the
@@ -254,6 +255,10 @@ export default function PostScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [consent, setConsent] = useState<boolean>(loadConsent);
+  // The "no money upfront" confirmation. Deliberately NOT remembered between ads
+  // (unlike `consent`): it is a statement about THIS listing, and a tick restored
+  // from storage would be a confirmation nobody gave this time.
+  const [noFee, setNoFee] = useState(false);
 
   // Edit mode: when set, the wizard PATCHes this ad instead of creating one.
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -357,8 +362,10 @@ export default function PostScreen() {
           ? editContactLen > 0 && editContactLen <= CONTACT_RAW_MAX
           : contactStepValid(d, username, t);
       case 4:
-        // Review + consent (was step 6) — explicitly re-indexed.
-        return consent;
+        // Review + both confirmations (was step 6) — explicitly re-indexed.
+        // Publishing is blocked until BOTH ticks are given: the terms, and the
+        // "no money upfront" statement.
+        return consent && noFee;
       default:
         return true;
     }
@@ -388,6 +395,9 @@ export default function PostScreen() {
       city_slug: d.cityOther ? null : d.city,
       city_text: d.cityOther && d.cityText.trim() ? d.cityText.trim() : null,
       region_slug: null,
+      // CREATE only: the edit form shows no such tick, and a PATCH carrying `false`
+      // would read as a withdrawal of a confirmation that WAS given at creation.
+      ...(editingId ? {} : { no_worker_fee: noFee }),
     };
   };
 
@@ -419,6 +429,15 @@ export default function PostScreen() {
         }
       })
       .catch((e) => {
+        // The ONE refusal the person can fix without leaving this step: the server
+        // requires the "no money upfront" confirmation and says so in its own detail
+        // (lib/korea/ads/rw.ts). Keep the wizard open — the box is right here — and
+        // name the box. Swapping the screen for "check your connection" would send
+        // him to fix his internet instead.
+        if (e instanceof ApiError && e.http === 400 && e.code === 'no_worker_fee_confirmation_required') {
+          setSubmitError(t('post.noFeeRequired'));
+          return;
+        }
         if (editing) {
           // Edit: keep the wizard open and surface the error inline (incl. the
           // anti-hammer 429 cooldown), so the draft is never lost.
@@ -433,7 +452,7 @@ export default function PostScreen() {
       })
       .finally(() => setSubmitting(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [submitting, d, consent, t, username, editingId, editContact, editContactKind]);
+  }, [submitting, d, consent, noFee, t, username, editingId, editContact, editContactKind]);
 
   const next = useCallback(() => {
     if (!stepValid(step)) return;
@@ -816,10 +835,31 @@ export default function PostScreen() {
                 {editingId ? (
                   <div className="hero__note">{t('myAds.editNote')}</div>
                 ) : (
-                  <label className="consent">
-                    <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-                    <span>{t('post.consent')}</span>
-                  </label>
+                  <>
+                    <label className="consent">
+                      <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
+                      <span>
+                        {/* The document is NAMED in the sentence the author accepts, so
+                            it has to be reachable FROM that sentence — same <Trans>
+                            wiring as the terms gate (components/ConsentGate.tsx). */}
+                        <Trans
+                          i18nKey="post.consent"
+                          components={{ rules: <Link className="consent__link" to={PLACEMENT_RULES_PATH} /> }}
+                        />
+                      </span>
+                    </label>
+                    {/* A SECOND tick, not a sentence inside the first: it is a statement
+                        about facts (no money upfront), and it must be given on purpose.
+                        🔴 The client tick is only a gate — the confirmation is recorded
+                        server-side (a column + a refusal without it). */}
+                    <label className="consent">
+                      <input type="checkbox" checked={noFee} onChange={(e) => setNoFee(e.target.checked)} />
+                      <span>
+                        {t('post.noFeeCheck')}
+                        <span className="consent__sub">{t('post.noFeeHint')}</span>
+                      </span>
+                    </label>
+                  </>
                 )}
               </div>
             )}

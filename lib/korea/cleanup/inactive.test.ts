@@ -209,6 +209,9 @@ describe('runInactiveErase — erasing a dormant account', () => {
       'saved_vacancies',
       'saved_ads',
       'vacancy_reports',
+      // ad_reports (draft_0034) — the ad-side twin of vacancy_reports; a new table keyed on a
+      // person must leave with them, or "your data is deleted" becomes a lie by omission.
+      'ad_reports',
       'streak_awards',
       'cooperation_requests',
       'subscriptions',
@@ -411,6 +414,7 @@ describe('eraseUsers — the one implementation both paths use', () => {
       'saved_vacancies',
       'saved_ads',
       'vacancy_reports',
+      'ad_reports',
       'streak_awards',
       'cooperation_requests',
       'subscriptions',

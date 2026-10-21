@@ -77,6 +77,10 @@ function makeRes(): ResLike & { _status: number; _body: unknown } {
 }
 
 const reproBody = {
+  // MANDATORY since 2026-10-21 (draft_0035): a create without «Я не беру плату с работников» is
+  // refused with its own detail, so every create fixture must carry it. The refusal itself is
+  // pinned in no-worker-fee.test.ts.
+  no_worker_fee: true,
   title: 'Рабочий на завод',
   description: 'Требуется рабочий на производство, стабильная зарплата, оформление.',
   contact_raw: '+821012345678',

@@ -24,6 +24,7 @@ vi.mock('../config.js', () => ({
 vi.mock('../referral/accrue.js', () => ({ recordReferralActivation: vi.fn(async () => undefined) }));
 
 import type { ReqLike, ResLike } from '../core/http.js';
+import { featuredLiveSql } from '../ads/featured.js';
 import { getSql } from '../core/db.js';
 import { authenticate } from '../core/context.js';
 import {
@@ -31,6 +32,8 @@ import {
   vacancyContact,
   countVacancies,
   vacanciesFeed,
+  vacancyDetail,
+  savedFeed,
   parseFeedFilters,
   buildFilterWhere,
   encodeCursor,
@@ -253,7 +256,9 @@ describe('feed + count hide dead-end scraped offers and project the persisted li
     await vacanciesFeed(makeReq({}), res as unknown as ResLike);
 
     expect(res.statusCode).toBe(200);
-    const feedCall = calls.find((c) => /order by f\.posted_at desc/.test(c.text));
+    // The feed's ORDER BY gained `f.featured desc` in front of the former keys (owner 2026-10-21),
+    // so this matcher looks for the id of the feed query by its trailing keys.
+    const feedCall = calls.find((c) => /order by .*f\.posted_at desc, f\.id desc/.test(c.text));
     expect(feedCall).toBeTruthy();
     const q = feedCall!.text;
     // Dead ends dropped from the feed union (scraped branch only).
@@ -273,6 +278,127 @@ describe('feed + count hide dead-end scraped offers and project the persisted li
     // The predicate references v.* (vacancies alias) only; the user_ads branch (alias a) is untouched.
     expect(q).toContain(HIDE);
     expect(q).not.toContain('not (a.contact_raw is null and a.source_post_url is null)');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (1b) FEATURED placements (owner 2026-10-21, draft_0033) — WHERE the order changes and where it
+//      must NOT. The ordering is SQL, and a fake `sql` cannot sort rows, so it is asserted as SQL
+//      text; pretending to evaluate an ORDER BY would only prove the fake (same honesty rule as
+//      notify/run.test.ts). The live proof lives in draft_0033's VERIFY/SANITY selects.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FEATURED_EXPR = "coalesce(((to_jsonb(a) ->> 'featured_until')::timestamptz) > now(), false)";
+const FEED_ORDER = 'order by f.featured desc, f.posted_at desc, f.id desc';
+
+describe('the FEED lifts live featured ads to the top — and nothing else changes order', () => {
+  it('orders by featured first, then by the FORMER keys, byte-for-byte', async () => {
+    const { fn, calls } = makeSql();
+    vi.mocked(getSql).mockReturnValue(fn);
+    const res = makeRes();
+    await vacanciesFeed(makeReq({}), res as unknown as ResLike);
+
+    const q = calls.find((c) => /order by f\.featured desc/.test(c.text))!.text;
+    expect(q).toContain(FEED_ORDER);
+    // The two trailing keys are untouched: two cards that are both featured (or both ordinary)
+    // keep exactly the order they have today.
+    expect(q).toContain('f.posted_at desc, f.id desc');
+  });
+
+  it('the week ENDS BY ITSELF: the flag is featured_until > now(), read through to_jsonb', async () => {
+    const { fn, calls } = makeSql();
+    vi.mocked(getSql).mockReturnValue(fn);
+    await vacanciesFeed(makeReq({}), makeRes() as unknown as ResLike);
+    const q = calls.find((c) => /order by f\.featured desc/.test(c.text))!.text;
+
+    // One expression for the badge AND the ordering — and it is the module's own, not a copy.
+    expect(q).toContain(`${featuredLiveSql('a')} as featured`);
+    expect(featuredLiveSql('a')).toBe(FEATURED_EXPR);
+    // A grant older than the week evaluates to false here: no sweep, no cron, no second flag.
+    expect(q).toContain('> now()');
+    // Never a bare column: a deploy before the migration must not break the app's main screen.
+    expect(q).not.toMatch(/\ba\.featured_until\b/);
+  });
+
+  it('🔴 a vacancy from a CHANNEL is never featured (the lift is for ads placed through our form)', async () => {
+    const { fn, calls } = makeSql();
+    vi.mocked(getSql).mockReturnValue(fn);
+    await vacanciesFeed(makeReq({}), makeRes() as unknown as ResLike);
+    const q = calls.find((c) => /order by f\.featured desc/.test(c.text))!.text;
+
+    // The scraped branch emits a literal false — there is no column to read and nothing to earn.
+    expect(q).toContain('false as featured');
+    expect(q).not.toMatch(/to_jsonb\(v\)/);
+  });
+
+  it('pages correctly: the cursor tuple carries the SAME elements as the ORDER BY', async () => {
+    const { fn, calls } = makeSql();
+    vi.mocked(getSql).mockReturnValue(fn);
+    const cursor = encodeCursor('2026-10-20T10:00:00.000Z', '11111111-1111-1111-1111-111111111111', true);
+    await vacanciesFeed(makeReq({ cursor }), makeRes() as unknown as ResLike);
+
+    const call = calls.find((c) => /order by f\.featured desc/.test(c.text))!;
+    expect(call.text).toContain('(f.featured, f.posted_at, f.id) <');
+    expect(call.text).toContain('::boolean');
+    // The flag travels as a BOUND param, like every other cursor element. (The feed is issued as
+    // sql(text, params), so the fake records the whole param array as the first recorded arg.)
+    expect(call.params[0]).toContain(true);
+  });
+
+  it('🔴 a PAID placement gets no lift: the ORDER BY does not mention promo at all', async () => {
+    const { fn, calls } = makeSql();
+    vi.mocked(getSql).mockReturnValue(fn);
+    await vacanciesFeed(makeReq({}), makeRes() as unknown as ResLike);
+    const q = calls.find((c) => /order by f\.featured desc/.test(c.text))!.text;
+
+    // draft_0030's invariant, now a test and not a comment: paying may buy visibility in the
+    // ordinary stream, never a position. The ONLY ranking key we added is `featured`.
+    const orderBy = q.slice(q.indexOf('order by f.featured'));
+    expect(orderBy).not.toContain('promo');
+    expect(orderBy.split('\n')[0]!.trim()).toBe(FEED_ORDER);
+    // promo is still projected (the card must still say «Реклама») — it just ranks nothing.
+    expect(q).toContain("coalesce((to_jsonb(a) ->> 'promo')::boolean, false) as promo");
+  });
+});
+
+describe('the COUNTER and the SAVED list keep their own order (they are not the feed)', () => {
+  it('🔴 the counter has no ordering at all and still returns the same number', async () => {
+    const { fn, calls } = makeSql({ revealCount: 42 });
+
+    const n = await countVacancies(fn, parseFeedFilters(makeReq({})));
+
+    expect(n).toBe(42); // the number the feed would show for these filters, unchanged by the lift
+    const q = calls[0]!.text;
+    expect(q).toContain('count(*)::int as c');
+    expect(q).not.toContain('order by f.');
+    expect(q).not.toContain('limit');
+  });
+
+  it('the saved list still sorts by WHEN YOU SAVED a card, not by the lift', async () => {
+    const { fn, calls } = makeSql();
+    vi.mocked(getSql).mockReturnValue(fn);
+    await savedFeed(makeReq({}), makeRes() as unknown as ResLike);
+
+    const q = calls.find((c) => /order by f\.saved_at desc/.test(c.text))!.text;
+    expect(q).toContain('order by f.saved_at desc, f.id desc');
+    expect(q).not.toContain('f.featured desc'); // a featured ad must not jump your own bookmarks
+    // ...but the badge still shows on a bookmarked featured ad, so the flag IS projected.
+    expect(q).toContain('f.featured');
+    expect(q).toContain(`${featuredLiveSql('a')} as featured`);
+  });
+
+  it('the open card (detail) reads the flag with the SAME expression as the feed', async () => {
+    const { fn, calls } = makeSql();
+    vi.mocked(getSql).mockReturnValue(fn);
+    await vacancyDetail(makeReq({ id: VID }), makeRes() as unknown as ResLike);
+
+    const adQuery = calls.find((c) => /from user_ads a/.test(c.text))!;
+    // Spelled out literally there (a tagged template turns an interpolation into a bound param),
+    // so this is the parity guard between the two copies.
+    expect(adQuery.text).toContain(`${FEATURED_EXPR} as featured`);
+    expect(featuredLiveSql('a')).toBe(FEATURED_EXPR);
+    const vacQuery = calls.find((c) => /from vacancies v/.test(c.text))!;
+    expect(vacQuery.text).toContain('false as featured'); // a channel card, again, never featured
   });
 });
 
@@ -418,7 +544,20 @@ describe('encodeCursor / decodeCursor — snapshot of the base64url cursor', () 
   it('round-trips (posted_at, id) through a URL-safe base64 token', () => {
     const enc = encodeCursor(P, I);
     expect(enc).not.toMatch(/[+/=]/); // base64url, no padding / unsafe chars
-    expect(decodeCursor(enc)).toEqual({ p: P, i: I });
+    // `f` joined the cursor when the feed started ordering by (featured, posted_at, id) —
+    // the ordering key and the cursor must carry the SAME elements or paging re-serves/skips rows.
+    expect(decodeCursor(enc)).toEqual({ p: P, i: I, f: false });
+  });
+
+  it('carries the FEATURED flag of the last row, and an old cursor without it means "not featured"', () => {
+    expect(decodeCursor(encodeCursor(P, I, true))).toEqual({ p: P, i: I, f: true });
+    // A cursor minted before the feature (no `f` key at all) decodes to false — the safe side:
+    // "we are already past the featured block", so page 2 cannot duplicate rows from page 1.
+    const legacy = Buffer.from(JSON.stringify({ p: P, i: I }), 'utf8').toString('base64url');
+    expect(decodeCursor(legacy)).toEqual({ p: P, i: I, f: false });
+    // Nothing but a literal true counts as "in the featured block".
+    const sneaky = Buffer.from(JSON.stringify({ p: P, i: I, f: 'true' }), 'utf8').toString('base64url');
+    expect(decodeCursor(sneaky)).toEqual({ p: P, i: I, f: false });
   });
 
   it('an absent cursor decodes to null (first page)', () => {

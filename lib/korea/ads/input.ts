@@ -40,6 +40,8 @@ export interface AdBody {
   housing_terms?: unknown;
   meals_info?: unknown;
   schedule?: unknown;
+  /** The MANDATORY placement-form checkbox «Я не беру плату с работников» (owner 2026-10-21). */
+  no_worker_fee?: unknown;
 }
 
 /** The validated, DB-ready fields of a user ad (identical for create and edit). */
@@ -60,6 +62,13 @@ export interface AdFields {
   reqRegion: string | null;
   reqCitySlug: string | null;
   reqCityText: string | null;
+  /**
+   * «Я не беру плату с работников» — true ONLY on a literal `true` in the body (a missing field, a
+   * string "true", 1 or null are all "not confirmed"). Parsed here but NOT enforced here: the
+   * refusal belongs to the CREATE path (POST /api/ads), while an EDIT of an ad whose confirmation
+   * is already on file must not demand it again — see rw.ts / draft_0035.
+   */
+  noWorkerFee: boolean;
 }
 
 const s = (v: unknown, max = 2000): string | null =>
@@ -112,6 +121,8 @@ export function parseAdInput(body: AdBody | null): ParseResult {
       reqRegion: s(body?.region_slug, 60),
       reqCitySlug: s(body?.city_slug, 60),
       reqCityText: s(body?.city_text, 60),
+      // Strict `=== true`: a confirmation must be given, never inferred from a truthy value.
+      noWorkerFee: body?.no_worker_fee === true,
     },
   };
 }

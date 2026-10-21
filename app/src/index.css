@@ -1623,6 +1623,25 @@ a {
   font-weight: 600;
 }
 
+/* A phrase INSIDE a sentence turned into a link (e.g. «правила размещения» in the
+   placement note). A <button>, because the destination is an in-app route, with the
+   browser's own chrome reset away; `display: inline` on purpose, so it wraps with
+   the text instead of breaking the paragraph. Colour/weight are the link ones used
+   everywhere else (.outside__link / .consent__link). */
+.inline-link {
+  display: inline;
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--kj-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
 .hero {
   padding: 8px 4px 14px;
 }
@@ -1992,6 +2011,17 @@ a {
   height: 18px;
   flex: 0 0 auto;
   accent-color: var(--kj-brand);
+}
+
+/* The consequence line under a confirmation tick ("if this is not true we remove
+   the listing"): the same label, one size quieter — it is the price of the tick,
+   not fine print to be skipped. */
+.consent__sub {
+  display: block;
+  margin-top: 4px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--kj-hint);
 }
 
 /* ── Bottom sheet (filter) ─────────────────────────────────────────────── */
@@ -3270,11 +3300,13 @@ a {
   color: var(--kj-hint);
 }
 
-/* ── Paid-placement disclaimer (open card of a «Реклама» listing) ───────────
+/* ── Honesty plate on an open card ─────────────────────────────────────────
+   Used by BOTH plates that say what we do not stand behind: the paid «Реклама»
+   listing, and the «От автора» ad left through our own form.
    Same anatomy as .trust / .rawnote (30×30 icon disc + 13.5/700 title +
    12.5/hint body), but a NEUTRAL palette: amber belongs to the "unverified"
-   signal and the brand tint reads as endorsement. This plate explains what the
-   payment did and did not buy — it must not look like a badge of quality. */
+   signal and the brand tint reads as endorsement. Neither plate may look like a
+   badge of quality — that is the whole reason this class is grey. */
 .adnote {
   display: flex;
   gap: 11px;

@@ -5,6 +5,8 @@ import { AppBar } from './AppBar';
 import { LegalDoc } from './LegalDoc';
 import { PRIVACY_POLICY } from '../content/legal/privacy';
 import { REFERRAL_RULES } from '../content/legal/referral-rules';
+import { PLACEMENT_RULES } from '../content/legal/placement-rules';
+import { PLACEMENT_RULES_PATH } from '../content/legal/paths';
 import { SUPPORT_BOT } from '../lib/support';
 import type { Lang } from '../i18n';
 
@@ -30,12 +32,13 @@ function PlaneIcon() {
   );
 }
 
-/** The three views this page can be in; they map 1:1 to real URLs. */
-type View = 'home' | 'privacy' | 'rules';
+/** The views this page can be in; they map 1:1 to real URLs. */
+type View = 'home' | 'privacy' | 'rules' | 'placement';
 
 function viewFromPath(pathname: string): View {
   if (pathname.startsWith('/privacy')) return 'privacy';
   if (pathname.startsWith('/rules')) return 'rules';
+  if (pathname.startsWith(PLACEMENT_RULES_PATH)) return 'placement';
   return 'home';
 }
 
@@ -79,8 +82,10 @@ export function OutsideTelegram() {
   const lang: Lang = i18n.language.startsWith('en') ? 'en' : 'ru';
 
   if (view !== 'home') {
-    const doc = view === 'privacy' ? PRIVACY_POLICY[lang] : REFERRAL_RULES[lang];
-    const title = view === 'privacy' ? t('privacy.title') : t('rules.title');
+    const doc =
+      view === 'privacy' ? PRIVACY_POLICY[lang] : view === 'rules' ? REFERRAL_RULES[lang] : PLACEMENT_RULES[lang];
+    const title =
+      view === 'privacy' ? t('privacy.title') : view === 'rules' ? t('rules.title') : t('placementRules.title');
     return (
       <div className="outside outside--doc">
         <AppBar title={title} onBack={() => open('home', '/')} />
@@ -128,6 +133,14 @@ export function OutsideTelegram() {
           </span>
           <a className="outside__link" href="/rules" onClick={onDocClick('rules', '/rules')}>
             {t('rules.title')}
+          </a>
+          <span className="outside__sep" aria-hidden>
+            ·
+          </span>
+          {/* The third published document — reachable from a plain browser too, under
+              its own URL, like the other two. */}
+          <a className="outside__link" href={PLACEMENT_RULES_PATH} onClick={onDocClick('placement', PLACEMENT_RULES_PATH)}>
+            {t('placementRules.title')}
           </a>
         </nav>
 

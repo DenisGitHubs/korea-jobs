@@ -71,17 +71,32 @@ export function VacancyCard({
       : t('city.unspecified');
 
   const isRepost = Boolean((vacancy as { repost?: boolean }).repost);
-  const fromUser = vacancy.source_kind === 'user';
+  // ORIGIN, not privilege: the ad was left through our own form. Every such ad
+  // carries the mark, for as long as it lives — never tied to the free week at the
+  // top of the feed, and never to `promo` (PAID advertising, which wears the
+  // «Реклама» label and is deliberately given no position at all).
+  const fromAuthor = vacancy.source_kind === 'user';
   const promo = isPromo(vacancy);
 
   // Priority order: the paid-placement label FIRST — it is mandatory and must
-  // never be the one that falls into the "+N" overflow; then work-type + perks
-  // (housing/meals), then gender/source/repost.
+  // never be the one that falls into the "+N" overflow; then the "От автора" mark,
+  // which must appear on EVERY self-posted ad to stay a statement of origin (shown
+  // on some and hidden behind "+N" on others, it would read as a distinction);
+  // then work-type + perks (housing/meals), then gender/repost.
   const badges: ReactNode[] = [];
   if (promo)
     badges.push(
       <span key="ad" className="badge badge--ad">
         {t('vacancy.adBadge')}
+      </span>,
+    );
+  if (fromAuthor)
+    badges.push(
+      // Neutral grey, the same family as --source/--repost: no tick, no shield, no
+      // green. The tick in this app means "contact opened"; a tick here would read
+      // as "checked by us", and we check neither the author nor what he wrote.
+      <span key="author" className="badge badge--source">
+        {t('vacancy.directBadge')}
       </span>,
     );
   badges.push(<WorkTypeBadge key="work" type={vacancy.work_type} />);
@@ -101,12 +116,6 @@ export function VacancyCard({
     badges.push(
       <span key="gender" className="badge badge--gender">
         {t(genderKey(vacancy.gender))}
-      </span>,
-    );
-  if (fromUser)
-    badges.push(
-      <span key="source" className="badge badge--source">
-        {t('vacancy.fromUser')}
       </span>,
     );
   if (isRepost)

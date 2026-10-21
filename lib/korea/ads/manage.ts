@@ -23,6 +23,7 @@ import { ApiErrorCode } from '../core/errors.js';
 import { authenticate, type AuthedUser } from '../core/context.js';
 import { getConfigNumber } from '../config.js';
 import { decideAdModeration } from './moderation.js';
+import { grantFeaturedOnApproval } from './featured.js';
 import { notifyAdminsPending, resolveAdCityIds, resolveAdRegionSlugs } from './rw.js';
 import { notifyAuthorAdDecision } from '../notify/author.js';
 import { parseAdInput, adModText, UUID_RE, type AdBody } from './input.js';
@@ -191,6 +192,14 @@ export async function adUnarchive(req: ReqLike, res: ResLike): Promise<void> {
       returning id`) as unknown as { id: string }[];
     if (rows.length === 0) return sendError(res, ApiErrorCode.NotFound);
 
+    // FEATURED (owner 2026-10-21): the SAME shared grant as create/approve (ads/featured.ts). An ad
+    // that was already featured once keeps featured_until set, so its `is null` condition fails and
+    // an archive→unarchive loop can NEVER renew the week; an ad that reaches the feed for the first
+    // time this way earns it, subject to the one-live-per-author cap and the gender gate.
+    if (status === 'approved') {
+      await grantFeaturedOnApproval(sql, ad.id, modText);
+    }
+
     if (status === 'pending') {
       await notifyAdminsPending(sql, ad.id, pendingSummary(ad.city_slug ?? ad.city_text ?? ad.region_slug, ad.work_type, ad.title));
     }
@@ -277,6 +286,14 @@ async function adPatch(req: ReqLike, res: ResLike): Promise<void> {
       where id = ${ad.id}::uuid and author_user_id = ${user.id}::uuid and status <> 'taken_down'
       returning id`) as unknown as { id: string }[];
     if (rows.length === 0) return sendError(res, ApiErrorCode.NotFound);
+
+    // FEATURED (owner 2026-10-21): same shared grant (ads/featured.ts). An edit of an ALREADY
+    // featured ad changes nothing (featured_until is not null -> no re-grant), so editing cannot be
+    // used to buy another week; an ad that an edit brings into the feed for the first time earns it.
+    // modText is the NEW text, so an edit that ADDS a gender restriction cannot earn a lift either.
+    if (status === 'approved') {
+      await grantFeaturedOnApproval(sql, ad.id, modText);
+    }
 
     if (status === 'pending') {
       await notifyAdminsPending(sql, ad.id, pendingSummary(citySlug ?? cityText ?? regionSlug, f.workType, f.title));

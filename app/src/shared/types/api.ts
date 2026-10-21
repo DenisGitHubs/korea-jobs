@@ -156,13 +156,29 @@ export interface VacancyView {
    */
   image_url?: string | null;
   /**
-   * true = PAID placement. The word «Реклама» MUST then be shown everywhere this
-   * listing appears (feed preview AND the open card) — see `isPromo()`; the open
-   * card additionally shows the disclaimer plate. Absent === false.
-   * A promo listing is NOT ranked, framed or highlighted differently: paying may
-   * buy visibility, never a quality signal.
+   * true = PAID placement (a service ad — transfers, insurance). The word «Реклама»
+   * MUST then be shown everywhere this listing appears (feed preview AND the open
+   * card) — see `isPromo()`; the open card additionally shows the disclaimer plate.
+   * Absent === false.
+   * A paid listing gets NO position: it is never lifted, framed or highlighted —
+   * money buys a label, never a better place (the refusal lives in the server grant,
+   * lib/korea/ads/featured.ts, and this client puts nothing in any order). What IS
+   * lifted for a week is a FREE self-posted ad; the next field says why the mark on
+   * screen is not tied to that lift.
    */
   promo?: boolean;
+  /**
+   * true = this listing is inside its FREE week at the top of the feed (owner's
+   * decision 21.10.2026). The server computes it from `featured_until > now()` and
+   * never ships the date, so the week ends by itself — no clock on the client.
+   * 🔴 THE CLIENT DELIBERATELY NEVER READS THIS FIELD. The «От автора» mark is drawn
+   * from `source_kind === 'user'` — from ORIGIN, on EVERY self-posted ad, for as
+   * long as it lives. A mark that arrived and left together with the privilege could
+   * only be read as "trust this one more", which is the one thing we are not saying.
+   * The field stays here because it is part of the wire contract (the feed cursor
+   * rides on it); a guard keeps it unread — app/__tests__/free-featured.guard.test.ts.
+   */
+  featured?: boolean;
 }
 
 /**
@@ -399,6 +415,17 @@ export interface AdInput {
   housing_terms?: string | null;
   meals_info?: string | null;
   schedule?: string | null;
+  /**
+   * The author ticked "I do not charge workers any money UPFRONT" on the review step.
+   * Sent on CREATE only — the edit form does not show the tick, and a PATCH carrying
+   * `false` would read as a withdrawal of a confirmation that was in fact given.
+   * 🔴 The client tick is a FORM gate, not the confirmation: the record is the server's.
+   * Verified against the backend code, not a report: lib/korea/ads/input.ts reads
+   * `no_worker_fee` (this exact name) and lib/korea/ads/rw.ts REFUSES a create without
+   * it — 400, detail `no_worker_fee_confirmation_required`, never stored as false. The
+   * PATCH path (ads/manage.ts) does not ask for it, which is why this is create-only.
+   */
+  no_worker_fee?: boolean;
 }
 
 /** POST /api/ads response. */
