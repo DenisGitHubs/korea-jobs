@@ -8,6 +8,8 @@
 //   * isOverDailyCap — the send-side decision, in LETTERS (DMs), not vacancies.
 
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import * as cap from './cap.js';
 import {
   parseNotifyDailyCap,
@@ -56,19 +58,103 @@ describe('parseNotifyDailyCap — accepted values', () => {
   });
 });
 
-describe('NO built-in default: everyone is unlimited until they choose (owner, 2026-07-26)', () => {
-  it('the module exports no default-cap constant at all', () => {
-    // «Всем без ограничений. Захотят изменить — то изменят в настройках кол-во.» A default constant
-    // is exactly how a limit nobody asked for creeps back in (via a fresh row or a cold /me), so its
-    // absence is pinned here rather than left to review.
-    expect(Object.keys(cap)).not.toContain('DEFAULT_NOTIFY_DAILY_CAP');
+// Owner, 2026-10-24 — replaces the 2026-07-26 rule «всем без ограничений» (which was pinned here as
+// "the module exports no default-cap constant"): a NEW subscription without a choice starts at 10.
+describe('the default for a NEW subscription is 10 (owner, 2026-10-24)', () => {
+  it('exports exactly one default, equal to 10, inside the accepted range', () => {
+    expect(cap.NOTIFY_DAILY_CAP_DEFAULT).toBe(10);
+    expect(cap.NOTIFY_DAILY_CAP_DEFAULT).toBeGreaterThanOrEqual(NOTIFY_DAILY_CAP_MIN);
+    expect(cap.NOTIFY_DAILY_CAP_DEFAULT).toBeLessThanOrEqual(NOTIFY_DAILY_CAP_MAX);
+    // one of the values the settings screen offers, so the screen can show it as selected
+    expect(NOTIFY_DAILY_CAP_CHOICES).toContain(cap.NOTIFY_DAILY_CAP_DEFAULT);
   });
 
-  it('an unchosen cap is null, and a null cap never limits anyone', () => {
-    // The whole chain for a person who never opened the setting: the field is absent on the wire ->
-    // bound as null -> stored as SQL NULL -> read back as null -> the sender lets everything through.
+  it('ABSENT still parses to "keep" (param null) — the default is applied by the INSERT only', () => {
+    // The default must not leak into the parser: an absent field on an EXISTING row keeps its value.
     expect(parseNotifyDailyCap(undefined)).toEqual({ ok: true, param: null });
+  });
+
+  it('an explicit «Без ограничения» (null cap) still never limits anyone', () => {
     expect(isOverDailyCap(1_000, null)).toBe(false);
+  });
+});
+
+describe('isLastLetterOfDay — the N-th of N letters', () => {
+  it('true only for the letter that uses up the cap', () => {
+    expect(cap.isLastLetterOfDay(9, 10)).toBe(true);
+    expect(cap.isLastLetterOfDay(8, 10)).toBe(false);
+    expect(cap.isLastLetterOfDay(0, 1)).toBe(true); // cap = 1: the only letter is the last
+  });
+  it('false when there is no cap, or when the cap is already used (no letter is sent then)', () => {
+    expect(cap.isLastLetterOfDay(9, null)).toBe(false);
+    expect(cap.isLastLetterOfDay(0, 0)).toBe(false);
+    expect(cap.isLastLetterOfDay(10, 10)).toBe(false);
+    expect(cap.isLastLetterOfDay(40, 5)).toBe(false);
+  });
+  it('never disagrees with isOverDailyCap: a last letter is always one that is still allowed', () => {
+    for (const c of [1, 2, 5, 10, 500]) {
+      for (let n = 0; n <= c + 2; n++) {
+        if (cap.isLastLetterOfDay(n, c)) expect(isOverDailyCap(n, c)).toBe(false);
+      }
+    }
+  });
+});
+
+describe('withLastLetterNote — the note at the end of the letter', () => {
+  it('letter, empty line, note', () => {
+    expect(cap.withLastLetterNote('Новая вакансия: Ансан · Завод')).toBe(
+      `Новая вакансия: Ансан · Завод\n\n${cap.NOTIFY_LAST_LETTER_NOTE}`,
+    );
+  });
+  it('never exceeds the Bot API 4096-char limit; the note is never cut, the body is', () => {
+    const out = cap.withLastLetterNote('Я'.repeat(5000));
+    expect(out.length).toBeLessThanOrEqual(cap.TELEGRAM_TEXT_MAX);
+    expect(out.endsWith(`\n\n${cap.NOTIFY_LAST_LETTER_NOTE}`)).toBe(true);
+    expect(out).toContain('…');
+  });
+  it('the note itself is plain text that fits comfortably', () => {
+    expect(cap.NOTIFY_LAST_LETTER_NOTE.length).toBeLessThan(300);
+    expect(cap.NOTIFY_LAST_LETTER_NOTE).toContain('Настройки');
+  });
+  it('the cut never leaves half of an emoji (a lone surrogate) in front of the "…"', () => {
+    const room = cap.TELEGRAM_TEXT_MAX - 2 - cap.NOTIFY_LAST_LETTER_NOTE.length;
+    // Place an emoji so that the plain cut at room-1 code units lands BETWEEN its two halves.
+    const body = 'a'.repeat(room - 2) + '😀' + 'x'.repeat(5000);
+    expect(body.charCodeAt(room - 2)).toBeGreaterThanOrEqual(0xd800); // the high half sits at the cut
+    const out = cap.withLastLetterNote(body);
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    expect(out.length).toBeLessThanOrEqual(cap.TELEGRAM_TEXT_MAX);
+    expect(out.startsWith('a'.repeat(room - 2) + '…')).toBe(true); // emoji dropped whole
+    expect(out.endsWith(`\n\n${cap.NOTIFY_LAST_LETTER_NOTE}`)).toBe(true);
+    // an emoji that fits whole before the cut is kept whole
+    const kept = cap.withLastLetterNote('a'.repeat(room - 3) + '😀' + 'x'.repeat(5000));
+    expect(kept.startsWith('a'.repeat(room - 3) + '😀…')).toBe(true);
+  });
+});
+
+// The note names a path in the app. It must be the path the app ACTUALLY shows, so the three labels
+// are read from the very file the settings screen renders them from — app/src/i18n/ru.ts — by key
+// inside its own block. Renaming a label on either side turns this red.
+describe('NOTIFY_LAST_LETTER_NOTE — the owner’s wording, and the path matches the app', () => {
+  const ru = readFileSync(fileURLToPath(new URL('../../../app/src/i18n/ru.ts', import.meta.url)), 'utf8');
+  const label = (block: string, key: string): string => {
+    const b = new RegExp(`^  ${block}: \\{\\r?\\n([\\s\\S]*?)^  \\},`, 'm').exec(ru);
+    if (!b) throw new Error(`block "${block}" not found in app/src/i18n/ru.ts`);
+    const k = new RegExp(`^    ${key}: (['"])(.*?)\\1,`, 'm').exec(b[1]!);
+    if (!k) throw new Error(`key "${block}.${key}" not found in app/src/i18n/ru.ts`);
+    return k[2]!;
+  };
+
+  it('says the change is free', () => {
+    expect(cap.NOTIFY_LAST_LETTER_NOTE).toContain('бесплатно');
+  });
+
+  it('«Настройки» → «Уведомления» → «Не больше в сутки» = tab.settings → settings.notifications → settings.notifyCapTitle', () => {
+    const tab = label('tab', 'settings');
+    const section = label('settings', 'notifications');
+    const capTitle = label('settings', 'notifyCapTitle');
+    for (const s of [tab, section, capTitle]) expect(s.length).toBeGreaterThan(0);
+    expect(cap.NOTIFY_LAST_LETTER_NOTE).toContain(`«${tab}» → «${section}» → «${capTitle}»`);
   });
 });
 

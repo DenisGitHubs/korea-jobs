@@ -21,7 +21,7 @@ import type { ReqLike, ResLike } from '../core/http.js';
 import { getSql } from '../core/db.js';
 import { authenticate } from '../core/context.js';
 import { subscriptionPost } from './rw.js';
-import { isOverDailyCap } from '../notify/cap.js';
+import { isOverDailyCap, NOTIFY_DAILY_CAP_DEFAULT } from '../notify/cap.js';
 
 const USER_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 
@@ -176,10 +176,11 @@ describe('subscriptionPost — mailing is OPT-IN (absent flag = OFF)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// notify_daily_cap (owner, 2026-07-26) — "сколько уведомлений в сутки".
+// notify_daily_cap (owner, 2026-07-26; default changed 2026-10-24) — "сколько уведомлений в сутки".
 //
-// Owner's rule: EVERYONE is unlimited unless they picked a number themselves — there is no default
-// limit anywhere (no column DEFAULT, no constant). A brand-new row is therefore created with NULL.
+// Owner's rule since 2026-10-24: a BRAND-NEW row created without an explicit choice gets
+// NOTIFY_DAILY_CAP_DEFAULT (10); «без ограничения» (null/0 on the wire) still stores NULL. (Superseded:
+// the 2026-07-26 rule "everyone unlimited, a new row is created with NULL".)
 //
 // This endpoint REPLACES the whole subscription row, which is the wrong default for a field an
 // older client knows nothing about: an absent value must NOT lift someone's EXISTING limit. So this
@@ -189,9 +190,11 @@ describe('subscriptionPost — mailing is OPT-IN (absent flag = OFF)', () => {
 // 400 for junk.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Param slots added by the cap: 11 = VALUES nullif-input, 12 = UPDATE case-input (13 = its nullif). */
+/** Param slots added by the cap: VALUES case — 11 = case-input, 12 = the default, 13 = its nullif;
+ *  UPDATE case — 14 = case-input (15 = its nullif). */
 const capValuesParam = (calls: Call[]) => insertParams(calls)[11];
-const capUpdateParam = (calls: Call[]) => insertParams(calls)[12];
+const capDefaultParam = (calls: Call[]) => insertParams(calls)[12];
+const capUpdateParam = (calls: Call[]) => insertParams(calls)[14];
 type Call = { text: string; params: unknown[] };
 
 /** Like makeSql, but the upsert answers its RETURNING clause with a stored cap. */
@@ -225,22 +228,44 @@ describe('subscriptionPost — notify_daily_cap: absent must never lift an exist
     expect(bodyOf(res).notify_daily_cap).toBe(20);
   });
 
-  it('a BRAND-NEW row created without the field is stored UNLIMITED (NULL), never with a default', async () => {
-    // Owner, 2026-07-26: «всем без ограничений. Захотят изменить — то изменят в настройках кол-во».
-    // The DB answers RETURNING with NULL because `nullif(null, 0)` is what the INSERT stores.
-    const { fn, calls } = makeSqlStoring(null);
+  it('a BRAND-NEW row created without the field gets the default 10 (owner, 2026-10-24)', async () => {
+    // The fake cannot evaluate SQL, so the INSERT's CASE is pinned as text + its bound params: the
+    // absent branch (capParam null) must bind NOTIFY_DAILY_CAP_DEFAULT, and the explicit "no limit"
+    // branch must still be nullif(…, 0) so null/0 keeps storing NULL.
+    const { fn, calls } = makeSqlStoring(NOTIFY_DAILY_CAP_DEFAULT); // what that CASE stores on a fresh row
     vi.mocked(getSql).mockReturnValue(fn);
     const res = makeRes();
 
     await subscriptionPost(makeReq({ notify: true }), res as unknown as ResLike);
 
-    // Nothing numeric is bound at all: with the field absent there is simply no default cap to
-    // bind, so no ceiling can reach the fresh row.
-    expect(insertParams(calls).filter((p) => typeof p === 'number')).toEqual([]);
-    expect(capValuesParam(calls)).toBe(null); // absent -> null -> nullif(null, 0) = SQL NULL
-    expect(bodyOf(res).notify_daily_cap).toBe(null);
-    // ...and a stored NULL means the notify run never limits this person (the send-side rule).
-    expect(isOverDailyCap(1_000, bodyOf(res).notify_daily_cap as number | null)).toBe(false);
+    const insertSql = calls.find((c) => /insert into subscriptions/.test(c.text))!.text;
+    expect(capValuesParam(calls)).toBe(null); // absent
+    expect(capDefaultParam(calls)).toBe(10); // ...takes the default
+    expect(NOTIFY_DAILY_CAP_DEFAULT).toBe(10);
+    // Order matters: "absent -> default" must be decided BEFORE nullif, inside the VALUES list
+    // (i.e. before ON CONFLICT), or the default would also reach existing rows.
+    const values = insertSql.slice(0, insertSql.indexOf('on conflict'));
+    expect(values).toMatch(/when \?::int is null then \?::int\s+else nullif\(\?::int, 0\)/);
+    expect(bodyOf(res).notify_daily_cap).toBe(10);
+    // ...and the notify run then limits this person at 10 letters.
+    expect(isOverDailyCap(10, bodyOf(res).notify_daily_cap as number | null)).toBe(true);
+    expect(isOverDailyCap(9, bodyOf(res).notify_daily_cap as number | null)).toBe(false);
+  });
+
+  it('the default never reaches an EXISTING row: the UPDATE branch has no default in it', async () => {
+    const { fn, calls } = makeSqlStoring(null); // an existing row whose owner chose «без ограничения»
+    vi.mocked(getSql).mockReturnValue(fn);
+    const res = makeRes();
+
+    await subscriptionPost(makeReq({ notify: true }), res as unknown as ResLike);
+
+    const insertSql = calls.find((c) => /insert into subscriptions/.test(c.text))!.text;
+    const update = insertSql.slice(insertSql.indexOf('on conflict'));
+    expect(update).toContain('then subscriptions.notify_daily_cap'); // absent keeps what is stored
+    // No bound parameter after ON CONFLICT carries the default: the only cap params there are capParam.
+    expect(capUpdateParam(calls)).toBe(null);
+    expect(insertParams(calls).slice(14)).toEqual([null, null]);
+    expect(bodyOf(res).notify_daily_cap).toBe(null); // the stored «без ограничения» survives
   });
 });
 

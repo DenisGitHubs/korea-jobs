@@ -78,7 +78,7 @@ export const en: typeof ru = {
     visaTitle: 'What is your visa?',
     visaHint: 'Mark your visas to see only eligible jobs. Not sure — skip.',
     notifyTitle: 'Send you matching jobs?',
-    notifyHint: 'The bot will DM you new jobs matching your filters. Change it anytime in Settings.',
+    notifyHint: 'The bot will DM you new jobs matching your filters — up to 10 alerts plus one digest a day. Change it anytime in Settings.',
     notifyToggle: 'Send notifications',
     doneTitle: 'All set!',
     doneLead: 'Your feed is tuned to you. Take a look — fresh jobs are waiting.',

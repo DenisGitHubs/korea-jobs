@@ -4,14 +4,15 @@
 // toggle. One row per user (unique user_id). User is resolved from verified initData
 // (007: user_id NEVER from the request body). Invalid slugs/work_types are dropped.
 //
-// notify_daily_cap (owner, 2026-07-26) — how many notification DMs a day the person wants.
-// Owner's rule: EVERYONE is unlimited by default; a limit exists only because someone chose it in
-// the settings. This endpoint REPLACES the whole row on conflict, which is exactly the wrong default
-// for a field an older client does not know about: an absent value would silently LIFT someone's
-// limit. So this one column uses keep-on-absent semantics (the coalesce pattern, spelled out as a
-// CASE because the "no limit" choice is itself a NULL and must stay tellable apart from "the client
-// said nothing"):
-//   absent  -> keep the stored value; a brand-new row is created with NULL = no limit
+// notify_daily_cap (owner, 2026-07-26; default changed 2026-10-24) — how many notification DMs a day
+// the person wants. Owner's rule since 2026-10-24: a NEW subscription without an explicit choice gets
+// NOTIFY_DAILY_CAP_DEFAULT (10) letters a day; «без ограничения» is an explicit choice. (Superseded:
+// the 2026-07-26 rule "everyone unlimited by default" — see lib/korea/notify/cap.ts.) This endpoint
+// REPLACES the whole row on conflict, which is exactly the wrong default for a field an older client
+// does not know about: an absent value would silently change someone's limit. So this one column uses
+// keep-on-absent semantics on UPDATE (the coalesce pattern, spelled out as a CASE because the "no
+// limit" choice is itself a NULL and must stay tellable apart from "the client said nothing"):
+//   absent  -> keep the stored value; a brand-new row is created with NOTIFY_DAILY_CAP_DEFAULT (10)
 //   null/0  -> "без ограничения" -> stored NULL
 //   1..500  -> stored as-is
 //   anything else -> 400 bad_request (see lib/korea/notify/cap.ts for the reasoning)
@@ -28,7 +29,7 @@ import {
 import { ApiErrorCode } from '../core/errors.js';
 import { authenticate } from '../core/context.js';
 import { WORK_TYPES, VISA_TYPES, PLACEMENT_FEES } from '../parser/prompt.js';
-import { parseNotifyDailyCap } from '../notify/cap.js';
+import { parseNotifyDailyCap, NOTIFY_DAILY_CAP_DEFAULT } from '../notify/cap.js';
 
 const WORK_TYPE_SET = new Set<string>(WORK_TYPES);
 const VISA_TYPE_SET = new Set<string>(VISA_TYPES);
@@ -89,7 +90,8 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
   // How many notification DMs a day this person wants. STRICT: a present-but-malformed value is a
   // client bug or tampering, and quietly rounding it would change how much mail someone gets without
   // them knowing — so it fails the request instead. `capParam` is the value bound to SQL below:
-  // null = "the field was absent" (keep / use the column default), 0 = explicit "no limit".
+  // null = "the field was absent" (keep the stored value / a new row gets the default 10),
+  // 0 = explicit "no limit".
   const parsedCap = parseNotifyDailyCap(body?.notify_daily_cap);
   if (!parsedCap.ok) return sendError(res, ApiErrorCode.BadRequest);
   const capParam = parsedCap.param;
@@ -114,10 +116,10 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
     const validRegions = regionRows.map((r) => r.region_slug);
 
     // notify_daily_cap is the ONE column that is not a blind overwrite (see the file header):
-    //   * INSERT  — plain `nullif($cap, 0)`: an ABSENT field (bound as null) stores SQL NULL and an
-    //               explicit "no limit" (bound as 0) stores SQL NULL too, so a brand-new subscriber
-    //               is UNLIMITED unless they picked a number — the owner's rule, and the reason
-    //               there is no column DEFAULT to fall back on.
+    //   * INSERT  — a CASE: an ABSENT field (bound as null) stores NOTIFY_DAILY_CAP_DEFAULT (10, owner
+    //               2026-10-24); an explicit "no limit" (bound as 0) stores SQL NULL via nullif; a number
+    //               is stored as-is. The default is bound from code on purpose — this statement always
+    //               names the column, so a column DEFAULT would never be consulted (see cap.ts).
     //   * UPDATE  — a CASE, because here the two cases must diverge: the absent branch keeps
     //               subscriptions.notify_daily_cap (this is `coalesce(excluded.x, subscriptions.x)`
     //               written out longhand; coalesce alone cannot express it because "no limit" is
@@ -131,7 +133,10 @@ export async function subscriptionPost(req: ReqLike, res: ResLike): Promise<void
       values (
         ${user.id}::uuid, ${cityIds}::uuid[], ${validRegions}::text[], ${workTypes}::work_type[], ${notify}, ${digestEnabled}, ${noCity},
         ${visaTypes}::visa_type[], ${placementFee}::placement_fee, ${requireHousing}, ${requireMeals},
-        nullif(${capParam}::int, 0)
+        case
+          when ${capParam}::int is null then ${NOTIFY_DAILY_CAP_DEFAULT}::int
+          else nullif(${capParam}::int, 0)
+        end
       )
       on conflict (user_id) do update set
         city_ids = excluded.city_ids,

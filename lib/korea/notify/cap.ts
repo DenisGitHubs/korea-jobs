@@ -1,28 +1,42 @@
 // lib/korea/notify/cap.ts
 //
-// PER-USER DAILY CAP on realtime notification DMs (owner, 2026-07-26).
+// PER-USER DAILY CAP on realtime notification DMs (owner, 2026-07-26; default changed 2026-10-24).
 //
 // The product promise is stated in LETTERS, not vacancies: "не больше N уведомлений в сутки".
 // One notify tick sends at most ONE grouped DM per user (notify/run.ts groups every match of that
 // tick into a single message carrying up to notify_group_cap items), so a user with cap = 10 can
 // receive up to 10 DMs a day, each still holding up to 6 offers.
 //
-// NO DEFAULT LIMIT — owner's rule (2026-07-26): «всем без ограничений. Захотят изменить — то
-// изменят в настройках кол-во». There is therefore NO default-cap constant in this module and no
-// DEFAULT on the column: a person is unlimited until they themselves pick a number.
+// DEFAULT LIMIT = 10 — owner's decision of 2026-10-24. Two people received 153 letters each in
+// 3.5 days, so a NEW subscription that has not chosen anything starts at NOTIFY_DAILY_CAP_DEFAULT
+// (10) letters a day. «Без ограничения» stays available as an EXPLICIT choice in the settings.
+// All 29 subscriptions that existed on 2026-10-24 were set to 10 by a one-off UPDATE (John; the copy
+// of the previous values is his) — this module only governs what NEW rows get.
+//   SUPERSEDED — the owner's rule of 2026-07-26 «всем без ограничений. Захотят изменить — то изменят
+//   в настройках кол-во» (no default constant, no limit until a person picks a number) is no longer in
+//   force. It is kept here in words, not deleted, because the column itself still carries NO default
+//   (draft_0026) and NULL still means "no limit"; only the value a NEW row is created with changed,
+//   and it is set by the one INSERT that creates subscriptions (subscriptions/rw.ts).
+//
+// LAST LETTER OF THE DAY — owner, 2026-10-24: «вместе с последним письмом по лимиту пиши, что можно
+// увеличить лимит в приложении». The letter that uses up a person's cap carries one extra line
+// (NOTIFY_LAST_LETTER_NOTE) at its END — never a separate message, which would itself break the cap.
+// Only people WITH a cap get it (NULL = no limit = no last letter), and a person who was already at
+// the cap before the run gets nothing at all (the letter is never sent, so neither is the line).
 //
 // STORAGE / WIRE CONTRACT
-//   subscriptions.notify_daily_cap  integer NULL, no default   (draft_0026_notify_daily_cap.sql)
-//     * NULL  -> NO LIMIT (today's behaviour; the state of every row, old and new, until its owner
-//                chooses a number — the migration backfills nobody)
+//   subscriptions.notify_daily_cap  integer NULL, NO column default   (draft_0026_notify_daily_cap.sql)
+//     * NULL  -> NO LIMIT (only an explicit «Без ограничения» choice produces it on a new row)
 //     * 1..500 -> at most that many DMs per Asia/Seoul calendar day
 //   POST /api/subscription accepts `notify_daily_cap`:
-//     * ABSENT      -> do not change (a client that knows nothing about the field must never
-//                      silently lift someone's limit); a BRAND-NEW row is created with NULL,
-//                      i.e. no limit
+//     * ABSENT      -> do not change an EXISTING row (a client that knows nothing about the field must
+//                      never silently change someone's limit); a BRAND-NEW row is created with
+//                      NOTIFY_DAILY_CAP_DEFAULT (10)
 //     * null OR 0   -> "без ограничения" -> stored as NULL
 //     * 1..500      -> stored as-is
 //     * anything else (non-integer, negative, > 500, string, NaN) -> 400 bad_request
+//   GET /api/me reports NOTIFY_DAILY_CAP_DEFAULT for a person with NO subscription row yet, so the
+//   settings screen shows the value a first save would store (the client echoes it back on save).
 //
 // This module is DB-free and pure on purpose: the parsing rule and the "is this user over budget"
 // decision are the two things worth unit-testing, and both must read identically in the write path
@@ -41,6 +55,26 @@ export const NOTIFY_DAILY_CAP_MAX = 500;
  */
 export const NOTIFY_DAILY_CAP_UNLIMITED = 0;
 
+/**
+ * What a NEW subscription gets when the person has not chosen anything (owner, 2026-10-24). It lives in
+ * code, not as a column DEFAULT: the only INSERT into subscriptions (subscriptions/rw.ts) always names
+ * the column, so a DB default would never be consulted — and a second copy of the number in the
+ * schema would only be a second place to forget when the owner changes it again.
+ */
+export const NOTIFY_DAILY_CAP_DEFAULT = 10;
+
+/**
+ * The line appended to the letter that uses up the day's cap (owner's wording, 2026-10-24). ONE place.
+ * Plain text — notify DMs are sent without parse_mode, so no character in it is markup.
+ * The path «Настройки» → «Уведомления» → «Не больше в сутки» must name what the app ACTUALLY shows:
+ * cap.test.ts reads the three labels from app/src/i18n/ru.ts and goes red when either side moves.
+ */
+export const NOTIFY_LAST_LETTER_NOTE =
+  'Это последнее уведомление о вакансиях на сегодня. Новые вакансии всё равно в ленте. Изменить или снять ограничение можно бесплатно: «Настройки» → «Уведомления» → «Не больше в сутки».';
+
+/** Bot API sendMessage text limit: 1-4096 characters after entities parsing (plain text here). */
+export const TELEGRAM_TEXT_MAX = 4096;
+
 /** Values the settings screen offers. Informational for the client contract; the API accepts 1..500. */
 export const NOTIFY_DAILY_CAP_CHOICES: readonly (number | null)[] = [5, 10, 20, 50, null];
 
@@ -49,8 +83,8 @@ export type ParsedDailyCap =
       ok: true;
       /**
        * The value to bind into SQL:
-       *   * null -> the field was ABSENT: keep the stored value (on a brand-new row this lands as
-       *             SQL NULL = no limit, since the column has no default)
+       *   * null -> the field was ABSENT: keep the stored value (a brand-new row gets
+       *             NOTIFY_DAILY_CAP_DEFAULT — subscriptions/rw.ts)
        *   * 0    -> explicit "no limit" -> `nullif(0, 0)` = SQL NULL
        *   * n    -> the chosen cap
        */
@@ -83,4 +117,36 @@ export function parseNotifyDailyCap(v: unknown): ParsedDailyCap {
 export function isOverDailyCap(lettersToday: number, cap: number | null): boolean {
   if (cap === null || cap <= 0) return false;
   return lettersToday >= cap;
+}
+
+/**
+ * True when the letter about to be sent is the one that USES UP today's cap (the N-th of N), i.e. it
+ * must carry NOTIFY_LAST_LETTER_NOTE. Same inputs and same null rule as isOverDailyCap, so the two can
+ * never disagree: no cap -> never a last letter; already over -> no letter is sent at all.
+ */
+export function isLastLetterOfDay(lettersToday: number, cap: number | null): boolean {
+  if (cap === null || cap <= 0) return false;
+  if (lettersToday >= cap) return false; // over budget: nothing is sent, so there is no "last" one
+  return lettersToday + 1 === cap;
+}
+
+/**
+ * The text of the last letter of the day: the letter, an empty line, the note. The note is never cut;
+ * if the body would push the whole past the Bot API limit, the BODY is shortened (with "…") instead —
+ * the inline buttons still open every item, so nothing is lost from what the person can reach.
+ * Lengths are UTF-16 code units (never fewer than characters, so the limit holds either way), and the
+ * cut never leaves a lone high surrogate — half an emoji would make the whole text invalid UTF-8 on
+ * the wire and Telegram would reject the letter.
+ */
+export function withLastLetterNote(body: string): string {
+  const sep = '\n\n';
+  const room = TELEGRAM_TEXT_MAX - sep.length - NOTIFY_LAST_LETTER_NOTE.length;
+  let fitted = body;
+  if (body.length > room) {
+    let cut = Math.max(0, room - 1);
+    const last = body.charCodeAt(cut - 1);
+    if (cut > 0 && last >= 0xd800 && last <= 0xdbff) cut -= 1; // do not split a surrogate pair
+    fitted = body.slice(0, cut) + '…';
+  }
+  return `${fitted}${sep}${NOTIFY_LAST_LETTER_NOTE}`;
 }

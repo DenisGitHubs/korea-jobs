@@ -23,9 +23,9 @@ import { textHash } from './texthash.js';
 import { verdictHash, shouldCacheVerdict, lookupVerdictCache, touchVerdictCache, upsertVerdictCache } from './verdict-cache.js';
 import { cleanForAi } from './text-clean.js';
 import { extractJson } from './extract-json.js';
-import { looksLikeSpam } from './spamfilter.js';
+import { spamRuleHit, observedHits } from './spamfilter.js';
 import { recordAiUsage } from '../ai-usage.js';
-import { recordAiReject } from './reject-log.js';
+import { recordAiReject, recordRejectBatch, type RejectSample } from './reject-log.js';
 import { pickCanonical, isLiveUserHandle, normalizeHandle } from './canonical.js';
 import { buildCityMatcher, detectCitySlugs, detectRegionSlugs } from '../cities/detect.js';
 import {
@@ -163,7 +163,185 @@ export interface ParseResult {
   vacancies: number;
 }
 
+// ── CALL THE MODEL ONLY WHEN IT IS WORTH IT (owner decision 2026-10-24) ─────────────────────────────
+// The free stages (pre-filter, dedup, verdict cache) cost nothing but a few queries, so they run over a
+// wide window of the queue every pass. The model is a different matter: one call carries a fixed
+// ~6.8k-token cached-prefix read no matter how few messages ride on it, and on the live stream most
+// calls carried 1–3 messages. So the survivors WAIT until either enough of them have gathered or the
+// oldest has waited long enough — and at night (Seoul) nobody is woken for a card, so the model is
+// not called at all; the first morning ticks drain what gathered.
+/** How many pending rows one pass runs through the FREE stages (the model still gets ≤ batch size). */
+export const PARSER_FREE_WINDOW = 200;
+export const AI_MIN_BATCH_DEFAULT = 20;
+export const AI_MAX_WAIT_MINUTES_DEFAULT = 30;
+export const QUIET_START_HOUR_DEFAULT = 0;
+export const QUIET_END_HOUR_DEFAULT = 5;
+/** Korea Standard Time is UTC+9 all year (no daylight saving), so the offset is a constant. */
+const SEOUL_OFFSET_MS = 9 * 3_600_000;
+
+export interface AiCallPolicy {
+  /** Call as soon as this many messages are waiting for the model. */
+  minBatch: number;
+  /** …or as soon as the oldest of them has waited this long since it was fetched. */
+  maxWaitMinutes: number;
+  /** Seoul hours [start, end) with no model call at all. start === end switches the night off. */
+  quietStartHour: number;
+  quietEndHour: number;
+}
+
+export type AiCallDecision = 'call' | 'wait' | 'night';
+
+/** Hour of the day in Seoul (0..23) for an epoch-ms instant. */
+export function seoulHour(nowMs: number): number {
+  return new Date(nowMs + SEOUL_OFFSET_MS).getUTCHours();
+}
+
+/** True when `hour` falls in [start, end); a window that crosses midnight (22 → 5) wraps. */
+export function inQuietHours(hour: number, start: number, end: number): boolean {
+  if (start === end) return false;
+  return start < end ? hour >= start && hour < end : hour >= start || hour < end;
+}
+
+/** A config hour that is not a whole 0..23 falls back to the default (a typo must not silence the parser). */
+function cleanHour(v: number, fallback: number): number {
+  return Number.isInteger(v) && v >= 0 && v <= 23 ? v : fallback;
+}
+
+/** Read the policy from config; every key has its default here (none is seeded). */
+async function readAiCallPolicy(): Promise<AiCallPolicy> {
+  const minBatch = await getConfigNumber('parser_ai_min_batch', AI_MIN_BATCH_DEFAULT);
+  const maxWait = await getConfigNumber('parser_ai_max_wait_minutes', AI_MAX_WAIT_MINUTES_DEFAULT);
+  const qs = await getConfigNumber('parser_quiet_start_hour', QUIET_START_HOUR_DEFAULT);
+  const qe = await getConfigNumber('parser_quiet_end_hour', QUIET_END_HOUR_DEFAULT);
+  return {
+    minBatch: Number.isFinite(minBatch) && minBatch >= 1 ? minBatch : AI_MIN_BATCH_DEFAULT,
+    maxWaitMinutes: Number.isFinite(maxWait) && maxWait >= 0 ? maxWait : AI_MAX_WAIT_MINUTES_DEFAULT,
+    quietStartHour: cleanHour(qs, QUIET_START_HOUR_DEFAULT),
+    quietEndHour: cleanHour(qe, QUIET_END_HOUR_DEFAULT),
+  };
+}
+
+/**
+ * Whether to call the model now for `waiting` messages that passed every free stage. Night wins over
+ * everything; otherwise call when the batch is full enough OR the oldest has waited long enough. An
+ * unknown fetch time (null) counts as "waited forever" — a row must never be held without a clock.
+ */
+export function aiCallDecision(
+  waiting: number,
+  oldestFetchedMs: number | null,
+  nowMs: number,
+  p: AiCallPolicy,
+): AiCallDecision {
+  if (inQuietHours(seoulHour(nowMs), p.quietStartHour, p.quietEndHour)) return 'night';
+  if (waiting >= p.minBatch) return 'call';
+  if (oldestFetchedMs == null || nowMs - oldestFetchedMs >= p.maxWaitMinutes * 60_000) return 'call';
+  return 'wait';
+}
+
+// ── WHAT THE PASS WRITES TO THE REJECT JOURNAL AT THE END ───────────────────────────────────────────
+// Two records ride on one flush (reject-log.ts recordRejectBatch), written in runParse's `finally`:
+//   • `prefilter:<rule>` — which live pre-filter rule dropped a message (counter always; its full text
+//     only while reject_log_enabled is on);
+//   • SHADOW (owner decision 2026-10-24): for a message that passed the live filter but on which an
+//     OBSERVED rule fired, what then happened to it — one counter per id, `shadow:o3|vacancy`, always;
+//     plus `shadow:o3+o5|vacancy` as a sample (contact-masked text, confidence, source) ONLY for the
+//     outcomes in SHADOW_SAMPLED_OUTCOMES (vacancy / low_confidence / error). The outcome is set where
+//     it is decided; a message still waiting for the model gets none and is written by the pass that
+//     settles it. Best-effort: the flush never throws and never changes what the pass returns.
+export interface RunRecorder {
+  /** A live pre-filter rule dropped this row (call AFTER the row was marked skipped). */
+  prefilter(row: Record<string, unknown>, rule: string, logSample: boolean): void;
+  /** Shadow rules fired on this row, which passed the live filter. */
+  watch(row: Record<string, unknown>, hits: string[]): void;
+  /** What happened to the row: 'vacancy', a reject reason, 'duplicate', 'cache:<reason>', … */
+  settle(rawId: string, outcome: string, confidence?: number | null): void;
+  /** Write everything gathered (one batch). Never throws. */
+  flush(): Promise<void>;
+}
+
+/** Shadow outcomes whose (contact-masked) full text is kept; every other outcome — a model reject
+ *  reason, `cache:<reason>`, `duplicate` — is written as the `shadow:<id>|<outcome>` counter only. */
+const SHADOW_SAMPLED_OUTCOMES: ReadonlySet<string> = new Set(['vacancy', 'low_confidence', 'error']);
+
+/** Shadow (OBSERVED) rule ids for a text that passed the live filter. Shadow code must never break the
+ *  live pass: a rule that throws counts as "no hit" (run.test.ts: "a throwing shadow rule"). */
+function safeObservedHits(text: string): string[] {
+  try {
+    return observedHits(text);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[parser] shadow rules failed (ignored):', err instanceof Error ? err.message : String(err));
+    return [];
+  }
+}
+
+function sampleOf(row: Record<string, unknown>, reason: string, confidence: number | null): RejectSample {
+  return {
+    reason,
+    confidence,
+    postedAt: (row.posted_at as Date | string | null) ?? null,
+    text: (row.text as string | null) ?? '',
+    sourceNote: (row.source_username as string | null) ?? null,
+  };
+}
+
+export function createRunRecorder(write: typeof recordRejectBatch = recordRejectBatch): RunRecorder {
+  const counts = new Map<string, number>();
+  const samples: RejectSample[] = [];
+  const watched = new Map<string, { row: Record<string, unknown>; hits: string[] }>();
+  const settled = new Map<string, { outcome: string; confidence: number | null }>();
+  const bump = (reason: string) => counts.set(reason, (counts.get(reason) ?? 0) + 1);
+
+  return {
+    prefilter(row, rule, logSample) {
+      const reason = `prefilter:${rule}`;
+      bump(reason);
+      if (logSample) samples.push(sampleOf(row, reason, null));
+    },
+    watch(row, hits) {
+      if (hits.length > 0) watched.set(row.id as string, { row, hits });
+    },
+    settle(rawId, outcome, confidence = null) {
+      if (watched.has(rawId)) settled.set(rawId, { outcome, confidence });
+    },
+    async flush() {
+      try {
+        for (const [rawId, { outcome, confidence }] of settled) {
+          const w = watched.get(rawId)!;
+          for (const id of w.hits) bump(`shadow:${id}|${outcome}`);
+          // Full text only where the shadow week needs to READ it (007, 2026-10-24): would the rule
+          // have cut a real vacancy / an unsure one / one the model choked on? Model rejects, cache
+          // replays and duplicates are already explained by their outcome — counter only. Contacts in
+          // the kept text are masked (scrubContacts — the same scrubber as the vacancy write side).
+          if (!SHADOW_SAMPLED_OUTCOMES.has(outcome)) continue;
+          const s = sampleOf(w.row, `shadow:${w.hits.join('+')}|${outcome}`, confidence);
+          samples.push({ ...s, text: scrubContacts(s.text) ?? '' });
+        }
+        await write(counts, samples);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[parser] reject journal flush failed:', err instanceof Error ? err.message : String(err));
+      }
+    },
+  };
+}
+
+/** A model confidence worth recording next to an outcome, or null. */
+function confOf(it: { confidence?: unknown }): number | null {
+  return typeof it.confidence === 'number' && Number.isFinite(it.confidence) ? it.confidence : null;
+}
+
 export async function runParse(): Promise<ParseResult> {
+  const rec = createRunRecorder();
+  try {
+    return await parsePass(rec);
+  } finally {
+    // One flush per pass, whatever happened — an early return, a wait, a thrown query.
+    await rec.flush();
+  }
+}
+
+async function parsePass(rec: RunRecorder): Promise<ParseResult> {
   const sql = getSql();
 
   const batchSize = await getConfigNumber('parser_batch_size', 20);
@@ -195,30 +373,42 @@ export async function runParse(): Promise<ParseResult> {
 
   // 1) Oldest pending raw messages WITHIN the freshness window. Join the source so we
   // can pass the channel title/notes to the model as a per-item city hint (source_hint).
+  // The window is PARSER_FREE_WINDOW, not the model batch: the free stages below run over all of it,
+  // and only `batchSize` of the survivors go to the model (see aiCallDecision). fetched_at feeds the
+  // "oldest has waited long enough" half of that decision.
   const pendingAll = await sql`
-    select r.id, r.text, r.source_id, r.posted_at, r.sender_username, r.tg_message_id,
+    select r.id, r.text, r.source_id, r.posted_at, r.fetched_at, r.sender_username, r.tg_message_id,
            s.title as source_title, s.notes as source_notes, s.username as source_username
     from raw_messages r
     left join sources s on s.id = r.source_id
     where r.status = 'pending'
       and r.posted_at >= now() - make_interval(days => ${maxAgeDays})
     order by r.fetched_at asc
-    limit ${batchSize}`;
+    limit ${PARSER_FREE_WINDOW}`;
   if (pendingAll.length === 0) return { processed: 0, vacancies: 0 };
 
   // Drop obvious spam BEFORE the AI call — no tokens spent on crypto/exchange/leaflet junk
   // (~2/3 of the raw stream). Conservative matcher; borderline text still reaches the model.
-  const spamIds: string[] = [];
+  // spamRuleHit names the rule (counted as `prefilter:<rule>`); raw_messages keeps the single label
+  // 'spam_prefilter' — the read side tells a pre-AI skip from a verdict by `confidence is null`.
+  // A message that passes is checked against the SHADOW rules: a hit is only remembered, and written
+  // with the message's outcome at the end of the pass.
+  const spamRows: { row: Record<string, unknown>; rule: string }[] = [];
   let pending = pendingAll.filter((r) => {
-    if (looksLikeSpam((r.text as string | null) ?? '')) {
-      spamIds.push(r.id as string);
+    const text = (r.text as string | null) ?? '';
+    const rule = spamRuleHit(text);
+    if (rule !== null) {
+      spamRows.push({ row: r, rule });
       return false;
     }
+    rec.watch(r, safeObservedHits(text));
     return true;
   });
+  const spamIds = spamRows.map((s) => s.row.id as string);
   if (spamIds.length > 0) {
     await sql`update raw_messages set status='skipped', processed_at=now(),
               reject_reason='spam_prefilter' where id = any(${spamIds}::uuid[])`;
+    for (const s of spamRows) rec.prefilter(s.row, s.rule, rejectLogEnabled);
     // eslint-disable-next-line no-console
     console.log(`[parser] spam pre-filtered (no AI): ${spamIds.length}`);
   }
@@ -279,6 +469,7 @@ export async function runParse(): Promise<ParseResult> {
       set status='skipped', processed_at=now(), reject_reason='duplicate',
           vacancy_id=${s.vacancyId}::uuid, text_hash=${s.hash}
       where id=${s.rawId}::uuid`;
+    rec.settle(s.rawId, 'duplicate');
   }
   if (crossSkips.length > 0) {
     // Aggregate per canonical: how many reposts (N) and the FRESHEST repost date in this batch
@@ -426,6 +617,7 @@ export async function runParse(): Promise<ParseResult> {
         update raw_messages
         set status='skipped', processed_at=now(), reject_reason='duplicate', text_hash=${h}
         where id=${rawId}::uuid`;
+      rec.settle(rawId, 'duplicate');
     }
     pending = pending.filter((r) => !dropInBatch.has(r.id as string));
     // eslint-disable-next-line no-console
@@ -464,6 +656,7 @@ export async function runParse(): Promise<ParseResult> {
       await sql`
         update raw_messages set status='skipped', processed_at=now(), reject_reason=${s.reason}
         where id=${s.rawId}::uuid`;
+      rec.settle(s.rawId, `cache:${s.reason}`);
       // Reject journal parity (owner rule 2026-07-20): a cache replay of a genuine REJECT IS a real
       // AI-verdict reject being reused, so it MUST advance the day+reason counter exactly like a fresh
       // reject — the reject-log invariant is "every AI-verdict reject counted always", and these short
@@ -498,6 +691,23 @@ export async function runParse(): Promise<ParseResult> {
   // UNIQUE, un-cached (or too-short-to-dedup) messages reach the AI below.
   const preAiSkipped = spamIds.length + crossSkips.length + dropInBatch.size + cacheSkips.length;
   if (pending.length === 0) return { processed: preAiSkipped, vacancies: 0 };
+
+  // 1d) CALL OR WAIT (owner decision 2026-10-24, see aiCallDecision). `pending` is still in fetched_at
+  // order, but take the minimum anyway — the decision must not depend on that staying true. While we
+  // wait, `processed` counts ONLY the free work: the tick repeats a pass while processed > 0
+  // (cron/tick.ts), and counting waiting rows would spin it through passes that do nothing.
+  const fetchedMs = pending
+    .map((r) => (r.fetched_at == null ? NaN : new Date(r.fetched_at as string | Date).getTime()))
+    .filter((t) => Number.isFinite(t));
+  const oldestFetchedMs = fetchedMs.length === pending.length ? Math.min(...fetchedMs) : null;
+  const decision = aiCallDecision(pending.length, oldestFetchedMs, Date.now(), await readAiCallPolicy());
+  if (decision !== 'call') {
+    // eslint-disable-next-line no-console
+    console.log(`[parser] model call deferred (${decision}): ${pending.length} waiting`);
+    return { processed: preAiSkipped, vacancies: 0 };
+  }
+  // The model takes at most one batch; the rest stays 'pending' for the next pass, untouched.
+  pending = pending.slice(0, batchSize);
 
   // 2) Active cities. TWO views over the SAME rows (one query):
   //   • FULL set (all 167) → cityIdBySlug + the multi-city text matcher (cities/detect.ts). `aliases`
@@ -663,6 +873,7 @@ export async function runParse(): Promise<ParseResult> {
 
     if (!it) {
       await sql`update raw_messages set status='error', processed_at=now(), error='no_parser_output', text_hash=${hash} where id=${rawId}::uuid`;
+      rec.settle(rawId, 'error');
       continue;
     }
 
@@ -677,6 +888,7 @@ export async function runParse(): Promise<ParseResult> {
             reject_reason=${rejectReason},
             confidence=${aiJudgedConfidence(it.confidence)}, text_hash=${hash}
         where id=${rawId}::uuid`;
+      rec.settle(rawId, rejectReason, confOf(it));
       // Reject journal (owner rule 2026-07-20), best-effort. Count + (when enabled) sample the FULL
       // original text of AI-verdict rejects. EXCLUDE 'low_confidence' — those are the visible "Не
       // проверено" tab, not discarded — (spam_prefilter never reaches the AI at all). Never throws.
@@ -846,6 +1058,7 @@ export async function runParse(): Promise<ParseResult> {
       await sql`
         update raw_messages set status='skipped', processed_at=now(), reject_reason=${reason}, text_hash=${hash}
         where id=${rawId}::uuid`;
+      rec.settle(rawId, reason, confOf(it));
       continue;
     }
 
@@ -911,6 +1124,7 @@ export async function runParse(): Promise<ParseResult> {
       // eslint-disable-next-line no-console
       console.error('[parser] vacancy insert failed');
       await sql`update raw_messages set status='error', processed_at=now(), error='vacancy_insert_failed', text_hash=${hash} where id=${rawId}::uuid`;
+      rec.settle(rawId, 'error', confOf(it));
       continue;
     }
 
@@ -919,6 +1133,7 @@ export async function runParse(): Promise<ParseResult> {
     if (isNew) vacancies += 1;
 
     await sql`update raw_messages set status='parsed', processed_at=now(), vacancy_id=${vacancyId ?? null}::uuid, text_hash=${hash} where id=${rawId}::uuid`;
+    rec.settle(rawId, 'vacancy', confOf(it));
 
     // CONDITIONAL AI-GEO learning (Part B): log any unresolved model city/region name + every decoded
     // slang pair to geo_suggestions for owner /stats. Best-effort — never blocks or fails the parse.

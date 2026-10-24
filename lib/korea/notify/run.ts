@@ -13,7 +13,9 @@
 //
 // Retry semantics (Цензор), preserved per included item: a 'sent'/'skipped(403)' is recorded — a
 // transient send error records NOTHING and defers every item in that DM (their notify_pending stays
-// true) so the next tick retries just the un-notified subscribers. A 429 sleeps and stops the run
+// true) so the next tick retries just the un-notified subscribers. A send that THROWS (timeout,
+// network) is such a transient too and the loop goes on to the next person; a failed 'sent' INSERT is
+// caught per item. A 429 sleeps (at most NOTIFY_RATE_LIMIT_SLEEP_MAX_SECONDS) and stops the run
 // with the current DM unrecorded, so all its items resend next tick. A notify_pending flag is
 // cleared only once a post-run re-check finds no un-notified matching subscriber left for that item.
 // Only city-scoped items are pushed; city-less ones have their pending flag cleared up front. The
@@ -28,21 +30,37 @@
 // surface, where a user browses city-less offers on purpose; a realtime DM about one would be noise.
 //
 // PER-USER DAILY CAP (owner, 2026-07-26): subscriptions.notify_daily_cap (draft_0026) is a personal
-// ceiling on DMs (LETTERS, not offers) per Asia/Seoul calendar day — NULL means no limit, and NULL
-// is what EVERY row holds until its owner picks a number in the settings (the column has no default
-// and nobody was backfilled). Before the send loop we run ONE grouped query (never N+1) that
+// ceiling on DMs (LETTERS, not offers) per Asia/Seoul calendar day — NULL means no limit. (Until
+// 2026-10-24 NULL was what every row held; that rule is superseded — see below and cap.ts.) Before
+// the send loop we run ONE grouped query (never N+1) that
 // gives, for every candidate of this run, their cap and how many successful DMs they already got
 // since Seoul midnight; a user at or over budget is skipped for the rest of the day. The count is
 // over DISTINCT tg_message_id because notifications_sent holds one row PER OFFER while a grouped DM
 // covers up to notify_group_cap of them. See "WHAT HAPPENS TO THE OFFERS" on recordSkipped below.
+// Since 2026-10-24 a NEW subscription starts at 10 (cap.ts); NULL now only comes from an explicit
+// «Без ограничения» choice.
+//
+// LAST LETTER OF THE DAY (owner, 2026-10-24): the letter that uses up the cap (N-th of N) carries
+// NOTIFY_LAST_LETTER_NOTE at its end (cap.ts: isLastLetterOfDay / withLastLetterNote). Never a
+// separate message — that would be a letter over the cap.
+//
+// SINGLE-FLIGHT (2026-10-24). The cap is a read-then-send decision, and two runs can overlap: the
+// 15-minute tick and the manual POST /api/cron/notify both call runNotify. Two overlapping runs read
+// the same "letters today", so both could send the N-th letter — the cap exceeded and the last-letter
+// line delivered twice (and, older than the cap, the same offers DM'd twice). So a run first takes an
+// atomic lease on config 'notify_run_lease' (the digest's claim pattern); a run that finds the lease
+// held does nothing and leaves everything pending for the next tick. The lease names its run, is
+// released at the end only by that run, and expires on its own after NOTIFY_LEASE_SECONDS, so a
+// crashed run cannot stop notifications for longer than that.
 
 
+import { randomUUID } from 'node:crypto';
 import { getSql } from '../core/db.js';
 import { getConfigBool, getConfigNumber } from '../config.js';
 import { sendMessage, isUserUnavailable, retryAfterSeconds } from '../bot/telegram.js';
 import { workTypeLabelRu } from '../core/labels.js';
 import { scrubContacts } from '../core/scrub.js';
-import { isOverDailyCap } from './cap.js';
+import { isOverDailyCap, isLastLetterOfDay, withLastLetterNote } from './cap.js';
 
 type Sql = ReturnType<typeof getSql>;
 
@@ -51,9 +69,112 @@ export interface NotifyResult {
   ads: number;
   sent: number; // messages sent this run (a grouped DM counts once), not items delivered
   capped: number; // users skipped this run because they had used up their own daily DM budget
+  busy?: true; // another run held the single-flight lease: this one did nothing (see the header)
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Lease lifetime. Longer than any run can live (Vercel maxDuration 60 s, the tick's budget 45 s), so a
+ * live run never loses its lease; far shorter than the 15-minute tick, so a crashed run's lease is
+ * always gone by the next tick.
+ * INVARIANT: NOTIFY_LEASE_SECONDS (120 s) > maxDuration (60 s, vercel.json). Vercel kills the function
+ * at maxDuration, so no run outlives its lease; if maxDuration is ever raised to 120 s or more, an
+ * overdue run could lose its lease to the next one and two runs would send at once. Pinned by
+ * run.test.ts, which reads vercel.json.
+ */
+export const NOTIFY_LEASE_SECONDS = 120;
+const LEASE_KEY = 'notify_run_lease';
+
+/**
+ * Longest pause after a 429 before the run stops. Telegram may ask for minutes; sleeping that long
+ * inside a 60 s function would just get it killed (and the lease left to expire). The run stops after
+ * the pause anyway — the letter stays pending and the next tick (15 min later) retries it.
+ */
+export const NOTIFY_RATE_LIMIT_SLEEP_MAX_SECONDS = 10;
+
+/** The pause after a 429: retry_after + 1 s, never more than NOTIFY_RATE_LIMIT_SLEEP_MAX_SECONDS. */
+export function rateLimitSleepMs(retryAfter: number): number {
+  return Math.min(retryAfter + 1, NOTIFY_RATE_LIMIT_SLEEP_MAX_SECONDS) * 1000;
+}
+
+/**
+ * NOTE ALREADY GIVEN TODAY (2026-10-24). The last-letter line must reach a person at most once a day.
+ * A letter carrying it may have been delivered while we could not record it: the send threw (timeout /
+ * network — the request may well have reached Telegram) or the notifications_sent INSERT failed after a
+ * successful send. Then "letters today" still reads N-1 and the next run would build another last
+ * letter WITH the line. So such a person is written into config 'notify_note_given' = {day (Seoul),
+ * users[]}, and their next letter today goes out WITHOUT the line. No race: read and written only under
+ * the single-flight lease. A {ok:false} reply (definitely NOT delivered) marks nobody — the retry
+ * carries the line as it should.
+ */
+const NOTE_GIVEN_KEY = 'notify_note_given';
+
+/** Asia/Seoul calendar day, YYYY-MM-DD (UTC+9, no daylight saving). */
+export function seoulDay(nowMs: number = Date.now()): string {
+  return new Date(nowMs + 9 * 3600_000).toISOString().slice(0, 10);
+}
+
+/**
+ * Today's marked users; anything unreadable or from another day = nobody (fail open: the line goes).
+ * `readOk` is false only when the READ itself failed: then we do not know who is already marked, so
+ * the caller must NOT write the key back — the whole-value upsert would erase everyone else's mark.
+ * A stale day or a malformed value is a successful read (overwriting it loses nothing of today).
+ */
+async function loadNoteGiven(sql: Sql, day: string): Promise<{ users: Set<string>; readOk: boolean }> {
+  try {
+    const rows = (await sql`select value from config where key = ${NOTE_GIVEN_KEY}`) as unknown as {
+      value: unknown;
+    }[];
+    const v = rows[0]?.value as { day?: unknown; users?: unknown } | null | undefined;
+    if (v && v.day === day && Array.isArray(v.users)) {
+      return { users: new Set(v.users.filter((u): u is string => typeof u === 'string')), readOk: true };
+    }
+    return { users: new Set(), readOk: true };
+  } catch {
+    // eslint-disable-next-line no-console
+    console.error('[notify] note-given lookup failed (treating nobody as marked)');
+    return { users: new Set(), readOk: false };
+  }
+}
+
+/** Persist today's marked users (best-effort: a failed write must never stop the run). */
+async function saveNoteGiven(sql: Sql, day: string, users: Set<string>): Promise<void> {
+  try {
+    await sql`
+      insert into config (key, value) values (${NOTE_GIVEN_KEY}, ${JSON.stringify({ day, users: [...users] })}::jsonb)
+      on conflict (key) do update set value = excluded.value, updated_at = now()`;
+  } catch {
+    // eslint-disable-next-line no-console
+    console.error('[notify] note-given write failed');
+  }
+}
+
+/** Atomic claim: wins only when no unexpired lease exists. Empty RETURNING = another run holds it. */
+async function claimRunLease(sql: Sql, runId: string): Promise<boolean> {
+  const rows = (await sql`
+    insert into config (key, value)
+    values (${LEASE_KEY}, jsonb_build_object('at', extract(epoch from now()), 'run', ${runId}::text))
+    on conflict (key) do update
+      set value = jsonb_build_object('at', extract(epoch from now()), 'run', ${runId}::text), updated_at = now()
+      where coalesce((config.value ->> 'at')::double precision, 0)
+            < extract(epoch from now()) - ${NOTIFY_LEASE_SECONDS}
+    returning true as claimed`) as unknown as { claimed: boolean }[];
+  return rows.length > 0;
+}
+
+/** Give the lease back — only if it is still OURS (an overdue run must not free a newer run's lease). */
+async function releaseRunLease(sql: Sql, runId: string): Promise<void> {
+  try {
+    await sql`
+      update config set value = jsonb_build_object('at', 0, 'run', ''), updated_at = now()
+      where key = ${LEASE_KEY} and config.value ->> 'run' = ${runId}::text`;
+  } catch {
+    // Best-effort: an unreleased lease simply expires after NOTIFY_LEASE_SECONDS.
+    // eslint-disable-next-line no-console
+    console.error('[notify] lease release failed (it will expire on its own)');
+  }
+}
 
 // Telegram InlineKeyboardButton.text is 1–64 UTF-16 code units (Susanin brief, Bot API 6.0+).
 const BUTTON_TEXT_MAX = 64;
@@ -75,19 +196,28 @@ type SendClass =
   | { kind: 'sent'; messageId: number | null }
   | { kind: 'unavailable' } // 403: blocked / never started → skip, no retry
   | { kind: 'ratelimited'; retryAfter: number } // 429: wait and resume next tick
-  | { kind: 'transient' }; // unknown/transport: do not record, defer the item
+  // unknown/transport: do not record, defer the item. maybeDelivered: the call THREW (timeout 8 s,
+  // network, unreadable reply) — the letter may have reached the person; {ok:false} = it did not.
+  | { kind: 'transient'; maybeDelivered: boolean };
 
 async function classifySend(
   telegramId: string,
   text: string,
   extra: Record<string, unknown>,
 ): Promise<SendClass> {
-  const resp = await sendMessage(telegramId, text, extra);
+  let resp: Awaited<ReturnType<typeof sendMessage>>;
+  try {
+    resp = await sendMessage(telegramId, text, extra);
+  } catch {
+    // tgCall throws on transport / timeout / parse. One person's failed send must not end the run for
+    // everyone after them, so it is a transient like any other — but one that MAY have been delivered.
+    return { kind: 'transient', maybeDelivered: true };
+  }
   if (resp.ok) return { kind: 'sent', messageId: resp.result?.message_id ?? null };
   if (isUserUnavailable(resp)) return { kind: 'unavailable' };
   const ra = retryAfterSeconds(resp);
   if (ra !== null) return { kind: 'ratelimited', retryAfter: ra };
-  return { kind: 'transient' };
+  return { kind: 'transient', maybeDelivered: false };
 }
 
 /** Fields shared by a vacancy and an ad that the DM text/buttons render. */
@@ -371,6 +501,18 @@ export async function runNotify(): Promise<NotifyResult> {
 
   const sql = getSql();
 
+  // Single-flight (see the file header): an overlapping run does nothing — every item stays pending.
+  const runId = randomUUID();
+  if (!(await claimRunLease(sql, runId))) return { vacancies: 0, ads: 0, sent: 0, capped: 0, busy: true };
+  try {
+    return await runNotifyLeased(sql);
+  } finally {
+    await releaseRunLease(sql, runId);
+  }
+}
+
+async function runNotifyLeased(sql: Sql): Promise<NotifyResult> {
+
   // GEO-less items are never pushed — clear their pending flag so they aren't rescanned every tick.
   // MULTI-GEO (regions wave): the guard softens from "no city" to "no geo AT ALL" — an offer with ANY
   // city OR ANY region is now pushable (matched below by city overlap OR region overlap), so we only
@@ -436,6 +578,21 @@ export async function runNotify(): Promise<NotifyResult> {
   // in-memory decision per user. Users with no subscription row here, or with cap NULL, are unlimited.
   const budgets = await loadDailyBudgets(sql, [...byUser.keys()]);
 
+  // NOTE ALREADY GIVEN (see NOTE_GIVEN_KEY): read lazily — only a run that builds a last letter asks.
+  const day = seoulDay();
+  let noteGivenLoad: { users: Set<string>; readOk: boolean } | null = null;
+  const loadOnce = async () => (noteGivenLoad ??= await loadNoteGiven(sql, day));
+  const getNoteGiven = async (): Promise<Set<string>> => (await loadOnce()).users;
+  const markNoteGiven = async (userId: string): Promise<void> => {
+    const { users, readOk } = await loadOnce();
+    users.add(userId); // this run still honours it in memory
+    // The read failed: we do not know the stored marks, and the upsert replaces the whole value —
+    // writing now would wipe every other person's mark. Skip; worst case this person's next letter
+    // carries the line again (the documented fail-open), never someone else's.
+    if (!readOk) return;
+    await saveNoteGiven(sql, day, users);
+  };
+
   let sent = 0;
   let capped = 0;
   for (const [userId, rcpt] of byUser) {
@@ -454,21 +611,42 @@ export async function runNotify(): Promise<NotifyResult> {
     }
 
     const included = rcpt.positions.slice(0, groupCap);
-    const { text, extra } = buildUserMessage(included, appUrl);
+    const built = buildUserMessage(included, appUrl);
+    // The letter that uses up the cap (N-th of N) carries the "last one today" line at its end —
+    // inside THIS letter, never as an extra message (an extra one would itself break the cap).
+    // Same budget numbers as the isOverDailyCap check above; no cap (NULL) = no last letter.
+    // A person whose earlier last letter MAY have arrived unrecorded gets this one without the line.
+    const withNote =
+      isLastLetterOfDay(budget?.letters ?? 0, cap) && !(await getNoteGiven()).has(userId);
+    const text = withNote ? withLastLetterNote(built.text) : built.text;
+    const extra = built.extra;
     const r = await classifySend(rcpt.telegramId, text, extra);
 
     if (r.kind === 'sent') {
       sent += 1;
       if (budget) budget.letters += 1; // keep the budget honest if a user ever gets two DMs in a run
-      for (const p of included) await recordSent(sql, userId, p, r.messageId);
+      // One position at a time: a failed INSERT must not end the run nor drop the other positions.
+      // An unrecorded position stays pending and is re-sent next tick (a duplicate beats a loss).
+      let unrecorded = 0;
+      for (const p of included) {
+        try {
+          await recordSent(sql, userId, p, r.messageId);
+        } catch {
+          unrecorded += 1;
+          // eslint-disable-next-line no-console
+          console.error('[notify] delivered but not recorded (will resend)');
+        }
+      }
+      if (withNote && unrecorded > 0) await markNoteGiven(userId);
     } else if (r.kind === 'unavailable') {
       await sql`update users set is_blocked = true where id = ${userId}::uuid`;
       for (const p of included) await recordSkipped(sql, userId, p);
     } else if (r.kind === 'ratelimited') {
-      await sleep((r.retryAfter + 1) * 1000); // DM unrecorded → its items stay pending; stop the run
+      await sleep(rateLimitSleepMs(r.retryAfter)); // DM unrecorded → its items stay pending; stop the run
       break;
     } else {
       // transient: record NOTHING — every item in this DM defers for a retry next tick
+      if (withNote && r.maybeDelivered) await markNoteGiven(userId);
       // eslint-disable-next-line no-console
       console.error('[notify] send failed (deferred)');
     }

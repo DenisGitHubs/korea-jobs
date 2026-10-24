@@ -110,11 +110,12 @@ export function Onboarding() {
       // notifications off. Onboarding has a single "send me jobs" question, so the
       // digest mirrors that answer; both are editable in Settings afterwards.
       digest_enabled: notify,
-      // notify_daily_cap is DELIBERATELY not sent here. A brand-new row gets NULL
-      // — no cap, per the owner's rule that nobody is throttled until they ask to
-      // be — and an absent field keeps the stored cap, so running through
-      // onboarding again cannot overwrite a choice already made. The cap lives in
-      // Settings, under the mailing toggle.
+      // notify_daily_cap is DELIBERATELY not sent here. A brand-new row is created
+      // with the server default of 10 letters a day (owner, 2026-10-24; the hint on
+      // the notify step promises exactly that), and an absent field keeps the
+      // stored cap, so running through onboarding again cannot overwrite a choice
+      // already made. The cap lives in Settings, under the mailing toggle; "no
+      // limit" is an explicit pick there.
       visa_types: visa,
       placement_fee: null,
       require_housing: null,

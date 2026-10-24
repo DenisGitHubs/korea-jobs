@@ -23,6 +23,7 @@ import { authenticate } from '../core/context.js';
 import { getConfigString, getConfigNumber, getConfigBool } from '../config.js';
 import { readStreakSummary } from '../streaks/update.js';
 import { reveals24h } from '../vacancies/read.js';
+import { NOTIFY_DAILY_CAP_DEFAULT } from '../notify/cap.js';
 
 export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
   if ((req.method ?? 'GET') !== 'GET') return sendError(res, ApiErrorCode.NotFound);
@@ -80,16 +81,19 @@ export async function meGet(req: ReqLike, res: ResLike): Promise<void> {
     let requireHousing: boolean | null = null;
     let requireMeals: boolean | null = null;
     // How many notification DMs a day this person receives (LETTERS, not vacancies; null = no limit).
-    // COLD value (no subscription row) is null = «без ограничения» — the owner's rule is that nobody
-    // is limited until they choose a number, and POST /api/subscription creates a fresh row with NULL
-    // too, so the settings screen shows exactly what a save would store.
-    let notifyDailyCap: number | null = null;
+    // COLD value (no subscription row) is NOTIFY_DAILY_CAP_DEFAULT (10) — owner, 2026-10-24: a new
+    // subscription without an explicit choice gets 10, and POST /api/subscription creates a fresh row
+    // with 10 too, so the settings screen shows exactly what a save would store. It MUST NOT be null
+    // here: the client echoes this value back on its first save, and a null on the wire is the
+    // explicit «Без ограничения» choice — a cold null would quietly store "unlimited" for a person who
+    // never chose it. (Superseded: the 2026-07-26 cold value null = "nobody limited until they ask".)
+    let notifyDailyCap: number | null = NOTIFY_DAILY_CAP_DEFAULT;
 
     const sub = subRows[0];
     if (sub) {
       notify = sub.notify === true;
-      // A stored NULL is "no limit": either the chosen «без ограничения» or simply the untouched
-      // state of a row nobody has limited (the migration adds no default and backfills nobody).
+      // A stored NULL is "no limit": the chosen «без ограничения» (or, on a database where draft_0026
+      // has not landed, the missing key). Reported as stored — never replaced by the default.
       notifyDailyCap = sub.notify_daily_cap ?? null;
       // Opt-in semantics all the way down: a NULL digest flag (only possible in a
       // deploy-before-migration window) reads as OFF, never as on.

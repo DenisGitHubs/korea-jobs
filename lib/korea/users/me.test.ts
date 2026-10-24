@@ -29,6 +29,7 @@ import { getSql } from '../core/db.js';
 import { authenticate } from '../core/context.js';
 import { getConfigBool } from '../config.js';
 import { meGet } from './me.js';
+import { NOTIFY_DAILY_CAP_DEFAULT } from '../notify/cap.js';
 
 const USER_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 
@@ -225,9 +226,9 @@ describe('meGet — notify_daily_cap', () => {
     expect(subOf(res).notify_daily_cap).toBe(20);
   });
 
-  it('a stored NULL is reported as null = «без ограничения» (what an untouched row holds)', async () => {
-    // draft_0026 adds no column default and backfills nobody, so every user reads as unlimited
-    // until they pick a value — /me must say exactly that, not invent a limit.
+  it('a stored NULL is reported as null = «без ограничения» — never replaced by the default', async () => {
+    // NULL on a row is the explicit «Без ограничения» choice; /me must say exactly that, not invent a
+    // limit the person turned off.
     vi.mocked(getSql).mockReturnValue(makeSql(rowWithCap(null)));
     const res = makeRes();
     await meGet(makeReq(), res as unknown as ResLike);
@@ -235,15 +236,17 @@ describe('meGet — notify_daily_cap', () => {
     expect(subOf(res).notify_daily_cap).toBe(null);
   });
 
-  it('NO subscription row: reports null = «без ограничения», the state a save would actually store', async () => {
-    // Owner, 2026-07-26: «всем без ограничений. Захотят изменить — то изменят в настройках кол-во».
-    // A cold settings screen must therefore show "без ограничения", and POST /api/subscription does
-    // create the fresh row with NULL — the screen and the DB tell the same story.
+  it('NO subscription row: reports the default 10, the state a save would actually store', async () => {
+    // Owner, 2026-10-24 (replaces «всем без ограничений» of 2026-07-26): a new subscription without an
+    // explicit choice gets 10 a day, and POST /api/subscription creates the fresh row with 10. The
+    // client echoes this value back on its first save — a cold null here would be sent as the explicit
+    // «Без ограничения» and store "unlimited" for someone who never chose it.
     vi.mocked(getSql).mockReturnValue(makeSql(null));
     const res = makeRes();
     await meGet(makeReq(), res as unknown as ResLike);
 
-    expect(subOf(res).notify_daily_cap).toBe(null);
+    expect(subOf(res).notify_daily_cap).toBe(NOTIFY_DAILY_CAP_DEFAULT);
+    expect(NOTIFY_DAILY_CAP_DEFAULT).toBe(10);
   });
 
   it('reads the column through to_jsonb, so a pre-migration database cannot 500 the endpoint', async () => {

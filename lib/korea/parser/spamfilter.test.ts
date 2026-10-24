@@ -17,6 +17,10 @@ import {
   looksLikeRublePay,
   looksLikeHousingRental,
   looksLikeSeekerIntro,
+  OBSERVED_RULES,
+  observedHits,
+  spamRuleHit,
+  foldLookalikes,
 } from './spamfilter.js';
 
 describe('looksLikeSpam — crypto/OTC exchange spam must be caught', () => {
@@ -685,6 +689,210 @@ describe('looksLikeSpam — the criminal-hiring vocabulary named in the prompt',
   for (const s of ok) {
     it(`keeps: ${s.slice(0, 42)}`, () => {
       expect(looksLikeSpam(s)).toBe(false);
+    });
+  }
+});
+
+// --- OBSERVED 2026-10-24: rules taken from what the model rejected (spamfilter.ts, OBSERVED block).
+// SHADOW ONLY since the owner decision of 2026-10-24: they drop nothing, observedHits() names them.
+// Every positive asserts the SPECIFIC rule by id (so a positive cannot stay green because some other
+// rule happens to catch it — a guard must go red when its own rule is reverted), and every rule has a
+// negative that is a real vacancy sharing its words. Fixtures are generalized templates of the live
+// texts (no phones / handles).
+describe('foldLookalikes — folds look-alikes only inside Cyrillic-bearing words', () => {
+  it('folds Latin letters and 0/6 inside a Russian word', () => {
+    expect(foldLookalikes('PAБOTУ OHЛAЙH')).toBe('работу онлайн');
+    expect(foldLookalikes('П0купаю т0нджанки')).toBe('покупаю тонджанки');
+    expect(foldLookalikes('Pa6отаем')).toBe('работаем');
+  });
+  it('leaves a token without Cyrillic byte-for-byte (Uzbek Latin, URLs, amounts)', () => {
+    expect(foldLookalikes("Korea kartasi bo'lsa 2 500 000 von")).toBe("korea kartasi bo'lsa 2 500 000 von");
+    expect(foldLookalikes('t.me/hr_ansan')).toBe('t.me/hr_ansan');
+  });
+  it('strips zero-width chars before folding', () => {
+    expect(foldLookalikes('ра​бота')).toBe('работа');
+  });
+  // A 0/6 with a digit right next to it is part of a number, not a letter (2026-10-24).
+  it('keeps a 0 whose LEFT neighbour is a digit (number glued to a unit)', () => {
+    expect(foldLookalikes('трц20')).toBe('трц20');
+    expect(foldLookalikes('500грн')).toBe('500грн');
+  });
+  it('keeps a 0/6 whose RIGHT neighbour is a digit', () => {
+    expect(foldLookalikes('х06')).toBe('х06');
+  });
+});
+
+describe('observedHits — OBSERVED 2026-10-24 rules (positive on the living form, by rule id)', () => {
+  const spam: Array<[string, string]> = [
+    ['o1a', 'Asalomu alaykum Koreya kartasi borlarga ish bor toliq malumot lichda'],
+    ['o1b', 'Korea kartasi bor E9 akalarga daromadli ish bor malumot lich'],
+    ['o1b', 'Karea bank karta bolsa pul ishlab olish taklifi'],
+    ['o1c', 'Aslomu alaykum Korea karta sotib olamiz limiti katta bolsa foizga kelishamiz'],
+    ['o1c', 'Kareya bank kartangiz boʻlsa pul ishlab oling'],
+    ['o1c', 'Karta sotib olamiz, limiti katta bolsa foizga kelishamiz'], // owner-less "sotib" branch
+    ['o1d', "Kareadan ketmoqchi bo'layotgan va ketib ulgurgan guruhdan bo'lib turganlar uchun taklif"],
+    ['o1d', 'Koreyadan qaytmoqchi bolganlar uchun taklif bor'],
+    ['o2a', 'бошки в наличии'],
+    ['o2a', 'Есть проба мефа 0.5'],
+    ['o2b', 'Дам на пробу 0.5'],
+    ['o2b', 'ПРОБЫ ПО 1ГР'],
+    ['o2b', 'Есть пробы по 0,5'], // "по" + decimal, no unit
+    ['o2b', 'дам на деп'],
+    ['o3', 'Здравствуйте, куплю юcдт за наличные'], // Latin "c" — the old /юсдт/ cannot see it
+    ['o3', 'Покупаю ЮCД(трц20) - нал/безнал'],
+    ['o3', 'Покупаю U.S.D.T. при личной встрече'],
+    ['o4', 'П0купаю т0нджанки дорого'],
+    ['o4', 'Куплю тонжан лимит от 1 миллион'],
+    ['o5', 'PAБOTУ OHЛAЙH❗️ Опыт не важен — научу с нуля'],
+    ['o5', 'Полностью онлайн работа, зп от 2000$'],
+    ['o5', 'Онлайн-работу даём всем, зп от 2000$'],
+    ['o6', 'Оставь 5 отзывов где я скажу, забери 1500 на карту'],
+    ['o6', 'Пролайкать профиль спонсоров - 2000'],
+    ['o7', 'закроем все твои должки'],
+    ['o7', 'помогу финансово'],
+    ['o7', 'Дам в займы.'],
+    ['o8', 'Темка 15к в день'],
+    ['o8', 'Кто хoчeт подзарaботать, есть движyха до 15500'], // look-alike "y" folded
+    ['o9', 'Доход от 2000 грн на день. Деньги сразу'],
+    ['o10', 'Подробности тут https://t.me/m/AbCdEf12'],
+  ];
+  for (const [id, s] of spam) {
+    it(`${id} fires: ${s.slice(0, 40)}`, () => {
+      expect(observedHits(s)).toContain(id);
+    });
+  }
+
+  it('every OBSERVED rule has at least one positive above, and ids are unique', () => {
+    const ids = OBSERVED_RULES.map((r) => r.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(new Set(spam.map(([id]) => id))).toEqual(new Set(ids));
+  });
+
+  it('empty / null text has no hits', () => {
+    expect(observedHits('')).toEqual([]);
+    expect(observedHits(null)).toEqual([]);
+  });
+});
+
+// Each branch of the 2026-10-24 fold fix and of the o3 alternation, one test apiece: reverting ONE branch
+// turns exactly its own test red.
+describe('observedHits — digit-guarded fold and every o3 branch', () => {
+  it('o9 sees "500грн" (glued; the old fold read it as "5оогрн")', () => {
+    expect(observedHits('Доход 500грн в день')).toContain('o9');
+  });
+  it('o9 sees "2000грн"', () => {
+    expect(observedHits('Плачу 2000грн сразу')).toContain('o9');
+  });
+  it('o3 sees a bare "трц20" (the old fold read it as "трц2о")', () => {
+    expect(observedHits('Принимаю трц20 по хорошему курсу')).toContain('o3');
+  });
+  it('o2b sees "по 10гр" (the old fold read it as "1огр")', () => {
+    expect(observedHits('пробы по 10гр')).toContain('o2b');
+  });
+  it('o3 sees "юсд(" — the bracket branch', () => {
+    expect(observedHits('Куплю юсд (трц) за нал')).toContain('o3');
+  });
+  it('o3 sees "ustd" — the transposed branch', () => {
+    expect(observedHits('Куплю ustd за нал')).toContain('o3');
+  });
+});
+
+describe('observedHits — narrowed rules stay quiet on the real ad next door (2026-10-24)', () => {
+  const quiet: Array<[string, string]> = [
+    ['o1a', 'ID kartasi borlarga ish bor, zavodga 3 ta ishchi kerak'],
+    ['o1c', "ID karta bo'lsa olamiz, zavodga ishchi kerak"],
+    ['o1c', 'ID karta sotib olamiz'], // the "id" guard on the owner-less branch
+    ['o1c', 'ID-karta sotib olamiz'],
+    ['o2b', 'проба 0,5 ставки, потом полная'], // a bare decimal is not a dose
+    ['o2b', 'проба по 3 дня, потом постоянка'],
+    ['o5', 'Склад, работа онлайн-магазина, 130 000 вон в день'],
+    ['o5', 'Оплата за работу онлайн-переводом каждый день'],
+    ['o5', 'Запись на работу онлайн через анкету, завод в Ансане'],
+    ['o5', 'Сайт онлайн работает круглосуточно, завод в Ансане, 2 400 000 вон'],
+    ['o5', 'Наш онлайн-работодатель платит вовремя, завод в Ансане'],
+    ['o5', 'Запись онлайн работника на смену, завод в Ансане'],
+  ];
+  for (const [id, s] of quiet) {
+    it(`${id} is quiet: ${s.slice(0, 40)}`, () => {
+      expect(observedHits(s)).not.toContain(id);
+      expect(looksLikeSpam(s)).toBe(false);
+    });
+  }
+  it('o2b still fires when the same dose carries a unit ("проба 1г")', () => {
+    expect(observedHits('Есть проба 1г')).toContain('o2b');
+  });
+});
+
+describe('looksLikeSpam — the OBSERVED rules are shadow-only (owner 2026-10-24)', () => {
+  // Texts that ONLY an OBSERVED rule recognizes: the live filter must let them through to the model.
+  const shadowOnly = [
+    'PAБOTУ OHЛAЙH❗️ Опыт не важен — научу с нуля',
+    'Asalomu alaykum Koreya kartasi borlarga ish bor toliq malumot lichda',
+    'закроем все твои должки',
+    'Доход от 2000 грн на день. Деньги сразу',
+  ];
+  for (const s of shadowOnly) {
+    it(`passes the live filter, hit is only recorded: ${s.slice(0, 36)}`, () => {
+      expect(observedHits(s).length).toBeGreaterThan(0);
+      expect(looksLikeSpam(s)).toBe(false);
+      expect(spamRuleHit(s)).toBeNull();
+    });
+  }
+});
+
+describe('spamRuleHit — names the live rule that drops the message', () => {
+  it('names a structural heuristic', () => {
+    expect(spamRuleHit('💊💊 доставка по всей Корее')).toBe('pharma');
+    expect(spamRuleHit('Подработка 3000₽ за вечер')).toBe('ruble');
+    expect(spamRuleHit('Привет')).toBe('empty');
+  });
+  it('names a pattern as p<index>, and that index really is the pattern that fires', () => {
+    const s = 'Меняю крипту на воны, быстро и надёжно';
+    const id = spamRuleHit(s);
+    expect(id).toMatch(/^p\d+$/);
+    expect(SPAM_PATTERNS[Number(id!.slice(1))]!.test(s.toLowerCase())).toBe(true);
+  });
+  it('null on a real vacancy, null on empty input; agrees with looksLikeSpam', () => {
+    const real = 'Завод в Ансане, 2 400 000 вон, общежитие, пишите в лс';
+    expect(spamRuleHit(real)).toBeNull();
+    expect(looksLikeSpam(real)).toBe(false);
+    expect(spamRuleHit('')).toBeNull();
+    expect(spamRuleHit(null)).toBeNull();
+  });
+});
+
+describe('looksLikeSpam — OBSERVED 2026-10-24 rules spare the real vacancy next door', () => {
+  const ok: string[] = [
+    // o1 Uzbek: real Uzbek-Latin vacancies, incl. pay to a bank card and an ID card requirement.
+    'Icheon Logen tekpeda doimiy ish bor, 40ta odamga, dushanbadan jumagacha 19:30 dan',
+    'Ansan zavodga ishchi kerak, ish haqi har oy bank kartaga tushadi, 2 500 000 von',
+    "Koreya ID kartasi bo'lishi shart, zavodga 2 ta ishchi kerak",
+    // o2 drugs: pine-cone harvest (the reason "шишки" is NOT a rule), lime slaking, a probation period.
+    'Сбор шишек и кедровых орехов, собирать шишки в лесу, 120 000 вон в день',
+    'Гашение извести на стройке, 150 000 вон, оплата в день',
+    'Пробный день оплачивается, проба 3 дня, потом постоянка на склад',
+    'Возьмём на пробу двух парней на склад, 130 000 вон',
+    // o4 a real ad that names the bank book.
+    'Зарплата на тонджан, оформление официальное, завод в Хвасоне',
+    // o5 "онлайн" next to a job word, but not "работа онлайн".
+    'Собеседование онлайн, работа на заводе в Ансане, 2 400 000 вон',
+    'Требуются рабочие на склад. Работа\nОнлайн собеседование по видео', // no line bridge
+    // o6/o7 the same verbs on other objects.
+    'Оставить заявку можно в лс, работа на складе, 12 000 вон в час',
+    'Закрыть смену до 18:00, оплата в день, долг по зарплате не держим',
+    // o8 a surname and "движение" are not scheme slang.
+    'Требуется помощник Темкина на стройку, 150 000 вон',
+    'Движение по графику 2/2, развоз есть, завод в Чхонане',
+    // o9/o10 won pay; an ordinary t.me contact.
+    'Оплата 2000 вон в час сверху за ночь, 5 грузчиков',
+    'Завод в Ансане, пишите t.me/hr_ansan',
+  ];
+  for (const s of ok) {
+    it(`keeps: ${s.slice(0, 44).replace(/\n/g, ' | ')}`, () => {
+      expect(looksLikeSpam(s)).toBe(false);
+      // Shadow rules must not even RECORD these — a hit here would put a real vacancy on the list
+      // the owner switches on.
+      expect(observedHits(s)).toEqual([]);
     });
   }
 });

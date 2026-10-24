@@ -49,6 +49,8 @@ function tok(core: string): RegExp {
   return new RegExp(`${B}(?:${core})${E}`, 'iu');
 }
 
+// APPEND-ONLY: new patterns go at the END — names `p<index>` in ai_reject_stats depend on position
+// (see spamRuleHit).
 export const SPAM_PATTERNS: RegExp[] = [
   // --- REVIVED 2026-08-19 (Roma). The rules in THIS first block predate the re()/tok() helpers and
   // were written with raw \w / \b — which in JS are ASCII-ONLY, so next to Cyrillic they match
@@ -337,6 +339,157 @@ export const SPAM_PATTERNS: RegExp[] = [
   // "доставку котиков" (g3), "лутать кэш" (g1), "подъём денег" (g1).
 ];
 
+// --- OBSERVED 2026-10-24 (Roma, task "расход ИИ"): rules taken from what the MODEL actually rejected.
+// Corpus: live DB + the daily backups (texts of model rejects recovered by matching their
+// ai_verdict_cache skeleton hash). Every pattern below fires 0 times on the acceptance set — all
+// raw texts the model kept as a vacancy (status='parsed') plus every vacancy description, 4 917
+// distinct texts. Words that hit a real vacancy were NOT taken: "быстрый заработок", "удалённая
+// работа", "шабашка", "халтурка", "шишки" (pine-cone harvest is a real farm job), "под процент" (a
+// sales job paid a share of takings is legal — prompt.ts), "СБП" (a real ruble micro-gig used it).
+//
+// BOUNDARIES (lesson of 2026-08-19, seven rules dead for months on ASCII \w/\b): only \p{L}/\p{N}
+// with the u flag — NB/NE below — never \w or \b. Multi-word rules use H (no line break), see H.
+//
+// LOOK-ALIKE FOLD. These blasts are typed with Latin letters inside Russian words ("PAБOTУ OHЛAЙH",
+// "юcдт" with a Latin c, "т0нджанки" with a zero) so that a plain Cyrillic rule never sees them. The
+// patterns here are matched against foldLookalikes(text): inside every token that already carries a
+// Cyrillic letter, Latin/digit look-alikes are replaced by the Cyrillic letter they imitate. A token
+// with NO Cyrillic (Uzbek Latin, a URL, "u.s.d.t", a won amount) is left byte-for-byte as it was, so
+// the Latin-script rules below see the original. The fold is used ONLY for this array — the older
+// rules keep reading the plain lowercased text, so nothing they matched or spared changes.
+const NB = '(?<![\\p{L}\\p{N}])';
+const NE = '(?![\\p{L}\\p{N}])';
+// Uzbek apostrophe in "bo'lsa" comes in four shapes (or none).
+const AP = "['ʻ’`]?";
+
+const LOOKALIKE_TO_CYRILLIC: Record<string, string> = {
+  a: 'а', b: 'в', c: 'с', d: 'д', e: 'е', h: 'н', k: 'к', l: 'л', m: 'м', n: 'п',
+  o: 'о', p: 'р', t: 'т', u: 'и', x: 'х', y: 'у', '0': 'о', '6': 'б', 'ё': 'е',
+};
+const LOOKALIKE_CHARS = /[abcdehklmnoptuxy06ё]/g;
+const TOKEN_RE = /[\p{L}\p{N}]+/gu;
+const HAS_CYRILLIC = /\p{Script=Cyrillic}/u;
+const IS_DIGIT = /\p{N}/u;
+
+/** ZW-strip + lowercase + fold Latin/digit look-alikes to Cyrillic inside Cyrillic-bearing tokens.
+ *  A digit look-alike (0 / 6) is folded ONLY when no other digit stands right next to it: "т0нджанки"
+ *  and "Pa6отаем" fold, but a number glued to a Cyrillic unit stays a number — "500грн", "2000грн",
+ *  "10гр", "трц20" (folding them gave "5оогрн" / "1огр" / "трц2о" and the amount rules went blind). */
+export function foldLookalikes(text: string): string {
+  return text
+    .replace(ZERO_WIDTH, '')
+    .toLowerCase()
+    .replace(TOKEN_RE, (w) =>
+      HAS_CYRILLIC.test(w)
+        ? w.replace(LOOKALIKE_CHARS, (c, i: number) => {
+            if ((c === '0' || c === '6') && (IS_DIGIT.test(w[i - 1] ?? '') || IS_DIGIT.test(w[i + 1] ?? ''))) {
+              return c;
+            }
+            return LOOKALIKE_TO_CYRILLIC[c] ?? c;
+          })
+        : w,
+    );
+}
+
+/** Left-bounded (cyrillic-safe) pattern. Matched against foldLookalikes(text), already lowercase. */
+function ob(core: string): RegExp {
+  return new RegExp(`${NB}(?:${core})`, 'iu');
+}
+
+// Who owns the card in a mule blast: a bank, or Korea in its Uzbek spellings (any ending — "koreyada",
+// "kareadagi", "bankning"). "ID karta" — the alien-registration card a real Uzbek vacancy REQUIRES —
+// has no owner word, which is exactly what keeps it out of o1a / o1c.
+const KARTA_OWNER = '(?:bank|korea|koreya|kareya|karea|kareski)\\p{L}*';
+
+/** One shadow rule: a stable id (the name it is counted under) and its pattern. */
+export interface ObservedRule {
+  id: string;
+  rx: RegExp;
+}
+
+// SHADOW ONLY (owner decision 2026-10-24): these rules drop NOTHING. looksLikeSpam does not read them;
+// parser/run.ts asks observedHits() for every message that passed the live filter and records which
+// ids fired next to what then happened to the message (vacancy / reject reason / duplicate / …). After
+// a week the owner switches on the ids whose record is clean. The ids are the names in that record —
+// never renumber or reuse one.
+export const OBSERVED_RULES: ObservedRule[] = [
+  // o1 — Uzbek bank-card mules (criminal_hiring / unclear / currency_exchange): "Korea kartasi borlarga
+  // ish bor", "Karea bank karta bolsa pul ishlab oling", "karta sotib olamiz", "Kareadan ketmoqchi
+  // bo'layotgan va ketib ulgurgan…". The single largest family in the reject corpus (sources
+  // Korea_Arbayt, kwangujob). o1a / o1c demand an owner word before the card (see KARTA_OWNER), so
+  // "ID kartasi borlarga ish bor" / "ID karta bo'lsa olamiz" (a real ID-card requirement) never fire.
+  // The bare "karta sotib olamiz" (BUYING cards — no employer says that) is o1c's own branch, closed
+  // to an "ID" right before the card word.
+  { id: 'o1a', rx: ob(`${KARTA_OWNER}${H}kartas[ia]${H}borlar`) },
+  {
+    id: 'o1b',
+    rx: ob(`(?:bank\\p{L}*|korea|koreya|kareya|karea|kareski)${H}(?:bank${H})?kart\\p{L}*${H}(?:bor|bo${AP}lsa)${NE}`),
+  },
+  {
+    id: 'o1c',
+    rx: ob(
+      `${KARTA_OWNER}${H}(?:bank${H})?kart\\p{L}*${H}(?:bo${AP}lsa${H}(?:pul|olamiz)|(?:sotib${H})?olamiz${NE})` +
+        `|(?<!${NB}id(?:${H}|-))kart\\p{L}*${H}sotib${H}olamiz${NE}`,
+    ),
+  },
+  { id: 'o1d', rx: ob(`(?:ketmoqchi|qaytmoqchi)${H}bo${AP}l(?:ayotgan|ganlar)`) },
+  // o2 — drugs: the substance words, and the "trial dose" offer. A dose is a number WITH a gram unit,
+  // or "по" + a decimal ("проба по 0,5"); a bare "проба 0,5" (half a shift?) and a probation period
+  // ("проба 3 дня", "проба по 3 дня") are never read as a dose.
+  { id: 'o2a', rx: ob(`(?:меф(?:а|ом|едрон\\p{L}*)?|гаш(?:иш\\p{L}*)?|бошки)${NE}`) },
+  {
+    id: 'o2b',
+    rx: ob(
+      `да(?:м|ю)${H}(?:на${H})?пробу${NE}` +
+        `|проб[аыу]${H}(?:по${H})?\\d+(?:[.,]\\d+)?[^\\S\\r\\n]*(?:г|гр|грамм)${NE}` +
+        `|проб[аыу]${H}по${H}0[.,]\\d` +
+        `|дам${H}на${H}деп${NE}`,
+    ),
+  },
+  // o3 — USDT written to dodge the older rule: "юcдт" (Latin c — folded), "ЮCД(трц20)", "U.S.D.T.",
+  // "ustd" (transposed).
+  { id: 'o3', rx: ob(`юсд(?:т|[^\\S\\r\\n]*[(\\[])|трц[^\\S\\r\\n]?-?20${NE}|(?:u\\.s\\.d\\.t|ustd)${NE}`) },
+  // o4 — buying Korean bank-account books (통장 = "тонжан/тонджанка") — renting out accounts, the
+  // money-mule trade the prompt names.
+  { id: 'o4', rx: ob(`(?:куплю|покупаю|скупаю|выкуплю)${H}тонд?жан`) },
+  // o5 — "работа онлайн" recruiting. This board is manual labour IN Korea; remote work is already cut
+  // as "удалёнк" (g11). Most copies are look-alike typed — the fold is what makes this rule see them.
+  // Narrowed (2026-10-24): "онлайн" glued to a hyphen is another word ("работа в онлайн-магазине",
+  // "оплата работы онлайн-переводом"), and "на работу онлайн" is an application ("запись на работу
+  // онлайн"), not an offer.
+  {
+    id: 'o5',
+    // Second branch: a closed ending list, so "онлайн работает" / "онлайн-работодатель" stay quiet.
+    rx: ob(`(?<!${NB}на${H})работ\\p{L}*${H}онлайн(?![\\p{L}\\p{N}-])|онлайн(?:${H}|-)работ(?:а|ы|у|ой|е)${NE}`),
+  },
+  // o6 — paid reviews / likes micro-tasks ("Оставь 5 отзывов … на карту", "пролайкать профиль").
+  { id: 'o6', rx: ob(`(?:оставить|оставь|осавить|написать|напиши)${H}(?:\\d+${H})?отзыв|пролайкать`) },
+  // o7 — debt / loan bait ("закроем все твои должки", "помогу финансово", "дам в займы"). The older
+  // g1 rule has "закро…" but not "закрыть", and no "должки".
+  {
+    id: 'o7',
+    rx: ob(
+      `(?:закрыть|закроем|закрывать|закрою)${H}(?:все${H})?(?:тво\\p{L}+${H}|ваш\\p{L}+${H})?(?:долг|должк)|рассчитаться${H}с${H}долгами|помогу${H}финансово|решени\\p{L}*${H}финансов\\p{L}*${H}проблем|да(?:м|ю)${H}в${H}займ`,
+    ),
+  },
+  // o8 — scheme slang: "темка 15к в день", "есть движуха до 15500". Closed ending list for "темк-",
+  // so a surname like "Темкин" cannot fire.
+  { id: 'o8', rx: ob(`темк(?:а|и|у|ой|е)${NE}|движ(?:ух\\p{L}*)?${NE}`) },
+  // o9 — pay in hryvnia: never a job in Korea (same logic as the ruble rule, owner 2026-07-22). Kept in
+  // the shadow set like the rest (owner 2026-10-24).
+  { id: 'o9', rx: /\d[^\S\r\n]*грн(?![\p{L}\p{N}])/u },
+  // o10 — Telegram "t.me/m/…" chat links: in the corpus they ride only on emoji-carpet promos whose
+  // keycap digits lift them over the emoji-carpet letter threshold. No vacancy carries one.
+  { id: 'o10', rx: /t\.me\/m\//u },
+];
+
+/** Ids of the shadow rules that fire on this text (empty when none). Never drops anything. */
+export function observedHits(text: string | null | undefined): string[] {
+  if (!text) return [];
+  const f = foldLookalikes(text);
+  return OBSERVED_RULES.filter((r) => r.rx.test(f)).map((r) => r.id);
+}
+
 // Emoji-carpet heuristic (owner 2026-07-19): promo blasts that are almost pure emoji with a couple
 // of words (rows of 🎾/💎 etc.) must be cut before the AI. STRICT thresholds so legit ads with a
 // few emoji bullets ("🏭 Завод в Ансане … зарплата 2.8 млн вон … @hr") always pass: an ad only
@@ -561,24 +714,42 @@ export function looksLikeRublePay(text: string | null | undefined): boolean {
   return RUBLE_PATTERNS.some((rx) => rx.test(t));
 }
 
-/** True when the raw message is near-certain spam (pattern hit OR emoji carpet OR pharma blast OR
- *  mixed-script obfuscation OR link-only drop OR empty/greeting-only message OR ruble-denominated pay
- *  OR apartment/room rental OR a short job-seeker self-intro). */
-export function looksLikeSpam(text: string | null | undefined): boolean {
-  if (!text) return false;
+// The structural heuristics, in the order looksLikeSpam has always tried them, under the names the
+// reject counter uses (`prefilter:<name>`). Pattern hits are named `p<index in SPAM_PATTERNS>`.
+const SPAM_HEURISTICS: ReadonlyArray<readonly [string, (text: string) => boolean]> = [
+  ['emoji_carpet', looksLikeEmojiCarpet],
+  ['pharma', looksLikePharma],
+  ['mixed_script', looksLikeMixedScript],
+  ['link_only', looksLikeLinkOnly],
+  ['empty', looksLikeEmptyMessage],
+  ['ruble', looksLikeRublePay],
+  ['housing', looksLikeHousingRental], // Candidate A (остаток-3): rental, not a job
+  ['seeker_intro', looksLikeSeekerIntro], // Candidate C (остаток-3): seeker self-intro
+];
+
+/** WHICH live rule drops this message: a heuristic name ("emoji_carpet", "ruble", …) or "p<index>"
+ *  of SPAM_PATTERNS; null when the message passes. The first rule that fires wins — the same order
+ *  looksLikeSpam always used, so the verdict is unchanged; only the name is new.
+ *  RULE: SPAM_PATTERNS is APPEND-ONLY — add new patterns at the END, never insert, reorder or delete
+ *  (retire one by making it never match). The name p<index> is its position, and ai_reject_stats keeps
+ *  `prefilter:p<index>` counters by day: a shifted index silently relabels every older counter. */
+export function spamRuleHit(text: string | null | undefined): string | null {
+  if (!text) return null;
   // Structural heuristics run on the RAW text (they inspect scripts/emoji/URLs, not lowercased words);
   // looksLikeHousingRental / looksLikeSeekerIntro do their OWN ZW-strip + lowercase internally.
-  if (looksLikeEmojiCarpet(text)) return true;
-  if (looksLikePharma(text)) return true;
-  if (looksLikeMixedScript(text)) return true;
-  if (looksLikeLinkOnly(text)) return true;
-  if (looksLikeEmptyMessage(text)) return true;
-  if (looksLikeRublePay(text)) return true;
-  if (looksLikeHousingRental(text)) return true; // Candidate A (остаток-3): rental, not a job
-  if (looksLikeSeekerIntro(text)) return true;   // Candidate C (остаток-3): seeker self-intro
+  for (const [name, check] of SPAM_HEURISTICS) if (check(text)) return name;
   // Strip zero-width chars BEFORE lowercasing (adult/dating bots splice them inside words to hide
   // from the g8 patterns); MUST precede toLowerCase so the boundary helpers see clean tokens.
   // No /g on the patterns, so .test() is stateless — safe to reuse the module-level array.
   const t = text.replace(ZERO_WIDTH, '').toLowerCase();
-  return SPAM_PATTERNS.some((rx) => rx.test(t));
+  const i = SPAM_PATTERNS.findIndex((rx) => rx.test(t));
+  return i >= 0 ? `p${i}` : null;
+}
+
+/** True when the raw message is near-certain spam (pattern hit OR emoji carpet OR pharma blast OR
+ *  mixed-script obfuscation OR link-only drop OR empty/greeting-only message OR ruble-denominated pay
+ *  OR apartment/room rental OR a short job-seeker self-intro). The OBSERVED 2026-10-24 rules are NOT
+ *  consulted — they are shadow-only (observedHits). */
+export function looksLikeSpam(text: string | null | undefined): boolean {
+  return spamRuleHit(text) !== null;
 }

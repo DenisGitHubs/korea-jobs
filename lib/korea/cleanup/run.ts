@@ -29,7 +29,8 @@
 //      contain a phone number, so it must not grow unbounded (007 minor);
 //   9. purge ai_reject_samples older than 7 days (owner rule 2026-07-20) — the reject-inspection
 //      buffer holds full raw text (third-party PII), so it is time-boxed; the tiny per-day
-//      ai_reject_stats counters are kept (not purged);
+//      ai_reject_stats counters are kept (not purged). Shadow-rule samples (reject_reason
+//      'shadow:%', owner decision 2026-10-24) live 10 days — same statement;
 //  10. purge ai_verdict_cache older than 7 days by last_seen (owner rule 2026-07-21) — the reject-verdict
 //      reuse cache (parser/verdict-cache.ts) is a rolling, self-refreshing memory: a hash not seen again
 //      within 7 days ages out. Best-effort (deploy-before-migrate window may lack the table);
@@ -159,11 +160,15 @@ export async function runCleanup(): Promise<CleanupResult> {
   // COUNTERS are deliberately NOT purged (they are cheap and the whole point is a running tally).
   // Best-effort like ai-usage/stats reads (Цензор, gate 20.07): in the deploy-before-migrate window
   // the table may not exist yet — swallow, so the other cleanup steps' results still return 200.
+  // SHADOW samples (`shadow:…`, owner decision 2026-10-24 — parser/reject-log.ts) are the record the
+  // owner reads after the shadow week, so they get 10 days instead of 7; ONE statement, so the two
+  // clocks can never drift into two separately-failing deletes.
   let rejectSamplesPurged: unknown[] = [];
   try {
     rejectSamplesPurged = await sql`
       delete from ai_reject_samples
-      where rejected_at < now() - interval '7 days'
+      where rejected_at < now() - case when reject_reason like 'shadow:%'
+                                       then interval '10 days' else interval '7 days' end
       returning id`;
   } catch (err) {
     // eslint-disable-next-line no-console

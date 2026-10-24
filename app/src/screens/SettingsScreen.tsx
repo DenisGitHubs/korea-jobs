@@ -95,8 +95,11 @@ export default function SettingsScreen() {
   const [meals, setMeals] = useState<boolean>(() => sMeals === true);
   const [notify, setNotify] = useState<boolean>(() => sNotify);
   const [digest, setDigest] = useState<boolean>(() => sDigest);
-  // Display value: an UNKNOWN cap (a backend that does not report the field yet)
-  // shows as "no limit" — that is what actually happens today.
+  // Display value. Today's /me always reports the cap — a person with no
+  // subscription yet gets the default 10 (owner, 2026-10-24) — so the chips show
+  // what is stored. UNKNOWN (undefined) is left only for a backend that does not
+  // report the field at all; such a backend enforces no cap, so "no limit" is the
+  // honest picture there, and an untouched unknown cap is never sent (capTouched).
   const [cap, setCap] = useState<number | null>(() => sCap ?? null);
   // Whether the user actually touched the chips. Only then may an unknown cap be
   // written; otherwise the save omits the field and the server keeps its value.

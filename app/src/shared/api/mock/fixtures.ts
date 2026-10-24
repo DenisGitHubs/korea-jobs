@@ -402,6 +402,14 @@ export const RAW_REVEALS: Record<string, string> = {
   r05: 'подработка выходного дня, погрузка-разгрузка, Пусан. оплата сразу. пишите кто рядом\nTelegram: @busan_weekend',
 };
 
+/**
+ * Daily cap a NEW subscription gets when the person has not chosen one — the
+ * mock's copy of NOTIFY_DAILY_CAP_DEFAULT (lib/korea/notify/cap.ts, owner
+ * 2026-10-24). It is a copy, so app/__tests__/notify-cap-default.guard.test.ts
+ * holds it equal to the server constant.
+ */
+export const MOCK_NOTIFY_DAILY_CAP_DEFAULT = 10;
+
 export const DEFAULT_ME: Me = {
   public_id: 'demo-user',
   lang: 'ru',
@@ -432,10 +440,10 @@ export const DEFAULT_ME: Me = {
     require_housing: null,
     require_meals: null,
     digest_enabled: false,
-    // No cap by default (owner rule): everyone starts unlimited and picks a
-    // number themselves if the flow gets noisy. Set a number here to preview
-    // the capped state.
-    notify_daily_cap: null,
+    // Cold /me (no subscription row yet) mirrors lib/korea/users/me.ts: the
+    // default of 10 letters a day (owner, 2026-10-24), which a first save then
+    // stores. Set null here to preview the explicit «Без ограничения» state.
+    notify_daily_cap: MOCK_NOTIFY_DAILY_CAP_DEFAULT,
     no_city: true,
   },
 };
