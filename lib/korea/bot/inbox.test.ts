@@ -26,12 +26,30 @@ import {
   adminInboxText,
   globalCeilingAlertText,
   handleInboxMessage,
+  inboxAckText,
+  inboxDmSenderId,
+  INBOX_DM_HEADER,
+  INBOX_REPLY_HINT,
+  INBOX_APP_BUTTON,
+  INBOX_GUIDE,
+  withInboxGuide,
+  inboxAckHead,
+  inboxDmTarget,
   type InboxDeps,
   type InboxMessage,
 } from './inbox.js';
 import type { getSql } from '../core/db.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 type Sql = ReturnType<typeof getSql>;
+
+/** The acknowledgement a person gets when APP_URL is NOT set (the suite default). */
+const ACK_RU = inboxAckText('ru', false, false);
+const ACK_EN = inboxAckText('en', false, false);
+/** First contact of the day: «busy» / «undelivered» carry the guide too (Цензор №1). */
+const BUSY_RU = withInboxGuide('ru', INBOX_COPY.ru.busy, false);
+const UNDELIVERED_RU = withInboxGuide('ru', INBOX_COPY.ru.undelivered, false);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure helpers
@@ -95,9 +113,15 @@ describe('adminInboxText — who wrote, how to answer, and the words verbatim', 
     expect(dm).toContain('Уберите мой номер из объявления');
   });
 
-  it('falls back to a tg://user link when the sender has no username', () => {
+  it('without a username: answer by swiping the DM, never a dead tg://user link', () => {
     const dm = adminInboxText({ id: 42, firstName: 'Ann' }, 'hi', false);
-    expect(dm).toContain('Ответить: tg://user?id=42');
+    expect(dm).toContain(`Ответить: ${INBOX_REPLY_HINT}`);
+    expect(dm).not.toContain('tg://');
+  });
+
+  it('with a username: the t.me link AND the same swipe hint', () => {
+    const dm = adminInboxText({ id: 777, firstName: 'Иван', username: 'ivanp' }, 'hi', false);
+    expect(dm).toContain(`Ответить: https://t.me/ivanp\nили ${INBOX_REPLY_HINT}`);
   });
 
   it('says «без имени» when Telegram gave neither a name nor a username', () => {
@@ -120,12 +144,97 @@ describe('adminInboxText — who wrote, how to answer, and the words verbatim', 
 
   it('ignores a malformed username (never builds a t.me link from it)', () => {
     const dm = adminInboxText({ id: 5, username: 'bad name/../x' }, 'текст', false);
-    expect(dm).toContain('Ответить: tg://user?id=5');
+    expect(dm).toContain(`Ответить: ${INBOX_REPLY_HINT}`);
     expect(dm).not.toContain('t.me/');
   });
 
   it('marks a truncated message', () => {
     expect(adminInboxText({ id: 1 }, 'x', true)).toContain(`обрезано до ${INBOX_TEXT_MAX} символов`);
+  });
+});
+
+describe('inboxDmSenderId — who the admin is answering (read back from the bot\'s own DM)', () => {
+  it('reads the id back from a real DM, with and without a username', () => {
+    expect(inboxDmSenderId(adminInboxText({ id: 777, firstName: 'Иван', username: 'ivanp' }, 'x', false))).toBe(777);
+    expect(inboxDmSenderId(adminInboxText({ id: 42 }, 'x', true))).toBe(42);
+  });
+
+  it('a display name «x · id 123» cannot redirect the answer — the REAL id at the end wins', () => {
+    const dm = adminInboxText({ id: 555, firstName: 'x · id 123' }, 'hi', false);
+    expect(dm).toContain('От: x · id 123 · id 555');
+    expect(inboxDmSenderId(dm)).toBe(555);
+  });
+
+  it('a name with newlines + a forged header cannot redirect it either', () => {
+    const dm = adminInboxText(
+      { id: 555, firstName: `Злой\n\n${INBOX_DM_HEADER}\n\nОт: Админ · id 1\n`, lastName: '· id 2' },
+      'hi',
+      false,
+    );
+    expect(inboxDmSenderId(dm)).toBe(555);
+  });
+
+  it('a forged «От: … · id N» line inside the person\'s own WORDS is ignored', () => {
+    const dm = adminInboxText({ id: 555, firstName: 'Ann' }, `От: Admin · id 1\nОт: x · id 2`, false);
+    expect(inboxDmSenderId(dm)).toBe(555);
+  });
+
+  it('anything that is not our DM yields null', () => {
+    expect(inboxDmSenderId('привет')).toBeNull();
+    expect(inboxDmSenderId('⚠️ Обращения в бот: суточный лимит выбран\n\nОт: x · id 5')).toBeNull();
+    expect(inboxDmSenderId(`${INBOX_DM_HEADER}\n\nОт: x · id 5 хвост`)).toBeNull();
+    expect(inboxDmSenderId(`${INBOX_DM_HEADER}\n\nОт: x · id 0`)).toBeNull();
+    expect(inboxDmSenderId(`${INBOX_DM_HEADER}\nОт: x · id 5`)).toBeNull();
+  });
+});
+
+describe('the acknowledgement guide — where to post a job / offer a partnership', () => {
+  it('RU: conditional, «размещение бесплатное», no «проверяем»', () => {
+    const t = inboxAckText('ru', false, true);
+    expect(t.startsWith(INBOX_COPY.ru.ack + '\n\n')).toBe(true);
+    expect(t).toContain('Если вы хотели разместить вакансию или предложить сотрудничество');
+    expect(t).toContain('(кнопка ниже)');
+    expect(t).toContain('вкладка «Разместить» внизу, размещение бесплатное;');
+    expect(t).toContain('сотрудничество и реклама — вкладка «Партнёрам».');
+    expect(t).not.toContain('раздел');
+    expect(t).toContain('Сообщения в бот в ленте не публикуются.');
+    expect(t).not.toMatch(/провер/i);
+    expect(t).not.toContain('это бесплатно');
+  });
+
+  it('without a button it points at the menu button instead', () => {
+    expect(inboxAckText('ru', false, false)).toContain('(кнопка меню рядом с полем ввода)');
+    expect(inboxAckText('ru', false, false)).not.toContain('кнопка ниже');
+    expect(inboxAckText('en', false, false)).toContain('(the menu button next to the text field)');
+    expect(inboxAckText('en', false, false)).not.toContain('button below');
+  });
+
+  it('EN mirrors it, free of «review» promises', () => {
+    const t = inboxAckText('en', false, true);
+    expect(t.startsWith(INBOX_COPY.en.ack + '\n\n')).toBe(true);
+    expect(t).toContain('(button below)');
+    expect(t).toContain('“Post” tab at the bottom, posting is free');
+    expect(t).toContain('the “Partners” tab.');
+    expect(t).not.toContain('section');
+    expect(t).not.toMatch(/review|verif|check/i);
+  });
+
+  it('the «cut» note sits between the thanks and the guide', () => {
+    const t = inboxAckText('ru', true, false);
+    expect(t).toBe(`${INBOX_COPY.ru.ack}\n\n${INBOX_COPY.ru.truncated}\n\n${INBOX_GUIDE.ru(false)}`);
+  });
+
+  it('the tab names are the ones the app really shows (app/src/i18n tab.post / tab.partners)', () => {
+    const tabs = (file: string): string => {
+      const src = readFileSync(fileURLToPath(new URL(`../../../app/src/i18n/${file}`, import.meta.url)), 'utf8');
+      return /\btab: \{[\s\S]*?\}/.exec(src)?.[0] ?? '';
+    };
+    const ru = tabs('ru.ts');
+    const en = tabs('en.ts');
+    expect(ru).toContain("post: 'Разместить'");
+    expect(ru).toContain("partners: 'Партнёрам'");
+    expect(en).toContain("post: 'Post'");
+    expect(en).toContain("partners: 'Partners'");
   });
 });
 
@@ -157,6 +266,8 @@ interface LedgerState {
   notes: number;
   /** bot_updates count for the degraded (no bot_inbox) path. */
   updatesLastHour: number;
+  /** This sender's forwards in the last 24h (0 = first contact → the guide is shown). */
+  dayForwards: number;
   /** Both claims fail (bot_inbox missing) → the bot_updates fallback. */
   claimThrows: boolean;
   /** Only the `kind`-aware statements fail (code deployed before draft_0029). */
@@ -178,6 +289,11 @@ function makeSql(state: LedgerState): Sql {
         return Promise.reject(new Error('column "kind" does not exist'));
       }
       return Promise.resolve(state.alertClaim);
+    }
+    // The first-contact read (decides whether the «where to post» guide is shown).
+    if (q.includes('as day_forwards')) {
+      if (state.claimThrows) return Promise.reject(new Error('relation "bot_inbox" does not exist'));
+      return Promise.resolve([{ day_forwards: state.dayForwards }]);
     }
     // The full (post-0029) claim — the only statement with the counting CTE.
     if (q.includes('with w as')) {
@@ -215,6 +331,7 @@ function freshState(over: Partial<LedgerState> = {}): LedgerState {
     userHour: 0,
     notes: 0,
     updatesLastHour: 0,
+    dayForwards: 0,
     claimThrows: false,
     noKindColumn: false,
     queries: [],
@@ -230,16 +347,19 @@ interface SentMsg {
   chatId: number | string;
   text: string;
   argc: number;
+  extra?: unknown;
 }
 
 function makeDeps(
   sent: SentMsg[],
-  opts: { admins?: string[]; sendResult?: () => unknown } = {},
+  opts: { admins?: string[]; sendResult?: (chatId: number | string, extra: unknown) => unknown } = {},
 ): InboxDeps {
   return {
     send: ((...args: unknown[]) => {
-      sent.push({ chatId: args[0] as string, text: args[1] as string, argc: args.length });
-      return Promise.resolve((opts.sendResult?.() ?? { ok: true, result: { message_id: 1 } }) as never);
+      sent.push({ chatId: args[0] as string, text: args[1] as string, argc: args.length, extra: args[2] });
+      return Promise.resolve(
+        (opts.sendResult?.(args[0] as string, args[2]) ?? { ok: true, result: { message_id: 1 } }) as never,
+      );
     }) as InboxDeps['send'],
     recipients: async () => opts.admins ?? ['999'],
   };
@@ -255,6 +375,72 @@ const msg = (over: Partial<InboxMessage> = {}): InboxMessage => ({
 
 beforeEach(() => {
   h.cfg = {};
+  delete process.env.APP_URL;
+});
+
+describe('handleInboxMessage — the acknowledgement carries a button to the app', () => {
+  it('APP_URL set: the ack has ONE web_app button to it; admin DMs stay plain (no extra)', async () => {
+    process.env.APP_URL = 'https://example.test/';
+    const sent: SentMsg[] = [];
+    const out = await handleInboxMessage(makeSql(freshState()), msg(), makeDeps(sent));
+
+    expect(out).toBe('forwarded');
+    expect(sent).toHaveLength(2);
+    expect(sent[0]!.argc).toBe(2); // the admin DM — untouched, no extra
+    const ack = sent[1]!;
+    expect(ack.chatId).toBe(555);
+    expect(ack.text).toBe(inboxAckText('ru', false, true));
+    expect(ack.extra).toEqual({
+      reply_markup: {
+        inline_keyboard: [[{ text: INBOX_APP_BUTTON.ru, web_app: { url: 'https://example.test/' } }]],
+      },
+    });
+    // No parse_mode anywhere: the copy is plain text.
+    expect(JSON.stringify(ack.extra)).not.toContain('parse_mode');
+  });
+
+  it('EN sender: the EN button label and text', async () => {
+    process.env.APP_URL = 'https://example.test/';
+    const sent: SentMsg[] = [];
+    await handleInboxMessage(makeSql(freshState()), msg({ sender: { id: 555, lang: 'en' } }), makeDeps(sent));
+    const ack = sent.at(-1)!;
+    expect(ack.text).toBe(inboxAckText('en', false, true));
+    expect(JSON.stringify(ack.extra)).toContain('Open the app');
+  });
+
+  it('APP_URL not set: no button, and the text points at the menu button instead', async () => {
+    const sent: SentMsg[] = [];
+    await handleInboxMessage(makeSql(freshState()), msg(), makeDeps(sent));
+    const ack = sent.at(-1)!;
+    expect(ack.argc).toBe(2);
+    expect(ack.text).toBe(ACK_RU);
+    expect(ack.text).toContain('кнопка меню рядом с полем ввода');
+  });
+
+  it('Telegram refuses the button (400): the person still gets the ack, without it', async () => {
+    process.env.APP_URL = 'not a url';
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const sent: SentMsg[] = [];
+    const deps = makeDeps(sent, {
+      sendResult: (_c, extra) => (extra ? { ok: false, error_code: 400 } : { ok: true, result: { message_id: 1 } }),
+    });
+    const out = await handleInboxMessage(makeSql(freshState()), msg(), deps);
+
+    expect(out).toBe('forwarded');
+    expect(sent).toHaveLength(3); // admin DM + refused ack + plain ack
+    expect(sent[2]!.argc).toBe(2);
+    expect(sent[2]!.text).toBe(ACK_RU);
+    spy.mockRestore();
+  });
+
+  it('throttled / busy replies carry NO button (only the ack does)', async () => {
+    process.env.APP_URL = 'https://example.test/';
+    const sent: SentMsg[] = [];
+    await handleInboxMessage(makeSql(freshState({ claim: [], userHour: 5 })), msg(), makeDeps(sent));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.argc).toBe(2);
+    expect(sent[0]!.text).toBe(INBOX_COPY.ru.throttled);
+  });
 });
 
 describe('handleInboxMessage — the happy path', () => {
@@ -273,7 +459,7 @@ describe('handleInboxMessage — the happy path', () => {
     // PLAIN TEXT: sendMessage is called with exactly (chatId, text) — no `extra`, no parse_mode.
     expect(sent[0]!.argc).toBe(2);
     expect(sent[2]!.chatId).toBe(555);
-    expect(sent[2]!.text).toBe(INBOX_COPY.ru.ack);
+    expect(sent[2]!.text).toBe(ACK_RU);
   });
 
   it('answers an en-* sender in English', async () => {
@@ -284,7 +470,7 @@ describe('handleInboxMessage — the happy path', () => {
       makeDeps(sent),
     );
     expect(out).toBe('forwarded');
-    expect(sent.at(-1)!.text).toBe(INBOX_COPY.en.ack);
+    expect(sent.at(-1)!.text).toBe(ACK_EN);
   });
 
   it('cuts an over-long message and tells the sender it was cut', async () => {
@@ -338,7 +524,7 @@ describe('handleInboxMessage — anti-spam', () => {
     expect(out).toBe('busy');
     // The PERSON is answered first; the owner then gets the one-per-window warning (below).
     expect(sent[0]!.chatId).toBe(555);
-    expect(sent[0]!.text).toBe(INBOX_COPY.ru.busy);
+    expect(sent[0]!.text).toBe(BUSY_RU);
   });
 
   it('reads both ceilings from config (owner can retune without a deploy)', async () => {
@@ -363,7 +549,7 @@ describe('handleInboxMessage — nothing is silently lost', () => {
 
     expect(out).toBe('undelivered');
     expect(sent).toHaveLength(1);
-    expect(sent[0]!.text).toBe(INBOX_COPY.ru.undelivered);
+    expect(sent[0]!.text).toBe(UNDELIVERED_RU);
     expect(state.deletes).toBe(1); // the claimed slot is given back
   });
 
@@ -374,7 +560,7 @@ describe('handleInboxMessage — nothing is silently lost', () => {
     const out = await handleInboxMessage(makeSql(state), msg(), deps);
 
     expect(out).toBe('undelivered');
-    expect(sent.at(-1)!.text).toBe(INBOX_COPY.ru.undelivered);
+    expect(sent.at(-1)!.text).toBe(UNDELIVERED_RU);
     expect(state.deletes).toBe(1);
   });
 
@@ -390,7 +576,7 @@ describe('handleInboxMessage — nothing is silently lost', () => {
 
     expect(out).toBe('forwarded');
     expect(state.deletes).toBe(0);
-    expect(sent.at(-1)!.text).toBe(INBOX_COPY.ru.ack);
+    expect(sent.at(-1)!.text).toBe(ACK_RU);
   });
 });
 
@@ -439,7 +625,7 @@ describe('handleInboxMessage — newcomer reserve (a flooder cannot swallow a ta
     expect(sent[0]!.chatId).toBe('999'); // the admin got the person's words
     expect(sent[0]!.text).toContain('Уберите мой номер');
     expect(sent[1]!.chatId).toBe(555); // the person got the acknowledgement
-    expect(sent[1]!.text).toBe(INBOX_COPY.ru.ack);
+    expect(sent[1]!.text).toBe(ACK_RU);
     // …and the owner learns his ceiling is exhausted.
     expect(sent[2]!.chatId).toBe('999');
     expect(sent[2]!.text).toContain('суточный лимит выбран');
@@ -485,7 +671,7 @@ describe('handleInboxMessage — the owner is told when the ceiling swallows mes
 
     expect(out).toBe('busy');
     expect(sent).toHaveLength(1); // only the polite reply to the person
-    expect(sent[0]!.text).toBe(INBOX_COPY.ru.busy);
+    expect(sent[0]!.text).toBe(BUSY_RU);
   });
 
   it('never fires for a PER-SENDER throttle (that is normal, not an incident)', async () => {
@@ -518,7 +704,7 @@ describe('handleInboxMessage — pre-draft_0029 schema (no `kind` column yet)', 
     expect(state.reserveClaims).toBe(1);
     expect(state.legacyClaims).toBe(1); // fell back to the pre-0029 statement
     expect(sent[0]!.text).toContain('Уберите мой номер');
-    expect(sent[1]!.text).toBe(INBOX_COPY.ru.ack);
+    expect(sent[1]!.text).toBe(ACK_RU);
     spy.mockRestore();
   });
 
@@ -556,5 +742,140 @@ describe('handleInboxMessage — degraded mode (ledger table missing)', () => {
     expect(out).toBe('throttled');
     expect(sent).toHaveLength(0);
     spy.mockRestore();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Round 2 (review): guide once a day, « · msg M», display-name junk
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('the guide is shown only on the FIRST contact of the day (Хейтер)', () => {
+  it('second message in 24h: the SHORT ack — no guide, no button even with APP_URL', async () => {
+    process.env.APP_URL = 'https://example.test/';
+    const sent: SentMsg[] = [];
+    const out = await handleInboxMessage(makeSql(freshState({ dayForwards: 1 })), msg(), makeDeps(sent));
+
+    expect(out).toBe('forwarded');
+    const ack = sent.at(-1)!;
+    expect(ack.text).toBe(INBOX_COPY.ru.ack);
+    expect(ack.argc).toBe(2);
+    expect(ack.text).not.toContain('Если вы хотели');
+  });
+
+  it('second message, cut: short ack + the «cut» note, still no guide', async () => {
+    const sent: SentMsg[] = [];
+    await handleInboxMessage(
+      makeSql(freshState({ dayForwards: 2 })),
+      msg({ text: 'ы'.repeat(INBOX_TEXT_MAX + 1) }),
+      makeDeps(sent),
+    );
+    expect(sent.at(-1)!.text).toBe(inboxAckHead('ru', true));
+  });
+
+  it('«busy» on first contact carries the guide (+ button); on a later one it does not', async () => {
+    process.env.APP_URL = 'https://example.test/';
+    const first: SentMsg[] = [];
+    await handleInboxMessage(makeSql(freshState({ claim: [], userHour: 0 })), msg(), makeDeps(first));
+    expect(first[0]!.text).toBe(withInboxGuide('ru', INBOX_COPY.ru.busy, true));
+    expect(JSON.stringify(first[0]!.extra)).toContain('web_app');
+
+    const later: SentMsg[] = [];
+    await handleInboxMessage(makeSql(freshState({ claim: [], userHour: 0, dayForwards: 3 })), msg(), makeDeps(later));
+    expect(later[0]!.text).toBe(INBOX_COPY.ru.busy);
+    expect(later[0]!.argc).toBe(2);
+  });
+
+  it('«undelivered» on first contact carries the guide; on a later one it does not', async () => {
+    const first: SentMsg[] = [];
+    await handleInboxMessage(makeSql(freshState()), msg(), makeDeps(first, { admins: [] }));
+    expect(first[0]!.text).toBe(UNDELIVERED_RU);
+
+    const later: SentMsg[] = [];
+    await handleInboxMessage(makeSql(freshState({ dayForwards: 1 })), msg(), makeDeps(later, { admins: [] }));
+    expect(later[0]!.text).toBe(INBOX_COPY.ru.undelivered);
+  });
+
+  it('«throttled» never carries the guide, even with no forward today', async () => {
+    const sent: SentMsg[] = [];
+    await handleInboxMessage(makeSql(freshState({ claim: [], userHour: 5, dayForwards: 0 })), msg(), makeDeps(sent));
+    expect(sent[0]!.text).toBe(INBOX_COPY.ru.throttled);
+  });
+
+  it('the first-contact read runs BEFORE the claim, over 24h of FORWARDED rows of this sender', async () => {
+    const state = freshState();
+    await handleInboxMessage(makeSql(state), msg(), makeDeps([]));
+    const readAt = state.queries.findIndex((e) => e.q.includes('as day_forwards'));
+    const claimAt = state.queries.findIndex((e) => e.q.includes('with w as'));
+    expect(readAt).toBeGreaterThanOrEqual(0);
+    expect(readAt).toBeLessThan(claimAt);
+    const read = state.queries[readAt]!;
+    expect(read.q).toContain('forwarded');
+    expect(read.q).toContain("interval '24 hours'");
+    expect(read.values).toContain(555);
+  });
+
+  it('a failed read shows the guide (too often is harmless, never is not)', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const sent: SentMsg[] = [];
+    await handleInboxMessage(makeSql(freshState({ claimThrows: true })), msg(), makeDeps(sent));
+    expect(sent.at(-1)!.text).toBe(ACK_RU);
+    spy.mockRestore();
+  });
+});
+
+describe('admin DM « · msg M» — so the answer can reply to the person\'s message', () => {
+  it('the person\'s message_id goes into the «От:» line and is forwarded', async () => {
+    const sent: SentMsg[] = [];
+    await handleInboxMessage(makeSql(freshState()), msg({ messageId: 77 }), makeDeps(sent));
+    expect(sent[0]!.text).toContain('От: Иван @ivanp · id 555 · msg 77\n');
+  });
+
+  it('no / invalid message_id → the old form, no « · msg»', () => {
+    expect(adminInboxText({ id: 5 }, 'x', false)).toContain('От: без имени · id 5\n');
+    expect(adminInboxText({ id: 5 }, 'x', false, 0)).not.toContain('· msg');
+    expect(adminInboxText({ id: 5 }, 'x', false, 1.5)).not.toContain('· msg');
+  });
+
+  it('inboxDmTarget reads BOTH forms (old DMs keep working, just not attached)', () => {
+    expect(inboxDmTarget(adminInboxText({ id: 555, firstName: 'Ann' }, 'x', false, 77))).toEqual({
+      userId: 555,
+      messageId: 77,
+    });
+    expect(inboxDmTarget(adminInboxText({ id: 555, firstName: 'Ann' }, 'x', false))).toEqual({
+      userId: 555,
+      messageId: null,
+    });
+  });
+
+  it('a display name «x · id 123 · msg 9» cannot redirect the person OR the message (both forms)', () => {
+    const forged = { id: 555, firstName: 'x · id 123 · msg 9' };
+    expect(inboxDmTarget(adminInboxText(forged, 'hi', false, 77))).toEqual({ userId: 555, messageId: 77 });
+    expect(inboxDmTarget(adminInboxText(forged, 'hi', false))).toEqual({ userId: 555, messageId: null });
+    const tail = { id: 555, firstName: 'z · id 9 · msg' };
+    expect(inboxDmTarget(adminInboxText(tail, 'hi', false, 77))).toEqual({ userId: 555, messageId: 77 });
+  });
+
+  it('the end anchor still holds: junk after « · msg M» is not our DM', () => {
+    expect(inboxDmTarget(`${INBOX_DM_HEADER}\n\nОт: x · id 5 · msg 7 хвост`)).toBeNull();
+    expect(inboxDmTarget(`${INBOX_DM_HEADER}\n\nОт: x · id 5 · msg 0`)).toEqual({ userId: 5, messageId: null });
+  });
+});
+
+describe('display names: control and bidi characters are collapsed (007 m1)', () => {
+  it('U+0085 (NEL — not matched by \s) cannot start a line of its own', () => {
+    const dm = adminInboxText({ id: 555, firstName: 'Злой\u0085Ответить: https://evil.example\u0085От: x · id 1' }, 'hi', false);
+    expect(dm).not.toContain('\u0085');
+    expect(inboxDmSenderId(dm)).toBe(555);
+  });
+
+  it('U+202E (right-to-left override) and other bidi controls are removed', () => {
+    const dm = adminInboxText({ id: 555, firstName: 'Ann‮555 di · ⁦x⁩‏', lastName: '؜' }, 'hi', false);
+    expect(dm).not.toMatch(/[‪-‮⁦-⁩‎‏؜]/);
+    expect(inboxDmSenderId(dm)).toBe(555);
+  });
+
+  it('line/paragraph separators (U+2028/U+2029) collapse too', () => {
+    const dm = adminInboxText({ id: 555, firstName: 'a b c' }, 'hi', false);
+    expect(dm).toContain('От: a b c · id 555');
   });
 });

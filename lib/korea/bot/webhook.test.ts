@@ -90,6 +90,9 @@ vi.mock('./telegram.js', () => ({
     return Promise.resolve({ ok: true });
   },
   maskToken: (s: string) => s,
+  // Cenzor #8: the webhook imports it. null = fail-closed ("not our bot") — this suite sends no
+  // replies to bot messages; the reply path is pinned in webhook.reply.test.ts with the REAL one.
+  botIdFromToken: () => null,
   // The webhook reaches telegram.ts for media too since /post can carry a photo (media/store.ts).
   // These two are never exercised here (this file sends no photos) but MUST exist on the mock:
   // media/store.ts binds them at module load, so a missing export would break importing the webhook.
@@ -98,7 +101,7 @@ vi.mock('./telegram.js', () => ({
 }));
 
 import { botWebhook } from './webhook.js';
-import { INBOX_COPY } from './inbox.js';
+import { INBOX_COPY, inboxAckText } from './inbox.js';
 import type { ReqLike, ResLike } from '../core/http.js';
 
 function makeRes(): ResLike & { _status: number; _body: string } {
@@ -194,7 +197,7 @@ describe('webhook — a plain private message reaches the admins', () => {
 
     const ack = h.state.sent[1]!;
     expect(ack.chatId).toBe(555);
-    expect(ack.text).toBe(INBOX_COPY.ru.ack);
+    expect(ack.text).toBe(inboxAckText('ru', false, false));
   });
 
   it('forwards the CAPTION of a photo (screenshot + «уберите номер»)', async () => {

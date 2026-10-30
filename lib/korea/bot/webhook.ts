@@ -19,8 +19,9 @@ import {
   sendError,
 } from '../core/http.js';
 import { ApiErrorCode } from '../core/errors.js';
-import { sendMessage, answerCallbackQuery, editMessageText, maskToken } from './telegram.js';
-import { isInboxText, handleInboxMessage } from './inbox.js';
+import { sendMessage, answerCallbackQuery, editMessageText, maskToken, botIdFromToken } from './telegram.js';
+import { isInboxText, handleInboxMessage, INBOX_DM_HEADER } from './inbox.js';
+import { relayAdminReply, adminReplyToOtherBotMessage } from './admin-reply.js';
 import { isAdminTelegram } from '../admin/auth.js';
 import { gatherStats, renderStats } from '../admin/stats.js';
 import { moderateAd } from '../ads/rw.js';
@@ -81,6 +82,31 @@ interface ParsedUpdate {
   lastName: string | null;
   username: string | null;
   lang: string | null;
+  /** True for an edited_message update. */
+  edited: boolean;
+  /** message.message_id — carried into the admin DM so an admin answer can reply to it. */
+  messageId: number | null;
+  /** message.text ONLY (no caption fallback) — what an admin reply may relay. */
+  plainText: string | null;
+  /** The message this one replies to (admin «answer through the bot», bot/admin-reply.ts). */
+  replyTo: ReplyTo | null;
+}
+
+interface ReplyTo {
+  fromId: number | null;
+  fromIsBot: boolean;
+  text: string | null;
+}
+
+function parseReplyTo(v: unknown): ReplyTo | null {
+  if (!v || typeof v !== 'object') return null;
+  const r = v as Record<string, unknown>;
+  const from = r.from as Record<string, unknown> | undefined;
+  return {
+    fromId: typeof from?.id === 'number' ? from.id : null,
+    fromIsBot: from?.is_bot === true,
+    text: str(r.text),
+  };
 }
 
 function str(v: unknown): string | null {
@@ -115,9 +141,14 @@ function parseUpdate(body: unknown): ParsedUpdate | null {
       lastName: str(cqFrom?.last_name),
       username: str(cqFrom?.username),
       lang: str(cqFrom?.language_code),
+      edited: false,
+      messageId: null,
+      plainText: null,
+      replyTo: null,
     };
   }
 
+  const edited = b.message === undefined && b.edited_message !== undefined;
   const msg = (b.message ?? b.edited_message) as Record<string, unknown> | undefined;
   const from = msg?.from as Record<string, unknown> | undefined;
   const chat = msg?.chat as Record<string, unknown> | undefined;
@@ -138,8 +169,27 @@ function parseUpdate(body: unknown): ParsedUpdate | null {
     lastName: str(from?.last_name),
     username: str(from?.username),
     lang: str(from?.language_code),
+    edited,
+    messageId: typeof msg?.message_id === 'number' ? msg.message_id : null,
+    plainText: str(msg?.text),
+    replyTo: parseReplyTo(msg?.reply_to_message),
   };
 }
+
+/**
+ * What the replied-to message is, when it was written by OUR bot (from.is_bot AND from.id == the id
+ * in BOT_TOKEN — fail-closed: no/malformed token → null): 'inbox_dm' for a «✉️ Написали в бот» DM,
+ * 'other' for any other bot message. null = not a reply, or not to our bot.
+ */
+function botReplyKind(r: ReplyTo | null): 'inbox_dm' | 'other' | null {
+  if (!r || !r.fromIsBot || r.fromId === null) return null;
+  const own = botIdFromToken();
+  if (own === null || r.fromId !== own) return null;
+  return typeof r.text === 'string' && r.text.startsWith(INBOX_DM_HEADER) ? 'inbox_dm' : 'other';
+}
+
+/** Commands the bot answers. Typed as a reply, they stay commands (never relayed to a person). */
+const KNOWN_COMMANDS: ReadonlySet<string> = new Set(['/start', '/help', '/stats', '/broadcast', '/post', '/posts']);
 
 const CB_RE = /^ad:(approve|reject):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 const REPORT_CB_RE = /^rep:(hide|keep):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
@@ -347,6 +397,46 @@ async function dispatch(u: ParsedUpdate): Promise<void> {
   // first space and strip the @suffix). Private-only by design (owner: "видна только тебе")
   // — the chatType gate above already applies, so it never posts aggregates into a group.
   const command = (text.split(/\s+/, 1)[0] ?? '').split('@', 1)[0]?.toLowerCase() ?? '';
+
+  // An ADMIN replying to one of OUR bot's messages (bot/admin-reply.ts). Runs BEFORE the inbox so
+  // the admin's words are never forwarded back to the admins as «написали в бот» and never touch
+  // the inbox limits:
+  //   * a reply to a «✉️ Написали в бот» DM → relayed to that person (or a plain reason why not —
+  //     incl. an unknown «/…» text, which is refused instead of silently dropped);
+  //   * a reply to any other bot message (e.g. «✅ Отправлено») → a hint how to answer, nothing else.
+  // A KNOWN command typed as a reply stays a command. A NON-admin (or a failed admin lookup —
+  // isAdminTelegram is fail-closed) falls through to the ordinary handling below: people often
+  // reply to the bot's notifications, and that is still «написали в бот».
+  const replyKind = botReplyKind(u.replyTo);
+  if (replyKind !== null && !KNOWN_COMMANDS.has(command)) {
+    const sql = getSql();
+    if (await isAdminTelegram(sql, u.fromId)) {
+      // No `extra` unless reply_parameters is needed: the admin's words never get a parse_mode.
+      const send = (chatId: number | string, t: string, extra?: Record<string, unknown>) =>
+        extra ? sendMessage(chatId, t, extra) : sendMessage(chatId, t);
+      if (replyKind === 'inbox_dm') {
+        await relayAdminReply(
+          { adminChatId: u.chatId, dmText: u.replyTo?.text ?? '', text: u.plainText, edited: u.edited },
+          {
+            send,
+            // Same flag the notify/broadcast/digest workers set on a 403.
+            markBlocked: async (telegramId) => {
+              await sql`update users set is_blocked = true where telegram_id = ${telegramId}::bigint`;
+            },
+          },
+        );
+      } else {
+        await adminReplyToOtherBotMessage({ adminChatId: u.chatId, edited: u.edited }, { send });
+      }
+      return;
+    }
+  }
+
+  // An EDIT is not a new message (Цензор №2). Before, an edited message ran the whole path again:
+  // re-forwarded to the admins, a second ack — and an edited /post made a second draft. Edits are
+  // now ignored everywhere except the admin-reply branch above, which tells the admin about them.
+  if (u.edited) return;
+
   if (command === '/stats') {
     // Non-admins get NOTHING — do not reveal the command exists (same as an unknown message).
     // Admin = env-id OR users.role='admin'; fail-closed on a role-lookup error.
@@ -534,6 +624,7 @@ async function dispatch(u: ParsedUpdate): Promise<void> {
     await handleInboxMessage(getSql(), {
       updateId: u.updateId,
       chatId: u.chatId,
+      messageId: u.messageId,
       sender: {
         id: u.fromId,
         firstName: u.firstName,

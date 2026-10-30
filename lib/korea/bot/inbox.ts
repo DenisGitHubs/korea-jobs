@@ -90,6 +90,8 @@ export interface InboxSender {
 export interface InboxMessage {
   updateId: number;
   chatId: number;
+  /** The person's message_id — written into the admin DM so an admin answer can reply to it. */
+  messageId?: number | null;
   sender: InboxSender;
   text: string;
 }
@@ -115,7 +117,9 @@ export const INBOX_COPY: Record<
   { ack: string; truncated: string; throttled: string; busy: string; undelivered: string }
 > = {
   ru: {
-    ack: 'Спасибо, сообщение получили. Ответим в течение 3 рабочих дней.',
+    // `ack` is only the FIRST paragraph of the acknowledgement. On a person's FIRST message in
+    // 24h the «where to post» guide (INBOX_GUIDE) follows — see inboxAckText / handleInboxMessage.
+    ack:'Спасибо, сообщение получили. Ответим в течение 3 рабочих дней.',
     truncated:
       `Сообщение длинное — взяли первые ${INBOX_TEXT_MAX} символов. ` +
       'Если важное осталось за краем, пришлите его отдельным сообщением.',
@@ -141,6 +145,61 @@ export const INBOX_COPY: Record<
     undelivered: 'We could not pass your message on. Please try again in a few minutes.',
   },
 };
+
+/**
+ * The «where to post» guide: people often write to the bot to post a job or to offer a
+ * partnership, and both are done in the mini app, not here. Phrased CONDITIONALLY («если вы
+ * хотели…») on purpose — the same reply also goes to someone asking us to remove their number.
+ * No promise that anything is reviewed (legal review). Tab names mirror app/src/i18n (ru.ts/en.ts
+ * `tab.post`, `tab.partners`); both are tabs of the bottom bar (app/src/components/TabBar.tsx).
+ *
+ * SHOWN ONCE A DAY: only when the person has no forwarded message in the last 24h (their first
+ * contact) — appended to the ack, the «busy» and the «undelivered» replies alike. A person in a
+ * conversation («спасибо, а какой номер?») gets the short reply; «throttled» never carries it
+ * (by then they have already seen it).
+ *
+ * 🔴 «размещение бесплатное» / «posting is free» is a statement of fact: change it TOGETHER with
+ * any introduction of paid job posting.
+ *
+ * `hasAppButton` = APP_URL is configured, so the web_app button under the reply really exists;
+ * otherwise point at the bot's menu button instead (same rule as helpText in webhook.ts).
+ */
+export const INBOX_GUIDE: Record<InboxLocale, (hasAppButton: boolean) => string> = {
+  ru: (hasAppButton) =>
+    'Если вы хотели разместить вакансию или предложить сотрудничество — это делается в приложении ' +
+    `(${hasAppButton ? 'кнопка ниже' : 'кнопка меню рядом с полем ввода'}):\n` +
+    '• вакансия — вкладка «Разместить» внизу, размещение бесплатное;\n' +
+    '• сотрудничество и реклама — вкладка «Партнёрам».\n' +
+    'Сообщения в бот в ленте не публикуются.',
+  en: (hasAppButton) =>
+    'If you wanted to post a job or offer a partnership, that is done in the app ' +
+    `(${hasAppButton ? 'button below' : 'the menu button next to the text field'}):\n` +
+    '• a job — the “Post” tab at the bottom, posting is free;\n' +
+    '• partnership and advertising — the “Partners” tab.\n' +
+    'Messages sent to the bot are not published in the feed.',
+};
+
+/** Label of the web_app button under the acknowledgement. */
+export const INBOX_APP_BUTTON: Record<InboxLocale, string> = {
+  ru: 'Открыть приложение',
+  en: 'Open the app',
+};
+
+/** `head` followed by the guide (first contact of the day). */
+export function withInboxGuide(locale: InboxLocale, head: string, hasAppButton: boolean): string {
+  return `${head}\n\n${INBOX_GUIDE[locale](hasAppButton)}`;
+}
+
+/** The short acknowledgement: thanks + promise, plus the «cut» note when needed. */
+export function inboxAckHead(locale: InboxLocale, truncated: boolean): string {
+  const c = INBOX_COPY[locale];
+  return truncated ? `${c.ack}\n\n${c.truncated}` : c.ack;
+}
+
+/** The FIRST-contact acknowledgement: the short ack, then the guide. */
+export function inboxAckText(locale: InboxLocale, truncated: boolean, hasAppButton: boolean): string {
+  return withInboxGuide(locale, inboxAckHead(locale, truncated), hasAppButton);
+}
 
 /**
  * The DM that tells the OWNER his inbox ceiling is exhausted — plain text, no parse_mode, no
@@ -179,28 +238,92 @@ export function clampInboxText(raw: string): { text: string; truncated: boolean 
     : { text: t.slice(0, INBOX_TEXT_MAX), truncated: true };
 }
 
-/** Collapse whitespace (incl. newlines) and cap — a display name must not forge header lines. */
+/**
+ * Characters a display name may NOT keep (007 m1): every Unicode whitespace and line/paragraph
+ * separator, every control character (incl. U+0085 NEL, which some clients render as a line
+ * break and JS `\s` does NOT match) and the bidi controls (U+202A–U+202E embeddings/overrides,
+ * U+2066–U+2069 isolates, U+200E/U+200F marks, U+061C) that could visually reorder the header.
+ */
+const NAME_JUNK_RE = /[\s\p{Cc}\p{Zl}\p{Zp}‪-‮⁦-⁩‎‏؜]+/gu;
+
+/** Collapse whitespace/control/bidi runs and cap — a display name must not forge header lines. */
 function oneLine(s: string, max: number): string {
-  return s.replace(/\s+/g, ' ').trim().slice(0, max);
+  return s.replace(NAME_JUNK_RE, ' ').trim().slice(0, max);
 }
 
 /**
- * The admin DM. PLAIN TEXT ONLY (the caller must not pass parse_mode): the body is the person's
- * own words, forwarded verbatim, so no markup can be injected. The header carries who wrote and a
- * one-tap way back to them — @username when there is one, else the tg://user id link.
+ * First line of every admin inbox DM. It is also the marker the admin-reply path
+ * (bot/admin-reply.ts) looks for, so it lives in ONE place.
  */
-export function adminInboxText(sender: InboxSender, text: string, truncated: boolean): string {
+export const INBOX_DM_HEADER = '✉️ Написали в бот';
+
+/** How to answer through the bot (the admin swipes the DM — admin-reply.ts relays the reply). */
+export const INBOX_REPLY_HINT = 'свайпните это сообщение и напишите ответ — бот передаст его';
+
+/**
+ * The admin DM. PLAIN TEXT ONLY (the caller must not pass parse_mode): the body is the person's
+ * own words, forwarded verbatim, so no markup can be injected. The header carries who wrote and
+ * how to answer: a reply to this DM is relayed by the bot (works for everybody), plus a t.me link
+ * when the person has a @username. A tg://user?id= link is NOT offered — Telegram privacy makes it
+ * dead for people without a username, which is exactly who needed it.
+ *
+ * FORMAT CONTRACT with inboxDmTarget: line 1 = INBOX_DM_HEADER, line 2 empty, line 3 =
+ * «От: … · id N» or «От: … · id N · msg M» (M = the person's message_id, so the relayed answer
+ * can reply to it). The name is collapsed to one line (oneLine), so nothing the sender controls
+ * can add or move a line of the header.
+ */
+export function adminInboxText(
+  sender: InboxSender,
+  text: string,
+  truncated: boolean,
+  messageId?: number | null,
+): string {
   const name = oneLine([sender.firstName ?? '', sender.lastName ?? ''].join(' '), NAME_MAX);
   const uname = sender.username && USERNAME_RE.test(sender.username) ? sender.username : null;
   const who = [name || null, uname ? '@' + uname : null].filter(Boolean).join(' ') || 'без имени';
-  const link = uname ? `https://t.me/${uname}` : `tg://user?id=${sender.id}`;
+  const answer = uname
+    ? `Ответить: https://t.me/${uname}\nили ${INBOX_REPLY_HINT}`
+    : `Ответить: ${INBOX_REPLY_HINT}`;
+  const msg =
+    typeof messageId === 'number' && Number.isSafeInteger(messageId) && messageId > 0
+      ? ` · msg ${messageId}`
+      : '';
   return (
-    '✉️ Написали в бот\n\n' +
-    `От: ${who} · id ${sender.id}\n` +
-    `Ответить: ${link}\n\n` +
+    `${INBOX_DM_HEADER}\n\n` +
+    `От: ${who} · id ${sender.id}${msg}\n` +
+    `${answer}\n\n` +
     text +
     (truncated ? `\n\n(обрезано до ${INBOX_TEXT_MAX} символов)` : '')
   );
+}
+
+export interface InboxDmTarget {
+  userId: number;
+  /** The person's message to reply to; null for a DM written before « · msg M» existed. */
+  messageId: number | null;
+}
+
+/**
+ * Who an admin inbox DM is about, or null when `dm` is not such a DM. Reads ONLY the third line and
+ * anchors « · id N[ · msg M]» at its END: a display name like «x · id 123 · msg 9» sits BEFORE the
+ * real suffix, so the greedy `.*` skips it and the real values win. Accepts both forms — DMs sent
+ * before the « · msg» suffix still resolve the person (the answer just is not attached to their
+ * message). The person's own words start several lines further down and are never looked at.
+ */
+export function inboxDmTarget(dm: string): InboxDmTarget | null {
+  const lines = dm.split('\n');
+  if (lines[0] !== INBOX_DM_HEADER || lines[1] !== '') return null;
+  const m = /^От: .* · id (\d{1,16})(?: · msg (\d{1,16}))?$/.exec(lines[2] ?? '');
+  if (!m) return null;
+  const userId = Number(m[1]);
+  if (!Number.isSafeInteger(userId) || userId <= 0) return null;
+  const mid = m[2] === undefined ? null : Number(m[2]);
+  return { userId, messageId: mid !== null && Number.isSafeInteger(mid) && mid > 0 ? mid : null };
+}
+
+/** Just the person's id (see inboxDmTarget). */
+export function inboxDmSenderId(dm: string): number | null {
+  return inboxDmTarget(dm)?.userId ?? null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -208,7 +331,12 @@ export function adminInboxText(sender: InboxSender, text: string, truncated: boo
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface InboxDeps {
-  send: (chatId: number | string, text: string) => Promise<TgResponse<{ message_id: number }>>;
+  /** `extra` is passed ONLY for the web_app button under a guided reply — never for an admin DM. */
+  send: (
+    chatId: number | string,
+    text: string,
+    extra?: Record<string, unknown>,
+  ) => Promise<TgResponse<{ message_id: number }>>;
   recipients: (sql: Sql) => Promise<string[]>;
 }
 
@@ -434,6 +562,58 @@ async function reply(deps: InboxDeps, chatId: number, text: string): Promise<voi
   }
 }
 
+/**
+ * Answer the person with `head`, plus — on their first contact of the day — the «where to post»
+ * guide and a web_app button to the app (when APP_URL is set). Plain text (no parse_mode). If
+ * Telegram refuses the message WITH the button (400 — e.g. a malformed APP_URL), the answer still
+ * matters more than the button: resend once without it, worded for the menu button. Never throws.
+ */
+async function replyGuided(
+  deps: InboxDeps,
+  chatId: number,
+  locale: InboxLocale,
+  head: string,
+  guide: boolean,
+): Promise<void> {
+  if (!guide) return reply(deps, chatId, head);
+  const url = process.env.APP_URL;
+  if (url) {
+    try {
+      const r = await deps.send(chatId, withInboxGuide(locale, head, true), {
+        reply_markup: { inline_keyboard: [[{ text: INBOX_APP_BUTTON[locale], web_app: { url } }]] },
+      });
+      if (!(r?.ok === false && r.error_code === 400)) return;
+      // eslint-disable-next-line no-console
+      console.error('[bot] inbox reply: button refused (400), resending without it');
+    } catch {
+      // eslint-disable-next-line no-console
+      console.error('[bot] inbox reply failed');
+      return;
+    }
+  }
+  await reply(deps, chatId, withInboxGuide(locale, head, false));
+}
+
+/**
+ * True when this person has NO forwarded message in the last 24h — their first contact of the day,
+ * the only time the «where to post» guide is shown. Read BEFORE the claim (the claim's own row
+ * would count otherwise). Same window as the claim's `user_day`. A failed read (ledger missing,
+ * DB blip) answers true: showing the guide once too often is harmless, hiding it is not.
+ */
+async function firstContactToday(sql: Sql, senderId: number): Promise<boolean> {
+  try {
+    const rows = (await sql`
+      select count(*)::int as day_forwards from bot_inbox
+      where from_id = ${senderId}::bigint and forwarded
+        and created_at > now() - interval '24 hours'`) as unknown as { day_forwards: number }[];
+    return num(rows[0]?.day_forwards) === 0;
+  } catch {
+    // eslint-disable-next-line no-console
+    console.error('[bot] inbox first-contact read failed');
+    return true;
+  }
+}
+
 /** DM every admin one plain-text message. True when at least ONE of them actually received it. */
 async function dmAdmins(sql: Sql, deps: InboxDeps, dm: string): Promise<boolean> {
   let ids: string[] = [];
@@ -465,12 +645,12 @@ async function dmAdmins(sql: Sql, deps: InboxDeps, dm: string): Promise<boolean>
 /** Forward one person's message to the admins. True when at least ONE of them received it. */
 async function forwardToAdmins(
   sql: Sql,
-  sender: InboxSender,
+  msg: InboxMessage,
   text: string,
   truncated: boolean,
   deps: InboxDeps,
 ): Promise<boolean> {
-  return dmAdmins(sql, deps, adminInboxText(sender, text, truncated));
+  return dmAdmins(sql, deps, adminInboxText(msg.sender, text, truncated, msg.messageId));
 }
 
 /**
@@ -525,7 +705,8 @@ export async function handleInboxMessage(
   deps: InboxDeps = defaultDeps,
 ): Promise<InboxOutcome> {
   const { text, truncated } = clampInboxText(msg.text);
-  const copy = INBOX_COPY[inboxLocale(msg.sender.lang)];
+  const locale = inboxLocale(msg.sender.lang);
+  const copy = INBOX_COPY[locale];
 
   // Whole non-negative numbers only: the config is hand-edited, and a fractional value would make
   // the `::int` cast in the claim statement fail (→ needless degraded mode).
@@ -543,24 +724,31 @@ export async function handleInboxMessage(
         )
       : 0;
 
+  // Decided BEFORE the claim: the claim's own row would make every message look like a repeat.
+  const guide = await firstContactToday(sql, msg.sender.id);
+
   const claim = await claimInboxSlot(sql, msg, text.length, perHour, perDay, reserve);
   if (!claim.granted) {
-    if (claim.notify) await reply(deps, msg.chatId, claim.reason === 'global' ? copy.busy : copy.throttled);
+    if (claim.notify) {
+      // «busy» may carry the guide (first contact); «throttled» never does — they have seen it.
+      if (claim.reason === 'global') await replyGuided(deps, msg.chatId, locale, copy.busy, guide);
+      else await reply(deps, msg.chatId, copy.throttled);
+    }
     // The global window is full AND the reserve did not save this message — the owner must learn
     // that his channel is losing messages. Metered to once per window; the person was answered first.
     if (claim.reason === 'global') await alertGlobalCeiling(sql, deps, perDay, reserve);
     return claim.reason === 'global' ? 'busy' : 'throttled';
   }
 
-  const delivered = await forwardToAdmins(sql, msg.sender, text, truncated, deps);
+  const delivered = await forwardToAdmins(sql, msg, text, truncated, deps);
   if (!delivered) {
     // Nobody got it — do not claim the person's hourly slot and do not pretend we did.
     await releaseInboxSlot(sql, claim.id);
-    await reply(deps, msg.chatId, copy.undelivered);
+    await replyGuided(deps, msg.chatId, locale, copy.undelivered, guide);
     return 'undelivered';
   }
 
-  await reply(deps, msg.chatId, truncated ? `${copy.ack}\n\n${copy.truncated}` : copy.ack);
+  await replyGuided(deps, msg.chatId, locale, inboxAckHead(locale, truncated), guide);
   // This one got through only because it was somebody's FIRST message of the day: the global window
   // is already full, so the same warning is due (same once-per-window marker as the blocked path).
   if (claim.viaReserve) await alertGlobalCeiling(sql, deps, perDay, reserve);

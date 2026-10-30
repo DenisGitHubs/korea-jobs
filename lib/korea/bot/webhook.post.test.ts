@@ -94,6 +94,9 @@ vi.mock('./telegram.js', () => ({
     return Promise.resolve({ ok: true });
   },
   maskToken: (s: string) => s,
+  // Cenzor #8: the webhook imports it. null = fail-closed ("not our bot") — this suite sends no
+  // replies to bot messages; the reply path is pinned in webhook.reply.test.ts with the REAL one.
+  botIdFromToken: () => null,
   getFile: () => Promise.resolve({ ok: false }),
   downloadFile: () => Promise.reject(new Error('unused')),
 }));

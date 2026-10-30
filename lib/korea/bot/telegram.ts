@@ -6,7 +6,7 @@
 // message (maskToken scrubs every error surface).
 //
 // Narrow surface: tgCall + sendMessage/sendPhoto + getFile/downloadFile +
-// setWebhook/setMyCommands + maskToken + isUserUnavailable + retryAfterSeconds.
+// setWebhook/setMyCommands + maskToken + botIdFromToken + isUserUnavailable + retryAfterSeconds.
 //
 // FILE DOWNLOADS: getFile + downloadFile are the ONLY way media reaches us, and the file URL
 // (api.telegram.org/file/bot<TOKEN>/…) never leaves this module — see downloadFile's header.
@@ -42,6 +42,18 @@ function botToken(): string {
     throw new Error('telegram: BOT_TOKEN is not set');
   }
   return t;
+}
+
+/**
+ * The bot's own Telegram user id — the numeric part of the token before the ':' (that prefix is
+ * the public bot id, not the secret half). Null when BOT_TOKEN is absent or malformed, so a caller
+ * that needs "was this message written by OUR bot?" fails closed. Never logs anything.
+ */
+export function botIdFromToken(token: string | undefined = process.env.BOT_TOKEN): number | null {
+  const m = typeof token === 'string' ? /^(\d{1,20}):/.exec(token) : null;
+  if (!m) return null;
+  const id = Number(m[1]);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 /**
